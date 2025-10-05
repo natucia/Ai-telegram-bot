@@ -1,0 +1,5 @@
+httpx
+python-telegram-bot==20.7
+replicate==0.31.0
+pillow==10.4.0
+requests==2.32.3
