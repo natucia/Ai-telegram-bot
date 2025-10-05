@@ -1,12 +1,13 @@
-# ================== Telegram LoRA Bot (one repo + pinned versions + gender-aware rich styles) ==================
-# /idenroll  -> собрать до 10 фото
-# /iddone    -> сохранить профиль (попытка авто-определить пол)
-# /trainid   -> обучить LoRA в едином репо модели (Replicate Trainings API)
-# /trainstatus -> статус; при success сохраняем конкретный version_id
-# /styles    -> показать пресеты
-# /lstyle X  -> генерация из pinned owner/model:version юзера, с авто-размером и гендерным текстом
-# /gender    -> показать определённый пол; /setgender male|female -> вручную задать
-# ===============================================================================================================
+# ================== Telegram LoRA Bot (Flux LoRA trainer + pinned versions + RU styles + auto-gender) ==================
+# Фичи:
+# - /idenroll -> загрузка до 10 фото
+# - /iddone   -> сохранить профиль (авто-детект пола по первому фото)
+# - /trainid  -> обучение LoRA на Replicate (replicate/flux-lora-trainer) в едином репозитории модели
+# - /trainstatus -> статус; при успехе сохраняем конкретный version_id (pinned)
+# - /styles   -> показать русские стили кнопками
+# - (нажатие кнопки стиля) -> сразу генерация по зафиксированной версии юзера, авто-размер под стиль
+# - /gender   -> показать определённый пол; /setgender male|female -> вручную задать
+# =======================================================================================================================
 
 import os, re, io, json, time, asyncio, logging, shutil
 from pathlib import Path
@@ -37,23 +38,24 @@ if not os.getenv("REPLICATE_API_TOKEN"):
 DEST_OWNER        = os.getenv("REPLICATE_DEST_OWNER", "").strip()               # напр. natucia
 DEST_MODEL        = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()  # единый репозиторий
 
-# Replicate LoRA trainer (обязательно тренер, не базовая модель!)
+# Тренер LoRA именно Flux LoRA trainer
 LORA_TRAINER_SLUG = os.getenv("LORA_TRAINER_SLUG", "replicate/flux-lora-trainer").strip()
+# Имя входного поля для архива с фото (у тренера это обычно "input_images")
 LORA_INPUT_KEY    = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 
-# Классификатор пола (Replicate). Можно заменить на свой; бот попробует несколько ключей входа.
+# Классификатор пола (Replicate). Можно заменить на свой.
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
 
-# Твики обучения
+# Твики обучения (бережные, реалистичные)
 LORA_MAX_STEPS     = int(os.getenv("LORA_MAX_STEPS", "2000"))
 LORA_LR            = float(os.getenv("LORA_LR", "0.00008"))
 LORA_USE_FACE_DET  = os.getenv("LORA_USE_FACE_DET", "true").lower() in ["1","true","yes","y"]
 LORA_CAPTION_PREF  = os.getenv("LORA_CAPTION_PREFIX",
-    "a photo of a person, relaxed neutral expression, gentle smile, soft jawline, balanced facial proportions, natural look"
+    "a photo of a person, relaxed neutral expression, gentle smile, soft jawline, balanced facial proportions, natural look, open expressive eyes, symmetrical eye shape, clear irises"
 ).strip()
 LORA_RESOLUTION    = int(os.getenv("LORA_RESOLUTION", "1024"))
 
-# Генерация (анти-пластик + «раскрытые глаза»)
+# Генерация — анти-пластик + «открытые глаза»
 GEN_STEPS     = int(os.getenv("GEN_STEPS", "44"))
 GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "3.6"))
 GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "832"))
@@ -72,87 +74,151 @@ AESTHETIC_SUFFIX = (
     "balanced soft lighting, no beautification"
 )
 
-# -------------------- STYLES (gender-aware): p_f / p_m / p_n + optional size --------------------
-# Если задано только 'p' — текст общий. Если есть 'p_f'/'p_m', подставляем по полу.
+# -------------------- СТИЛИ (русские названия, гендер-aware p_f / p_m / p, + рекомендуемый размер) --------------------
 Style = Dict[str, Any]
 STYLE_PRESETS: Dict[str, Style] = {
-    # Портреты
-    "portrait_85mm": {
-        "p": "ultra realistic headshot, 85mm lens look, shallow depth of field, soft key light, "
-             "open expressive eyes, natural almond-shaped eyes, clear irises, symmetrical features",
+    # ===== ПОРТРЕТЫ =====
+    "Портрет 85мм": {
+        "p": "ультра реалистичный портрет, эффект объектива 85мм, малая глубина резкости, мягкий ключевой свет, "
+             "раскрытые выразительные глаза, естественная миндалевидная форма, четкие радужки, симметрия черт",
         "w": 896, "h": 1152
     },
-    "natural":       {"p": "ultra realistic portrait, neutral color grading, relaxed neutral expression, gentle smile, soft jawline", "w": 896, "h": 1152},
-    "natural_slim":  {"p": "ultra realistic portrait, delicate cheekbones, soft jawline, balanced proportions, relaxed face", "w": 896, "h": 1152},
-    "beauty_soft":   {"p": "beauty portrait, clean studio light, soft diffusion, subtle makeup", "w": 1024, "h": 1024},
-    "vogue":         {"p": "editorial beauty cover shot, studio softbox light, calibrated colors"},
-    "windowlight":   {"p": "soft window light portrait, gentle bokeh background, natural diffusion"},
-    "cinematic":     {"p": "cinematic portrait, shallow depth of field, Rembrandt lighting, subtle film grain", "w": 960, "h": 1280},
-    "moody":         {"p": "moody cinematic portrait, controlled shadows, subtle rim light"},
+    "Натуральный": { "p": "ультра реалистичный портрет, нейтральная цветокоррекция, расслабленное лицо, мягкая улыбка, мягкая линия челюсти", "w": 896, "h": 1152 },
+    "Натуральный стройный": { "p": "реалистичный портрет, деликатные скулы, мягкая линия челюсти, сбалансированные пропорции, расслабленное лицо", "w": 896, "h": 1152 },
+    "Бьюти мягкий свет": { "p": "бьюти-портрет, чистый студийный свет, мягкая диффузия, минимальный макияж", "w": 1024, "h": 1024 },
+    "Vogue обложка": { "p": "обложечный бьюти-портрет, студийные софтбоксы, выверенные цвета" },
+    "Окно мягкий свет": { "p": "портрет у окна, мягкая естественная диффузия, легкое боке" },
+    "Кинопортрет": { "p": "кинематографичный портрет, рембрандтовский свет, легкая пленочная зернистость", "w": 960, "h": 1280 },
+    "Муди свет": { "p": "мрачноватый портрет, контролируемые тени, деликатная контровая подсветка" },
+    "Нуар крупно": { "p": "черно-белый фильм-нуар, разрезающий свет, дым, высокий контраст", "w": 896, "h": 1152 },
+    "Ретро 50-е": { "p": "студийный портрет 1950-х, пленочный цвет, бабочка-лайт", "w": 896, "h": 1152 },
+    "Глэм 80-е": { "p": "глам-портрет 1980-х, мягкая дымка, цветная контровая, журнальный вид", "w": 896, "h": 1152 },
+    "Зимний портрет": { "p": "уличный зимний портрет, мягкий снег, уютное освещение, теплые тона кожи", "w": 896, "h": 1152 },
+    "Пляж закат (портрет)": { "p": "портрет на пляже в золотой час, теплый контровый свет, волосы подсвечены", "w": 896, "h": 1152 },
+    "Нуар мягкий цвет": { "p": "кинопортрет в духе нуара, цветной, мягкая контровая, дымка", "w": 896, "h": 1152 },
 
-    # Full-body (гендерные варианты)
-    "city_streetwear": {
-        "p_f": "full body, modern streetwear, crop top and joggers, urban alley, soft overcast light, authentic vibe",
-        "p_m": "full body, modern streetwear, hoodie and joggers, urban alley, soft overcast light, authentic vibe",
+    # ===== FULL BODY — современное =====
+    "Стритвэр": {
+        "p_f": "полный рост, современный стритвэр, кроп-топ и джоггеры, городский переулок, пасмурный мягкий свет, аутентично",
+        "p_m": "полный рост, современный стритвэр, худи и джоггеры, городский переулок, пасмурный мягкий свет, аутентично",
         "w": 832, "h": 1344
     },
-    "evening_outfit": {
-        "p_f": "full body, elegant evening gown, red carpet, soft spotlights, cinematic bokeh",
-        "p_m": "full body, elegant tuxedo, red carpet, soft spotlights, cinematic bokeh",
+    "Вечерний выход": {
+        "p_f": "полный рост, элегантное вечернее платье, красная дорожка, мягкие софты, киношное боке",
+        "p_m": "полный рост, классический смокинг, красная дорожка, мягкие софты, киношное боке",
         "w": 832, "h": 1344
     },
-    "fitness_gym": {
-        "p_f": "full body, realistic fitness shoot in gym, sports bra and leggings, natural sweat sheen, dramatic rim light",
-        "p_m": "full body, realistic fitness shoot in gym, tank top and shorts, natural sweat sheen, dramatic rim light",
+    "Бизнес": {
+        "p_f": "полный рост, современный женский костюм, лобби офиса, мягкий дневной свет",
+        "p_m": "полный рост, современный мужской костюм, лобби офиса, мягкий дневной свет",
         "w": 832, "h": 1344
     },
-    "adventure": {  # «Лара Крофт»-вайб / мужской «рейдер»
-        "p_f": "full body, athletic explorer heroine, tactical outfit, fingerless gloves, utility belt, boots, dynamic pose, ancient ruins background",
-        "p_m": "full body, athletic tomb raider, tactical outfit, fingerless gloves, utility belt, boots, dynamic pose, ancient ruins background",
+    "Фитнес зал": {
+        "p_f": "полный рост, реалистичная фитнес-съемка в зале, топ и легинсы, легкий блеск пота, драматичная контровая",
+        "p_m": "полный рост, реалистичная фитнес-съемка в зале, майка и шорты, легкий блеск пота, драматичная контровая",
         "w": 832, "h": 1344
     },
-    "desert_explorer": {
-        "p": "full body, desert adventurer, scarf, cargo outfit, rocky canyon, warm sunset light",
+    "Ночной город неон": { "p": "полный рост, неоновая улица ночью, отражения в лужах, киношная контровая", "w": 832, "h": 1344 },
+    "Фестиваль": { "p": "полный рост, образ для музыкального фестиваля, пыль заката, цветные огни, живой кадр", "w": 832, "h": 1344 },
+    "Пляж закат (фулл)": { "p": "полный рост, пляж на закате, теплый контровый свет, естественная динамика позы", "w": 896, "h": 1408 },
+
+    # ===== ПРИКЛЮЧЕНИЯ / ЭКШН =====
+    "Приключенец": {
+        "p_f": "полный рост, атлетичная исследовательница, тактический костюм, перчатки без пальцев, пояс, ботинки, динамичная поза, руины храма",
+        "p_m": "полный рост, атлетичный рейдер гробниц, тактический костюм, перчатки без пальцев, пояс, ботинки, динамичная поза, руины храма",
         "w": 832, "h": 1344
     },
-    "cyberpunk_city": {
-        "p_f": "full body, neon cyberpunk street, rain, holograms, reflective puddles, leather jacket, cinematic backlight",
-        "p_m": "full body, neon cyberpunk street, rain, holograms, reflective puddles, leather jacket, cinematic backlight",
-        "w": 832, "h": 1344
+    "Пустынный исследователь": { "p": "полный рост, исследователь пустыни, шарф, карго-аутфит, каменный каньон, теплый закат", "w": 832, "h": 1344 },
+    "Горы снег": { "p": "полный рост, альпинист(ка), пуховка, кошки, снежный гребень, драматичное небо", "w": 896, "h": 1408 },
+    "Фридайвер": { "p": "полный рост, реалистичный фридайвер, длинные ласты, подводный голубой свет, лучи солнца, частицы", "w": 896, "h": 1408 },
+    "Серфер": {
+        "p_f": "полный рост, серфершa в гидрике, волна на фоне, блики воды, солнце",
+        "p_m": "полный рост, серфер в гидрике, волна на фоне, блики воды, солнце",
+        "w": 896, "h": 1408
     },
-    "sci_fi_spacesuit": {
-        "p": "full body, realistic EVA spacesuit, starfield, spaceship hangar lights, hard surface details",
+    "Байкер": { "p": "полный рост, кафе-рейсер мотоцикл, кожаная куртка, вечерний город, лампы накаливания", "w": 896, "h": 1408 },
+    "Скейтер": { "p": "полный рост, трюк на скейте в воздухе, городской скейтпарк, золотой час", "w": 832, "h": 1344 },
+
+    # ===== ФЭНТЕЗИ / ИСТОРИЯ =====
+    "Эльфийская знать": {
+        "p_f": "полный рост, эльфийская королева, струящееся платье, лесной храм, мягкие лучи",
+        "p_m": "полный рост, эльфийский король, украшенные доспехи и плащ, лесной храм, мягкие лучи",
         "w": 960, "h": 1440
     },
-    "fantasy_royal": {
-        "p_f": "full body, elegant fantasy elf queen, flowing gown, forest temple, soft god rays",
-        "p_m": "full body, noble fantasy elf king, ornate armor and cloak, forest temple, soft god rays",
-        "w": 960, "h": 1440
-    },
-    "samurai": {
-        "p": "full body, realistic samurai armor, katana, temple courtyard, dusk lanterns",
+    "Аркан маг": {
+        "p_f": "полный рост, чародейка, темное струящееся платье, парящие руны, лунный свет",
+        "p_m": "полный рост, чернокнижник, длинный плащ, парящие руны, лунный свет",
         "w": 896, "h": 1408
     },
-    "medieval_knight": {
-        "p": "full body, realistic medieval armor, cape, castle courtyard, overcast sky",
+    "Вампир готика": { "p": "полный рост, готический вампир, интерьер собора, свечи, кьяроскуро", "w": 896, "h": 1408 },
+    "Самурай": { "p": "полный рост, реалистичные самурайские доспехи, катана, храмовый двор, сумерки и фонари", "w": 896, "h": 1408 },
+    "Средневековый рыцарь": { "p": "полный рост, реалистичные доспехи, плащ, замковый двор, пасмурно", "w": 896, "h": 1408 },
+    "Пират": { "p": "полный рост, пиратский костюм, треуголка, деревянный пирс, штормовое море, туман", "w": 896, "h": 1408 },
+    "Древняя Греция": {
+        "p_f": "полный рост, греческий хитон, мраморные колонны, мягкое солнце",
+        "p_m": "полный рост, греческие доспехи/гиматий, мраморные колонны, мягкое солнце",
         "w": 896, "h": 1408
     },
-    "underwater_freediver": {
-        "p": "full body, realistic freediver, long fins, underwater blue ambient light, sun rays, particles",
+    "Египет: царица/фараон": {
+        "p_f": "полный рост, египетская царица, золотые украшения, храмовые рельефы, теплый свет факелов",
+        "p_m": "полный рост, египетский фараон, золотые украшения, храмовые рельефы, теплый свет факелов",
         "w": 896, "h": 1408
     },
-    "snow_mountain": {
-        "p": "full body, alpine mountaineer, down jacket, crampons, snowy ridge, dramatic sky",
+    "Рим: патриций/патрицианка": {
+        "p_f": "полный рост, римская патрицианка, туника и стола, мраморный атрий",
+        "p_m": "полный рост, римский патриций, туника и тога, мраморный атрий",
         "w": 896, "h": 1408
     },
-    "steampunk": {
-        "p": "full body, steampunk outfit, brass goggles, gears, steam pipes, warm tungsten light",
+
+    # ===== SCI-FI / КИБЕРПАНК =====
+    "Киберпанк улица": {
+        "p_f": "полный рост, неоновая киберпанк-улица, дождь, голограммы, отражения, кожаная куртка, контровой свет",
+        "p_m": "полный рост, неоновая киберпанк-улица, дождь, голограммы, отражения, кожаная куртка, контровой свет",
         "w": 832, "h": 1344
     },
-    "business": {
-        "p_f": "full body, modern business suit for woman, city office lobby, soft natural light",
-        "p_m": "full body, modern business suit for man, city office lobby, soft natural light",
+    "Космический скафандр": { "p": "полный рост, реалистичный EVA-скафандр, звездное поле, ангар корабля, hard-surface детали", "w": 960, "h": 1440 },
+    "Космопилот": { "p": "полный рост, пилот космоистребителя, летный комбинезон, шлем под мышкой, подсветка ангара, объемная дымка", "w": 896, "h": 1408 },
+    "Андроид": { "p": "полный рост, реалистичный андроид-гуманоид, минималистичная броня, неоновые отражения, дождь", "w": 832, "h": 1344 },
+    "Космоопера командир": { "p": "полный рост, космический адмирал, глубокий черный мундир, мостик звездолёта, звездные поля", "w": 896, "h": 1408 },
+
+    # ===== ПРОФЕССИИ / СПОРТ =====
+    "Йога студия": { "p": "полный рост, поза йоги, дневной свет из окон, деревянный пол, спокойная атмосфера", "w": 832, "h": 1344 },
+    "Бегун дорожка": {
+        "p_f": "полный рост, бегунья на стадионе, шаг в движении, фон в смазе",
+        "p_m": "полный рост, бегун на стадионе, шаг в движении, фон в смазе",
         "w": 832, "h": 1344
+    },
+    "Боксер ринг": {
+        "p_f": "полный рост, боксерша, перчатки подняты, ринг, жесткий верхний свет, капли пота",
+        "p_m": "полный рост, боксер, перчатки подняты, ринг, жесткий верхний свет, капли пота",
+        "w": 896, "h": 1408
+    },
+    "Шеф-повар": { "p": "полный рост, китель повара, профессиональная кухня, пар и огонь, теплый свет", "w": 832, "h": 1344 },
+    "Врач": { "p": "полный рост, коридор больницы, медицинская форма, стетоскоп, чистый мягкий свет", "w": 832, "h": 1344 },
+    "Ученый лаборатория": { "p": "полный рост, лаборатория, белый халат, стеклянная посуда, мягкий холодный свет", "w": 832, "h": 1344 },
+
+    # ===== СТИЛИЗАЦИИ / ЭПОХИ =====
+    "Нуар детектив": { "p": "полный рост, детектив фильм-нуар, тренч, федора, дождливый переулок, жесткая контровая", "w": 832, "h": 1344 },
+    "Вестерн": {
+        "p_f": "полный рост, ковгерл, пыльная улица, деревянный салун, полуденное солнце",
+        "p_m": "полный рост, ковбой, пыльная улица, деревянный салун, полуденное солнце",
+        "w": 896, "h": 1408
+    },
+    "Балет": {
+        "p_f": "полный рост, балерина в студии, пачка, арабеск, мягкий свет из окна",
+        "p_m": "полный рост, артист балета, гран-жете, мягкий свет из окна",
+        "w": 832, "h": 1344
+    },
+    "Ретро 20-е": {
+        "p_f": "полный рост, стиль 1920-х, платье флапер, ар-деко клуб, легкий дым",
+        "p_m": "полный рост, мужской костюм 1920-х, ар-деко клуб, легкий дым",
+        "w": 832, "h": 1344
+    },
+    "Синтвейв 80-е": { "p": "полный рост, синтвейв-сцена, неоновая сетка, закатный горизонт, хром-элементы, легкая дымка", "w": 896, "h": 1408 },
+    "Барокко бал": {
+        "p_f": "полный рост, барочный бальный наряд, корсет, кринолин, свечи, зал с фресками",
+        "p_m": "полный рост, барочный камзол и парик, свечи, зал с фресками",
+        "w": 896, "h": 1408
     },
 }
 
@@ -162,8 +228,11 @@ logger = logging.getLogger("bot")
 
 # -------------------- storage --------------------
 DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
-def user_dir(uid:int) -> Path: p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
-def list_ref_images(uid:int) -> List[Path]: return sorted(user_dir(uid).glob("ref_*.jpg"))
+def user_dir(uid:int) -> Path:
+    p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
+def list_ref_images(uid:int) -> List[Path]: return sorted(user_dir(uid)).glob("ref_*.jpg")
+def list_ref_images(uid:int) -> List[Path]:
+    return sorted(user_dir(uid).glob("ref_*.jpg"))
 def profile_path(uid:int) -> Path: return user_dir(uid) / "profile.json"
 def load_profile(uid:int) -> Dict[str, Any]:
     p = profile_path(uid)
@@ -207,48 +276,35 @@ def replicate_run_flexible(model: str, inputs_list: Iterable[dict]) -> str:
 
 # -------------------- Gender detection --------------------
 def _infer_gender_from_image(path: Path) -> Optional[str]:
-    """
-    Пытаемся определить пол по одному фото через Replicate-модель.
-    Возвращаем 'female' / 'male' / None. Фоллбэк — None.
-    """
+    """Через Replicate-классификатор: возвращаем 'female' / 'male' / None."""
     try:
-        # Попробуем разные имена входа
-        img_b = open(path, "rb")
         client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-        # Часть моделей ждут 'image', некоторые — 'img' / 'input_image'
-        for key in ["image", "img", "input_image"]:
-            try:
-                pred = client.predictions.create(
-                    version=resolve_model_version(GENDER_MODEL_SLUG),
-                    input={key: img_b}
-                )
-                # ждём синхронно
-                pred.wait()
-                out = pred.output
-                # Ожидаем строку/словарь с полем gender/labels
-                if isinstance(out, dict):
-                    g = (out.get("gender") or out.get("label") or "").lower()
-                else:
-                    g = str(out).lower()
-                if "female" in g or "woman" in g: return "female"
-                if "male" in g or "man" in g: return "male"
-            except Exception as e:
-                logger.warning("Gender model key '%s' failed: %s", key, e)
-                continue
+        version_slug = resolve_model_version(GENDER_MODEL_SLUG)
+        with open(path, "rb") as img_b:
+            for key in ["image", "img", "input_image", "file"]:
+                try:
+                    pred = client.predictions.create(version=version_slug, input={key: img_b})
+                    pred.wait()
+                    out = pred.output
+                    g = None
+                    if isinstance(out, dict):
+                        g = (out.get("gender") or out.get("label") or "").lower()
+                    else:
+                        g = str(out).lower()
+                    if "female" in g or "woman" in g: return "female"
+                    if "male" in g or "man" in g: return "male"
+                except Exception as e:
+                    logger.warning("Gender model input key '%s' failed: %s", key, e)
+                    continue
     except Exception as e:
         logger.warning("Gender inference error: %s", e)
     return None
 
 def auto_detect_gender(uid:int) -> str:
-    """
-    Берём 1–2 первых фото и пытаемся определить пол. Возвращаем 'female'/'male'.
-    Фоллбэк — 'female' (чтобы не посадить женское лицо в мужские промпты).
-    """
+    """Берём первое фото; если не получилось — фоллбэк 'female'."""
     refs = list_ref_images(uid)
-    guess = None
-    for p in refs[:2]:
-        guess = _infer_gender_from_image(p)
-        if guess: break
+    if not refs: return "female"
+    guess = _infer_gender_from_image(refs[0])
     return guess or "female"
 
 # -------------------- LoRA training --------------------
@@ -299,9 +355,11 @@ def start_lora_training(uid:int) -> str:
 def check_training_status(uid:int) -> Tuple[str, Optional[str]]:
     prof = load_profile(uid); tid = prof.get("training_id")
     if not tid: return ("not_started", None)
+
     client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
     tr = client.trainings.get(tid)
     status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
+
     if status != "succeeded":
         prof["status"] = status; save_profile(uid, prof); return (status, None)
 
@@ -309,7 +367,8 @@ def check_training_status(uid:int) -> Tuple[str, Optional[str]]:
                   or prof.get("finetuned_model") or _dest_model_slug()
 
     version_id = getattr(tr, "output", None) if not isinstance(tr, dict) else tr.get("output")
-    if isinstance(version_id, dict): version_id = version_id.get("id") or version_id.get("version")
+    if isinstance(version_id, dict):
+        version_id = version_id.get("id") or version_id.get("version")
 
     slug_with_version = None
     try:
@@ -318,6 +377,7 @@ def check_training_status(uid:int) -> Tuple[str, Optional[str]]:
             slug_with_version = f"{destination}:{version_id}"
     except Exception:
         pass
+
     if not slug_with_version:
         try:
             model_obj = replicate.models.get(destination)
@@ -354,10 +414,13 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
 
 # -------------------- UI helpers --------------------
 def styles_keyboard() -> InlineKeyboardMarkup:
-    names = list(STYLE_PRESETS.keys()); rows, row = [], []
+    # делим на ряды по 2, чтобы русские названия не обрезались
+    names = list(STYLE_PRESETS.keys())
+    rows, row = [], []
     for i, name in enumerate(names, 1):
         row.append(InlineKeyboardButton(name, callback_data=f"style:{name}"))
-        if i % 3 == 0: rows.append(row); row=[]
+        if i % 2 == 0:
+            rows.append(row); row = []
     if row: rows.append(row)
     return InlineKeyboardMarkup(rows)
 
@@ -368,12 +431,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Обучаю твою персональную LoRA по 10 фото и генерю без новых фото.\n\n"
         "1) /idenroll — включить набор (до 10 фото)\n"
-        "2) /iddone — сохранить профиль (авто-детект пола)\n"
+        "2) /iddone — сохранить профиль (пол автоматически по первому фото)\n"
         "3) /trainid — запустить обучение\n"
-        "4) /trainstatus — проверить статус\n"
-        "5) /styles — список стилей\n"
-        "6) /lstyle <preset> — генерация из твоей версии модели\n"
-        "7) /gender — показать определённый пол; /setgender male|female — вручную"
+        "4) /trainstatus — проверить статус (после успеха зафиксируем твою версию)\n"
+        "5) /styles — выбрать стиль кнопками (я сразу сгенерирую)\n"
+        "6) /gender — показать определённый пол; /setgender male|female — вручную"
     )
 
 async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -384,7 +446,7 @@ async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id; ENROLL_FLAG[uid] = False
     prof = load_profile(uid)
     prof["images"] = [p.name for p in list_ref_images(uid)]
-    # авто-детект пола (мягкий, без падений)
+    # авто-детект пола по первому фото (с фоллбэком)
     try:
         prof["gender"] = auto_detect_gender(uid)
     except Exception:
@@ -422,12 +484,53 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Сначала /idenroll. После /iddone → /trainid.")
 
 async def styles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Выбери стиль:", reply_markup=styles_keyboard())
+    await update.message.reply_text("Выбери стиль — я сразу сгенерирую:", reply_markup=styles_keyboard())
+
+def _prompt_for_gender(meta: Style, gender: str) -> str:
+    if gender == "female" and meta.get("p_f"): return meta["p_f"]
+    if gender == "male" and meta.get("p_m"): return meta["p_m"]
+    return meta.get("p", "")
+
+async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
+    uid = update.effective_user.id
+    prof = load_profile(uid)
+    if prof.get("status") != "succeeded":
+        await update.effective_message.reply_text("Модель ещё не готова. Сначала /trainid и дождись /trainstatus = succeeded.")
+        return
+
+    meta = STYLE_PRESETS[preset]
+    gender = (prof.get("gender") or "female").lower()
+    base_prompt = _prompt_for_gender(meta, gender)
+
+    prompt_core = (
+        f"{base_prompt}, точная идентичность лица, без изменения геометрии, "
+        "расслабленное нейтральное выражение, мягкая улыбка, "
+        "раскрытые выразительные глаза, естественная миндалевидная форма, четкие радужки, "
+        "симметричная форма глаз, корректный интервал между глазами, эффект 85мм портретного объектива"
+    )
+
+    w = int(meta.get("w") or GEN_WIDTH)
+    h = int(meta.get("h") or GEN_HEIGHT)
+    model_slug = _pinned_slug(prof)
+
+    await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
+    await update.effective_message.reply_text(f"Генерирую: {preset} ({gender}, {w}×{h}) … 🎨")
+    try:
+        seed = int(time.time()) & 0xFFFFFFFF
+        url = await asyncio.to_thread(
+            generate_from_finetune, model_slug, prompt_core, GEN_STEPS, GEN_GUIDANCE, seed, w, h
+        )
+        await update.effective_message.reply_photo(photo=url, caption=f"Готово ✨\nСтиль: {preset}")
+    except Exception as e:
+        logging.exception("generation failed")
+        await update.effective_message.reply_text(f"Ошибка генерации: {e}")
 
 async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    preset = q.data.split(":",1)[1]
-    await q.message.reply_text(f"Стиль выбран: {preset}. Запусти `/lstyle {preset}` после обучения.")
+    preset = q.data.split(":", 1)[1]
+    if preset not in STYLE_PRESETS:
+        await q.message.reply_text("Неизвестный стиль."); return
+    await start_generation_for_preset(update, context, preset)
 
 async def setgender_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -459,47 +562,9 @@ async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"Статус: {status}. Ещё в процессе…")
 
-def _prompt_for_gender(meta: Style, gender: str) -> str:
-    if gender == "female" and meta.get("p_f"): return meta["p_f"]
-    if gender == "male" and meta.get("p_m"): return meta["p_m"]
-    return meta.get("p_n") or meta.get("p","")
-
-async def lstyle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    args = context.args
-    if not args:
-        await update.message.reply_text("Укажи стиль, напр.: `/lstyle natural`", reply_markup=styles_keyboard()); return
-    preset = args[0].lower()
-    if preset not in STYLE_PRESETS:
-        await update.message.reply_text(f"Не знаю стиль '{preset}'. Смотри /styles"); return
-
-    prof = load_profile(uid)
-    if prof.get("status") != "succeeded":
-        await update.message.reply_text("Модель ещё не готова. Сначала /trainid и дождись /trainstatus = succeeded."); return
-
-    gender = (prof.get("gender") or "female").lower()
-    meta = STYLE_PRESETS[preset]
-    ptxt = _prompt_for_gender(meta, gender)
-    prompt_core = (
-        f"{ptxt}, exact facial identity, no geometry change, "
-        "relaxed neutral expression, gentle smile, "
-        "open expressive eyes, natural almond-shaped eyes, clear irises, "
-        "symmetrical eye shape, correct eye spacing, 85mm portrait look"
-    )
-    w = int(meta.get("w") or GEN_WIDTH); h = int(meta.get("h") or GEN_HEIGHT)
-    model_slug = _pinned_slug(prof)
-
-    await update.message.chat.send_action(ChatAction.UPLOAD_PHOTO)
-    await update.message.reply_text(f"Генерирую из: {model_slug}\nСтиль: {preset} ({gender}, {w}x{h}) … 🎨")
-    try:
-        seed = int(time.time()) & 0xFFFFFFFF
-        url = await asyncio.to_thread(generate_from_finetune, model_slug, prompt_core, GEN_STEPS, GEN_GUIDANCE, seed, w, h)
-        await update.message.reply_photo(photo=url, caption=f"Готово ✨\nСтиль: {preset}")
-    except Exception as e:
-        logger.exception("lstyle failed"); await update.message.reply_text(f"Ошибка генерации: {e}")
-
 # -------------------- system --------------------
 async def _post_init(app): await app.bot.delete_webhook(drop_pending_updates=True)
+
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(_post_init).build()
     app.add_handler(CommandHandler("start", start))
@@ -513,7 +578,6 @@ def main():
     app.add_handler(CommandHandler("gender", gender_cmd))
     app.add_handler(CommandHandler("trainid", trainid_cmd))
     app.add_handler(CommandHandler("trainstatus", trainstatus_cmd))
-    app.add_handler(CommandHandler("lstyle", lstyle_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     logger.info("Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s",
                 LORA_TRAINER_SLUG, _dest_model_slug(), GEN_WIDTH, GEN_HEIGHT, GEN_STEPS, GEN_GUIDANCE)
@@ -521,6 +585,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
