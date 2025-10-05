@@ -1,11 +1,12 @@
-# ================== Telegram LoRA Bot (one model repo + pinned versions + rich styles) ==================
+# ================== Telegram LoRA Bot (one repo + pinned versions + gender-aware rich styles) ==================
 # /idenroll  -> собрать до 10 фото
-# /iddone    -> сохранить профиль
-# /trainid   -> обучить LoRA в едином репозитории модели (Replicate Trainings API)
+# /iddone    -> сохранить профиль (попытка авто-определить пол)
+# /trainid   -> обучить LoRA в едином репо модели (Replicate Trainings API)
 # /trainstatus -> статус; при success сохраняем конкретный version_id
 # /styles    -> показать пресеты
-# /lstyle X  -> генерируем строго по pinned owner/model:version юзера, авто-размер под стиль
-# =======================================================================================================
+# /lstyle X  -> генерация из pinned owner/model:version юзера, с авто-размером и гендерным текстом
+# /gender    -> показать определённый пол; /setgender male|female -> вручную задать
+# ===============================================================================================================
 
 import os, re, io, json, time, asyncio, logging, shutil
 from pathlib import Path
@@ -33,74 +34,108 @@ if not TOKEN or not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", TOKEN):
 if not os.getenv("REPLICATE_API_TOKEN"):
     raise RuntimeError("Нет REPLICATE_API_TOKEN.")
 
-DEST_OWNER        = os.getenv("REPLICATE_DEST_OWNER", "").strip()             # напр. natucia
-DEST_MODEL        = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()# единый репо
+DEST_OWNER        = os.getenv("REPLICATE_DEST_OWNER", "").strip()               # напр. natucia
+DEST_MODEL        = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()  # единый репозиторий
 
+# Replicate LoRA trainer (обязательно тренер, не базовая модель!)
 LORA_TRAINER_SLUG = os.getenv("LORA_TRAINER_SLUG", "replicate/flux-lora-trainer").strip()
 LORA_INPUT_KEY    = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 
-# Твики обучения для реализма
+# Классификатор пола (Replicate). Можно заменить на свой; бот попробует несколько ключей входа.
+GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
+
+# Твики обучения
 LORA_MAX_STEPS     = int(os.getenv("LORA_MAX_STEPS", "2000"))
 LORA_LR            = float(os.getenv("LORA_LR", "0.00008"))
 LORA_USE_FACE_DET  = os.getenv("LORA_USE_FACE_DET", "true").lower() in ["1","true","yes","y"]
 LORA_CAPTION_PREF  = os.getenv("LORA_CAPTION_PREFIX",
-    "a photo of a woman, relaxed neutral expression, gentle smile, soft jawline, balanced facial proportions, natural look"
+    "a photo of a person, relaxed neutral expression, gentle smile, soft jawline, balanced facial proportions, natural look"
 ).strip()
 LORA_RESOLUTION    = int(os.getenv("LORA_RESOLUTION", "1024"))
 
-# Генерация — анти-пластик
+# Генерация (анти-пластик + «раскрытые глаза»)
 GEN_STEPS     = int(os.getenv("GEN_STEPS", "44"))
 GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "3.6"))
-GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "832"))     # дефолт, если стиль не задаёт свой
+GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "832"))
 GEN_HEIGHT    = int(os.getenv("GEN_HEIGHT", "1216"))
 
 NEGATIVE_PROMPT = (
     "cartoon, anime, 3d, cgi, overprocessed, oversharpen, beauty filter, skin smoothing, "
     "waxy skin, plastic skin, blur, lowres, deformed, distorted, bad anatomy, watermark, text, logo, "
     "puffy face, swollen face, chubby cheeks, hypertrophic masseter, wide jaw, clenched jaw, "
-    "pursed lips, duckface, overfilled lips, nasolabial fold accent"
+    "pursed lips, duckface, overfilled lips, nasolabial fold accent, "
+    "squinting, narrow eyes, small eyes, asymmetrical eyes, cross-eyed, wall-eyed, lazy eye, "
+    "droopy eyelids, heavy eyelids, misaligned pupils, extra pupils, fused eyes"
 )
 AESTHETIC_SUFFIX = (
     ", photo-realistic, visible skin pores, natural color, soft filmic contrast, "
     "balanced soft lighting, no beautification"
 )
 
-# -------------------- STYLES (prompt + recommended size) --------------------
-# width/height можно не указывать — возьмутся из GEN_WIDTH/GEN_HEIGHT
-STYLE_PRESETS: Dict[str, Dict[str, Any]] = {
+# -------------------- STYLES (gender-aware): p_f / p_m / p_n + optional size --------------------
+# Если задано только 'p' — текст общий. Если есть 'p_f'/'p_m', подставляем по полу.
+Style = Dict[str, Any]
+STYLE_PRESETS: Dict[str, Style] = {
     # Портреты
+    "portrait_85mm": {
+        "p": "ultra realistic headshot, 85mm lens look, shallow depth of field, soft key light, "
+             "open expressive eyes, natural almond-shaped eyes, clear irises, symmetrical features",
+        "w": 896, "h": 1152
+    },
     "natural":       {"p": "ultra realistic portrait, neutral color grading, relaxed neutral expression, gentle smile, soft jawline", "w": 896, "h": 1152},
     "natural_slim":  {"p": "ultra realistic portrait, delicate cheekbones, soft jawline, balanced proportions, relaxed face", "w": 896, "h": 1152},
     "beauty_soft":   {"p": "beauty portrait, clean studio light, soft diffusion, subtle makeup", "w": 1024, "h": 1024},
-    "vogue":         {"p": "editorial beauty cover shot, soft studio light, calibrated colors, shallow depth of field"},
+    "vogue":         {"p": "editorial beauty cover shot, studio softbox light, calibrated colors"},
     "windowlight":   {"p": "soft window light portrait, gentle bokeh background, natural diffusion"},
-    "cinematic":     {"p": "cinematic portrait, shallow depth of field, Rembrandt lighting, film grain subtle", "w": 960, "h": 1280},
+    "cinematic":     {"p": "cinematic portrait, shallow depth of field, Rembrandt lighting, subtle film grain", "w": 960, "h": 1280},
     "moody":         {"p": "moody cinematic portrait, controlled shadows, subtle rim light"},
 
-    # Полный рост, разные миры
-    "adventure_heroine": {  # vibe приключенческой героини (без прямого копирования тм)
-        "p": "full body, athletic explorer heroine, tactical outfit, fingerless gloves, utility belt, boots, dynamic pose, ancient ruins background",
+    # Full-body (гендерные варианты)
+    "city_streetwear": {
+        "p_f": "full body, modern streetwear, crop top and joggers, urban alley, soft overcast light, authentic vibe",
+        "p_m": "full body, modern streetwear, hoodie and joggers, urban alley, soft overcast light, authentic vibe",
+        "w": 832, "h": 1344
+    },
+    "evening_outfit": {
+        "p_f": "full body, elegant evening gown, red carpet, soft spotlights, cinematic bokeh",
+        "p_m": "full body, elegant tuxedo, red carpet, soft spotlights, cinematic bokeh",
+        "w": 832, "h": 1344
+    },
+    "fitness_gym": {
+        "p_f": "full body, realistic fitness shoot in gym, sports bra and leggings, natural sweat sheen, dramatic rim light",
+        "p_m": "full body, realistic fitness shoot in gym, tank top and shorts, natural sweat sheen, dramatic rim light",
+        "w": 832, "h": 1344
+    },
+    "adventure": {  # «Лара Крофт»-вайб / мужской «рейдер»
+        "p_f": "full body, athletic explorer heroine, tactical outfit, fingerless gloves, utility belt, boots, dynamic pose, ancient ruins background",
+        "p_m": "full body, athletic tomb raider, tactical outfit, fingerless gloves, utility belt, boots, dynamic pose, ancient ruins background",
+        "w": 832, "h": 1344
+    },
+    "desert_explorer": {
+        "p": "full body, desert adventurer, scarf, cargo outfit, rocky canyon, warm sunset light",
         "w": 832, "h": 1344
     },
     "cyberpunk_city": {
-        "p": "full body, neon cyberpunk street, rain, holograms, reflective puddles, leather jacket, cinematic backlight",
+        "p_f": "full body, neon cyberpunk street, rain, holograms, reflective puddles, leather jacket, cinematic backlight",
+        "p_m": "full body, neon cyberpunk street, rain, holograms, reflective puddles, leather jacket, cinematic backlight",
         "w": 832, "h": 1344
     },
     "sci_fi_spacesuit": {
         "p": "full body, realistic EVA spacesuit, starfield, spaceship hangar lights, hard surface details",
         "w": 960, "h": 1440
     },
-    "fantasy_elf": {
-        "p": "full body, elegant fantasy elf queen, flowing gown, forest temple, soft god rays",
+    "fantasy_royal": {
+        "p_f": "full body, elegant fantasy elf queen, flowing gown, forest temple, soft god rays",
+        "p_m": "full body, noble fantasy elf king, ornate armor and cloak, forest temple, soft god rays",
         "w": 960, "h": 1440
+    },
+    "samurai": {
+        "p": "full body, realistic samurai armor, katana, temple courtyard, dusk lanterns",
+        "w": 896, "h": 1408
     },
     "medieval_knight": {
         "p": "full body, realistic medieval armor, cape, castle courtyard, overcast sky",
         "w": 896, "h": 1408
-    },
-    "desert_explorer": {
-        "p": "full body, desert adventurer, scarf, cargo shorts, rocky canyon, warm sunset light",
-        "w": 832, "h": 1344
     },
     "underwater_freediver": {
         "p": "full body, realistic freediver, long fins, underwater blue ambient light, sun rays, particles",
@@ -110,28 +145,13 @@ STYLE_PRESETS: Dict[str, Dict[str, Any]] = {
         "p": "full body, alpine mountaineer, down jacket, crampons, snowy ridge, dramatic sky",
         "w": 896, "h": 1408
     },
-    "evening_gown": {
-        "p": "full body, elegant evening gown, red carpet, soft spotlights, cinematic bokeh",
-        "w": 832, "h": 1344
-    },
-    "streetwear": {
-        "p": "full body, modern streetwear, urban alley, soft overcast light, authentic vibe",
-        "w": 832, "h": 1344
-    },
-    "fitness_gym": {
-        "p": "full body, realistic fitness shoot in gym, athleisure outfit, natural sweat sheen, dramatic rim light",
-        "w": 832, "h": 1344
-    },
-    "bridal": {
-        "p": "full body, bridal dress, soft natural light, delicate lace, airy veil, floral background",
-        "w": 896, "h": 1408
-    },
-    "samurai": {
-        "p": "full body, realistic samurai armor, katana, temple courtyard, dusk lanterns",
-        "w": 896, "h": 1408
-    },
     "steampunk": {
         "p": "full body, steampunk outfit, brass goggles, gears, steam pipes, warm tungsten light",
+        "w": 832, "h": 1344
+    },
+    "business": {
+        "p_f": "full body, modern business suit for woman, city office lobby, soft natural light",
+        "p_m": "full body, modern business suit for man, city office lobby, soft natural light",
         "w": 832, "h": 1344
     },
 }
@@ -142,25 +162,22 @@ logger = logging.getLogger("bot")
 
 # -------------------- storage --------------------
 DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
-def user_dir(uid:int) -> Path:
-    p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
+def user_dir(uid:int) -> Path: p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
 def list_ref_images(uid:int) -> List[Path]: return sorted(user_dir(uid).glob("ref_*.jpg"))
 def profile_path(uid:int) -> Path: return user_dir(uid) / "profile.json"
 def load_profile(uid:int) -> Dict[str, Any]:
     p = profile_path(uid)
     if p.exists(): return json.loads(p.read_text())
-    return {"images": [], "training_id": None, "finetuned_model": None, "finetuned_version": None, "status": None}
+    return {"images": [], "training_id": None, "finetuned_model": None, "finetuned_version": None, "status": None, "gender": None}
 def save_profile(uid:int, prof:Dict[str,Any]): profile_path(uid).write_text(json.dumps(prof))
 
 def save_ref_downscaled(path: Path, raw: bytes, max_side=1024, quality=92):
-    im = Image.open(io.BytesIO(raw)).convert("RGB"); im.thumbnail((max_side, max_side))
-    im.save(path, "JPEG", quality=quality)
+    im = Image.open(io.BytesIO(raw)).convert("RGB"); im.thumbnail((max_side, max_side)); im.save(path, "JPEG", quality=quality)
 
 # -------------------- replicate helpers --------------------
 def resolve_model_version(slug: str) -> str:
     if ":" in slug: return slug
-    model = replicate.models.get(slug)
-    versions = list(model.versions.list())
+    model = replicate.models.get(slug); versions = list(model.versions.list())
     if not versions: raise RuntimeError(f"Нет версий модели {slug}")
     return f"{slug}:{versions[0].id}"
 
@@ -188,6 +205,52 @@ def replicate_run_flexible(model: str, inputs_list: Iterable[dict]) -> str:
             last = e; logger.warning("Replicate rejected payload: %s", e)
     raise last or RuntimeError("Все варианты отклонены")
 
+# -------------------- Gender detection --------------------
+def _infer_gender_from_image(path: Path) -> Optional[str]:
+    """
+    Пытаемся определить пол по одному фото через Replicate-модель.
+    Возвращаем 'female' / 'male' / None. Фоллбэк — None.
+    """
+    try:
+        # Попробуем разные имена входа
+        img_b = open(path, "rb")
+        client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+        # Часть моделей ждут 'image', некоторые — 'img' / 'input_image'
+        for key in ["image", "img", "input_image"]:
+            try:
+                pred = client.predictions.create(
+                    version=resolve_model_version(GENDER_MODEL_SLUG),
+                    input={key: img_b}
+                )
+                # ждём синхронно
+                pred.wait()
+                out = pred.output
+                # Ожидаем строку/словарь с полем gender/labels
+                if isinstance(out, dict):
+                    g = (out.get("gender") or out.get("label") or "").lower()
+                else:
+                    g = str(out).lower()
+                if "female" in g or "woman" in g: return "female"
+                if "male" in g or "man" in g: return "male"
+            except Exception as e:
+                logger.warning("Gender model key '%s' failed: %s", key, e)
+                continue
+    except Exception as e:
+        logger.warning("Gender inference error: %s", e)
+    return None
+
+def auto_detect_gender(uid:int) -> str:
+    """
+    Берём 1–2 первых фото и пытаемся определить пол. Возвращаем 'female'/'male'.
+    Фоллбэк — 'female' (чтобы не посадить женское лицо в мужские промпты).
+    """
+    refs = list_ref_images(uid)
+    guess = None
+    for p in refs[:2]:
+        guess = _infer_gender_from_image(p)
+        if guess: break
+    return guess or "female"
+
 # -------------------- LoRA training --------------------
 def _pack_refs_zip(uid:int) -> Path:
     refs = list_ref_images(uid)
@@ -209,8 +272,7 @@ def _ensure_destination_exists(slug: str):
         raise RuntimeError(f"Целевая модель '{slug}' не найдена. Создай на https://replicate.com/create (owner={o}, name='{name}').")
 
 def start_lora_training(uid:int) -> str:
-    dest_model = _dest_model_slug()
-    _ensure_destination_exists(dest_model)
+    dest_model = _dest_model_slug(); _ensure_destination_exists(dest_model)
     trainer_version = resolve_model_version(LORA_TRAINER_SLUG)
     zip_path = _pack_refs_zip(uid)
     client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
@@ -234,16 +296,12 @@ def start_lora_training(uid:int) -> str:
     save_profile(uid, prof)
     return training.id
 
-# --- check_training_status: берём версию из output + валидация ---
 def check_training_status(uid:int) -> Tuple[str, Optional[str]]:
-    prof = load_profile(uid)
-    tid = prof.get("training_id")
+    prof = load_profile(uid); tid = prof.get("training_id")
     if not tid: return ("not_started", None)
-
     client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
     tr = client.trainings.get(tid)
     status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
-
     if status != "succeeded":
         prof["status"] = status; save_profile(uid, prof); return (status, None)
 
@@ -251,8 +309,7 @@ def check_training_status(uid:int) -> Tuple[str, Optional[str]]:
                   or prof.get("finetuned_model") or _dest_model_slug()
 
     version_id = getattr(tr, "output", None) if not isinstance(tr, dict) else tr.get("output")
-    if isinstance(version_id, dict):
-        version_id = version_id.get("id") or version_id.get("version")
+    if isinstance(version_id, dict): version_id = version_id.get("id") or version_id.get("version")
 
     slug_with_version = None
     try:
@@ -261,13 +318,11 @@ def check_training_status(uid:int) -> Tuple[str, Optional[str]]:
             slug_with_version = f"{destination}:{version_id}"
     except Exception:
         pass
-
     if not slug_with_version:
         try:
             model_obj = replicate.models.get(destination)
             versions = list(model_obj.versions.list())
-            if versions:
-                slug_with_version = f"{destination}:{versions[0].id}"
+            if versions: slug_with_version = f"{destination}:{versions[0].id}"
         except Exception:
             slug_with_version = destination
 
@@ -284,21 +339,22 @@ def _pinned_slug(prof: Dict[str, Any]) -> str:
     return f"{base}:{ver}" if (base and ver) else base
 
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int) -> str:
-    model_version = resolve_model_version(model_slug)  # если вдруг без версии — latest
-    inputs_list = [{
+    mv = resolve_model_version(model_slug)  # если вдруг без версии — latest
+    out = replicate.run(mv, input={
         "prompt": prompt + AESTHETIC_SUFFIX,
         "negative_prompt": NEGATIVE_PROMPT,
         "width": w, "height": h,
         "num_inference_steps": steps,
         "guidance_scale": guidance,
         "seed": seed,
-    }]
-    return replicate_run_flexible(model_version, inputs_list)
+    })
+    url = extract_any_url(out)
+    if not url: raise RuntimeError("Empty output")
+    return url
 
 # -------------------- UI helpers --------------------
 def styles_keyboard() -> InlineKeyboardMarkup:
-    names = list(STYLE_PRESETS.keys())
-    rows, row = [], []
+    names = list(STYLE_PRESETS.keys()); rows, row = [], []
     for i, name in enumerate(names, 1):
         row.append(InlineKeyboardButton(name, callback_data=f"style:{name}"))
         if i % 3 == 0: rows.append(row); row=[]
@@ -312,11 +368,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Обучаю твою персональную LoRA по 10 фото и генерю без новых фото.\n\n"
         "1) /idenroll — включить набор (до 10 фото)\n"
-        "2) /iddone — сохранить профиль\n"
+        "2) /iddone — сохранить профиль (авто-детект пола)\n"
         "3) /trainid — запустить обучение\n"
         "4) /trainstatus — проверить статус\n"
         "5) /styles — список стилей\n"
-        "6) /lstyle <preset> — генерация из твоей версии модели (авто-размер под стиль)"
+        "6) /lstyle <preset> — генерация из твоей версии модели\n"
+        "7) /gender — показать определённый пол; /setgender male|female — вручную"
     )
 
 async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -325,9 +382,15 @@ async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id; ENROLL_FLAG[uid] = False
-    prof = load_profile(uid); prof["images"] = [p.name for p in list_ref_images(uid)]
+    prof = load_profile(uid)
+    prof["images"] = [p.name for p in list_ref_images(uid)]
+    # авто-детект пола (мягкий, без падений)
+    try:
+        prof["gender"] = auto_detect_gender(uid)
+    except Exception:
+        prof["gender"] = prof.get("gender") or "female"
     save_profile(uid, prof)
-    await update.message.reply_text(f"Готово. В профиле {len(prof['images'])} фото. Далее: /trainid.")
+    await update.message.reply_text(f"Готово. В профиле {len(prof['images'])} фото. Пол: {prof['gender']}. Далее: /trainid.")
 
 async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id; prof = load_profile(uid)
@@ -335,7 +398,8 @@ async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Фото: {len(list_ref_images(uid))}\n"
         f"Статус: {prof.get('status') or '—'}\n"
         f"Модель: {prof.get('finetuned_model') or '—'}\n"
-        f"Версия: {prof.get('finetuned_version') or '—'}"
+        f"Версия: {prof.get('finetuned_version') or '—'}\n"
+        f"Пол: {prof.get('gender') or '—'}"
     )
 
 async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -365,6 +429,17 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     preset = q.data.split(":",1)[1]
     await q.message.reply_text(f"Стиль выбран: {preset}. Запусти `/lstyle {preset}` после обучения.")
 
+async def setgender_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not context.args or context.args[0].lower() not in ["male", "female"]:
+        await update.message.reply_text("Используй: /setgender male | /setgender female"); return
+    prof = load_profile(uid); prof["gender"] = context.args[0].lower(); save_profile(uid, prof)
+    await update.message.reply_text(f"Ок. Пол установлен: {prof['gender']}")
+
+async def gender_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id; prof = load_profile(uid)
+    await update.message.reply_text(f"Определённый пол: {prof.get('gender') or '—'} (можно изменить /setgender)")
+
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if len(list_ref_images(uid)) < 10:
@@ -384,6 +459,11 @@ async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"Статус: {status}. Ещё в процессе…")
 
+def _prompt_for_gender(meta: Style, gender: str) -> str:
+    if gender == "female" and meta.get("p_f"): return meta["p_f"]
+    if gender == "male" and meta.get("p_m"): return meta["p_m"]
+    return meta.get("p_n") or meta.get("p","")
+
 async def lstyle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     args = context.args
@@ -397,22 +477,26 @@ async def lstyle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if prof.get("status") != "succeeded":
         await update.message.reply_text("Модель ещё не готова. Сначала /trainid и дождись /trainstatus = succeeded."); return
 
-    model_slug = _pinned_slug(prof)
+    gender = (prof.get("gender") or "female").lower()
     meta = STYLE_PRESETS[preset]
-    prompt_core = f"{meta.get('p','')}, exact facial identity, no geometry change, relaxed neutral expression, gentle smile"
-
-    w = int(meta.get("w") or GEN_WIDTH)
-    h = int(meta.get("h") or GEN_HEIGHT)
+    ptxt = _prompt_for_gender(meta, gender)
+    prompt_core = (
+        f"{ptxt}, exact facial identity, no geometry change, "
+        "relaxed neutral expression, gentle smile, "
+        "open expressive eyes, natural almond-shaped eyes, clear irises, "
+        "symmetrical eye shape, correct eye spacing, 85mm portrait look"
+    )
+    w = int(meta.get("w") or GEN_WIDTH); h = int(meta.get("h") or GEN_HEIGHT)
+    model_slug = _pinned_slug(prof)
 
     await update.message.chat.send_action(ChatAction.UPLOAD_PHOTO)
-    await update.message.reply_text(f"Генерирую из: {model_slug}\nСтиль: {preset} ({w}x{h}) … 🎨")
+    await update.message.reply_text(f"Генерирую из: {model_slug}\nСтиль: {preset} ({gender}, {w}x{h}) … 🎨")
     try:
         seed = int(time.time()) & 0xFFFFFFFF
         url = await asyncio.to_thread(generate_from_finetune, model_slug, prompt_core, GEN_STEPS, GEN_GUIDANCE, seed, w, h)
         await update.message.reply_photo(photo=url, caption=f"Готово ✨\nСтиль: {preset}")
     except Exception as e:
-        logger.exception("lstyle failed")
-        await update.message.reply_text(f"Ошибка генерации: {e}")
+        logger.exception("lstyle failed"); await update.message.reply_text(f"Ошибка генерации: {e}")
 
 # -------------------- system --------------------
 async def _post_init(app): await app.bot.delete_webhook(drop_pending_updates=True)
@@ -425,6 +509,8 @@ def main():
     app.add_handler(CommandHandler("idreset", id_reset))
     app.add_handler(CommandHandler("styles", styles_cmd))
     app.add_handler(CallbackQueryHandler(cb_style, pattern=r"^style:"))
+    app.add_handler(CommandHandler("setgender", setgender_cmd))
+    app.add_handler(CommandHandler("gender", gender_cmd))
     app.add_handler(CommandHandler("trainid", trainid_cmd))
     app.add_handler(CommandHandler("trainstatus", trainstatus_cmd))
     app.add_handler(CommandHandler("lstyle", lstyle_cmd))
@@ -435,6 +521,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
