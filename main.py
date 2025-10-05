@@ -608,11 +608,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_direct_photo))
 
     logger.info("Бот запущен…")
-    app.run_polling(
-        stop_signals=None,
-        close_loop=False,
-        allowed_updates=Update.ALL_TYPES,
-    )
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
