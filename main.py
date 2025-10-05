@@ -8,7 +8,6 @@ import replicate
 from typing import Any, Iterable, Tuple, Dict, Optional
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 )
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -37,31 +36,31 @@ FALLBACK_MODELS = [
 ]
 
 # ======================
-# СТИЛИ (максимальный реализм)
+# СТИЛИ (ультра-похожесть)
 # ======================
-STYLE_BACKEND = "instantid"  # для реализма держим только InstantID
+STYLE_BACKEND = "instantid"  # для максимального реализма
 INSTANTID_MODEL = os.getenv("INSTANTID_MODEL", "grandlineai/instant-id-photorealistic")
 QWEN_EDIT_MODEL  = os.getenv("QWEN_EDIT_MODEL",  "qwen/qwen-image-edit-plus")
 
-# Слабое вмешательство и низкий CFG => меньше пластика и перекройки
-STYLE_STRENGTH   = float(os.getenv("STYLE_STRENGTH") or 0.20)
+# Режим «УЛЬТРА-ПОХОЖЕ»: почти без перерисовки, максимум удержания черт
+ULTRA_LOCK_STRENGTH = float(os.getenv("ULTRA_LOCK_STRENGTH") or 0.14)  # 0.12–0.16
+ULTRA_LOCK_GUIDANCE = float(os.getenv("ULTRA_LOCK_GUIDANCE") or 2.3)
 
 NEGATIVE_PROMPT = (
     "cartoon, anime, cgi, 3d, plastic skin, waxy skin, porcelain, airbrushed, beauty filter, smoothing, "
     "overprocessed, oversharpen, hdr effect, halo, neon skin, garish, fake skin, cosplay wig, doll, "
     "ai-artifacts, deformed, bad anatomy, extra fingers, duplicated features, watermark, text, logo, "
     "overly saturated, extreme skin retouch, low detail, lowres, jpeg artifacts, "
-    "warped face, distorted face, changed facial proportions, big nose, wider nose, altered nose shape, "
-    "asymmetrical face, lopsided features"
+    "warped face, distorted face, changed facial proportions, "
+    "geometry change, face reshape, exaggerated makeup"
 )
 
-# Лёгкий «эстетический» хвост ко всем стилям (без пластилиновой ретуши)
 AESTHETIC_SUFFIX = (
     ", natural healthy skin, preserved pores, subtle makeup, balanced contrast, soft realistic light, "
     "no beauty filter, no plastic look"
 )
 
-# === реалистичные пресеты
+# Реалистичные пресеты
 STYLE_PRESETS: Dict[str, str] = {
     "natural":      "ultra realistic portrait, real skin texture with pores and tiny vellus hair, subtle makeup, soft natural light, DSLR 85mm look, shallow depth of field, neutral color grading, photographic grain",
     "editorial":    "editorial fashion portrait, preserved natural imperfections, professional color grading, soft studio key light + fill, realistic micro skin texture, calibrated tones",
@@ -203,62 +202,72 @@ def run_restore_with_fallbacks(image_url: str) -> Tuple[str, str]:
             logger.warning("Fallback model %s failed: %s", slug, e)
     raise RuntimeError(f"Все модели отклонили запрос. Последняя ошибка: {last}")
 
-# ===== Реалистичная стилизация (ID-сохранение)
-def run_style_realistic(image_url: str, prompt: str, strength: float, backend: str) -> Tuple[str, str]:
-            """
-            Максимум реализма и сохранения черт: мягкое вмешательство,
-            без изменения пропорций лица и с восстановлением объёма волос.
-            """
-            denoise  = max(0.12, min(0.20, strength))   # слабее перерисовка
-            guidance = 2.6                              # мягче воздействие
-            prompt = (
-                "highly realistic portrait, natural proportions, balanced lighting, "
-                "keep natural hair volume, preserve true face geometry, "
-                + prompt +
-                ", natural smooth shadows, soft light, detailed hair texture"
-            )
-            negative = (
-                NEGATIVE_PROMPT +
-                ", enlarged nose, big nose, distorted nose, nose shadow halo, "
-                "flat hair, missing hair volume, wax skin, color shift"
-            )
+# ===== Реалистичная стилизация (УЛЬТРА-ПОХОЖЕСТЬ)
+def run_style_realistic(image_url: str, prompt: str, _strength: float, backend: str) -> Tuple[str, str]:
+    """
+    УЛЬТРА-СХОЖЕСТЬ: максимум удержания лица, минимум перерисовки.
+    """
+    denoise  = max(0.10, min(0.18, ULTRA_LOCK_STRENGTH))
+    guidance = ULTRA_LOCK_GUIDANCE
 
-            if backend == "instantid":
-                resolved = resolve_model_version(INSTANTID_MODEL)
-                ip_scale = 1.0  # максимально держим идентичность
-                inputs_try = [
-                    {
-                        "face_image": image_url,
-                        "image": image_url,
-                        "prompt": prompt,
-                        "negative_prompt": negative,
-                        "ip_adapter_scale": ip_scale,
-                        "controlnet_conditioning_scale": 0.25,  # почти не перерисовывает
-                        "strength": denoise,
-                        "guidance_scale": guidance,
-                        "num_inference_steps": 20,
-                    }
-                ]
-                url = replicate_run_flexible(resolved, inputs_try)
-                return url, resolved
+    base_prompt = (
+        "highly realistic portrait, exact facial identity, preserve original facial proportions and features, "
+        "keep natural hair volume and hairline, matched skin tone, balanced natural lighting, "
+        "no stylization of anatomy, no geometry change, "
+        + prompt + AESTHETIC_SUFFIX
+    )
 
-            elif backend == "qwen":
-                resolved = resolve_model_version(QWEN_EDIT_MODEL)
-                inputs_try = [
-                    {
-                        "image": image_url,
-                        "prompt": prompt,
-                        "negative_prompt": negative,
-                        "strength": denoise,
-                        "guidance_scale": guidance,
-                        "num_inference_steps": 22,
-                    }
-                ]
-                url = replicate_run_flexible(resolved, inputs_try)
-                return url, resolved
+    negative = (
+        NEGATIVE_PROMPT + ", enlarged nose, big nose, wider nose, altered nose shape, "
+        "changed lip shape, swollen lips, jaw reshape, cheekbone reshape, "
+        "uneven skin tint, bluish nose, color cast, flat hair, thin hair, missing hair volume"
+    )
 
-            else:
-                raise RuntimeError(f"Неизвестный backend '{backend}'.")
+    # Детерминируем результат (если поддерживается seed)
+    try:
+        import zlib
+        seed = zlib.adler32(image_url.encode("utf-8")) % (2**31-1)
+    except Exception:
+        seed = 42
+
+    if backend == "instantid":
+        resolved = resolve_model_version(INSTANTID_MODEL)
+        ip_scale = 1.0  # держим лицо максимально
+        inputs_try = [
+            {
+                "face_image": image_url,
+                "image": image_url,
+                "prompt": base_prompt,
+                "negative_prompt": negative,
+                "ip_adapter_scale": ip_scale,
+                "controlnet_conditioning_scale": 0.20,   # почти не перерисовывать
+                "strength": denoise,
+                "guidance_scale": guidance,
+                "num_inference_steps": 18,
+                "seed": seed,
+            }
+        ]
+        url = replicate_run_flexible(resolved, inputs_try)
+        return url, resolved
+
+    elif backend == "qwen":
+        resolved = resolve_model_version(QWEN_EDIT_MODEL)
+        inputs_try = [
+            {
+                "image": image_url,
+                "prompt": base_prompt + ", do not change geometry, only subtle color/contrast improvements",
+                "negative_prompt": negative,
+                "strength": denoise,
+                "guidance_scale": guidance,
+                "num_inference_steps": 20,
+                "seed": seed,
+            }
+        ]
+        url = replicate_run_flexible(resolved, inputs_try)
+        return url, resolved
+
+    else:
+        raise RuntimeError(f"Неизвестный backend '{backend}'.")
 
 # ======================
 # ОТПРАВКА РЕЗУЛЬТАТА
@@ -414,7 +423,7 @@ async def _run_style_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
         return
 
     await m.chat.send_action(ChatAction.UPLOAD_PHOTO)
-    await m.reply_text(f"Стилизация (реалистично): {preset}… 🎨")
+    await m.reply_text(f"Стилизация (ультра-похоже): {preset}… 🎨")
 
     tmp_path = "style_input.jpg"
     try:
@@ -424,9 +433,9 @@ async def _run_style_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
 
         public_url = await tg_public_url(source)
 
-        use_strength = STYLE_STRENGTH
+        # Используем ультра-режим
         result_url, used_model = await asyncio.to_thread(
-            run_style_realistic, public_url, STYLE_PRESETS[preset], use_strength, STYLE_BACKEND
+            run_style_realistic, public_url, STYLE_PRESETS[preset], ULTRA_LOCK_STRENGTH, STYLE_BACKEND
         )
         await safe_send_image(update, result_url,
             caption=f"Готово ✨\nСтиль: {preset}\nBackend: {STYLE_BACKEND}\nМодель: {used_model}")
@@ -445,18 +454,17 @@ async def _run_style_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
 # ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ver = getattr(replicate, "__version__", "unknown")
-
     kb = [[InlineKeyboardButton("Открыть стили", callback_data="open_styles")]]
     await update.message.reply_text(
-        "Привет! Я делаю **реалистичную** стилизацию фото.\n\n"
+        "Привет! Я делаю **реалистичную** стилизацию фото с максимальной схожестью с оригиналом.\n\n"
         "Как пользоваться:\n"
         "1) Пришли фото.\n"
-        "2) В подписи к фото укажи стиль (например: `harley`, `natural`, `vogue`).\n"
-        "— Фото сразу будет стилизовано (без пластика/сглаживания).\n\n"
+        "2) В подписи укажи стиль (например: `harley`, `natural`, `vogue`).\n"
+        "— Лицо и пропорции сохраняются максимально.\n\n"
         "Команды:\n"
         "• /styles — показать все стили\n"
         "• /style <preset> — стилизовать (если ответишь на фото)\n"
-        "• /process — вручную запустить реставрацию/апскейл (опционально)\n\n"
+        "• /process — реставрация/апскейл (опционально)\n\n"
         f"Стили backend: {STYLE_BACKEND} (InstantID={INSTANTID_MODEL})\n"
         f"replicate=={ver}",
         reply_markup=InlineKeyboardMarkup(kb)
@@ -480,7 +488,7 @@ async def handle_direct_photo(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if preset and preset in STYLE_PRESETS:
         await m.chat.send_action(ChatAction.UPLOAD_PHOTO)
-        await m.reply_text(f"Стилизация (реалистично): {preset}… 🎨")
+        await m.reply_text(f"Стилизация (ультра-похоже): {preset}… 🎨")
 
         tmp_path = "style_input.jpg"
         try:
@@ -490,9 +498,8 @@ async def handle_direct_photo(update: Update, context: ContextTypes.DEFAULT_TYPE
 
             public_url = await tg_public_url(m)
 
-            use_strength = STYLE_STRENGTH
             result_url, used_model = await asyncio.to_thread(
-                run_style_realistic, public_url, STYLE_PRESETS[preset], use_strength, STYLE_BACKEND
+                run_style_realistic, public_url, STYLE_PRESETS[preset], ULTRA_LOCK_STRENGTH, STYLE_BACKEND
             )
             await safe_send_image(update, result_url,
                 caption=f"Готово ✨\nСтиль: {preset}\nBackend: {STYLE_BACKEND}\nМодель: {used_model}")
@@ -516,8 +523,8 @@ async def handle_direct_photo(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def styles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Выбери стиль (кнопки ниже) и потом пришли фото с этим словом в подписи.\n"
-        "Лайфхак: для максимального реализма держи лицо крупно, без фильтров.",
+        "Выбери стиль (кнопки ниже) и потом пришли фото с этим словом в подписи. "
+        "Для максимальной схожести лучше крупный портрет без резких теней.",
         reply_markup=styles_keyboard(),
         parse_mode=None,
     )
@@ -576,10 +583,25 @@ async def _process_photo_and_reply(update: Update, context: ContextTypes.DEFAULT
             pass
 
 # ======================
+# POST-INIT и ERROR HANDLER
+# ======================
+async def _post_init(application):
+    # Сбросить возможный webhook и хвост апдейтов перед стартом polling
+    await application.bot.delete_webhook(drop_pending_updates=True)
+
+async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.exception("Unhandled error", exc_info=context.error)
+
+# ======================
 # MAIN
 # ======================
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .post_init(_post_init)   # важный сброс webhook до старта
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("process", process_cmd))
@@ -590,13 +612,13 @@ def main():
     app.add_handler(CallbackQueryHandler(open_styles_cb, pattern=r"^open_styles$"))
     app.add_handler(MessageHandler(filters.PHOTO, handle_direct_photo))
 
-    logger.info("Бот запущен… (polling)")
+    app.add_error_handler(_error_handler)
 
-    # Безопасный запуск polling: сбрасываем возможный webhook и хвост обновлений.
-    # Это помогает от конфликтов, если где-то раньше был webhook.
+    logger.info("Бот запущен… (polling)")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
+
 
 
