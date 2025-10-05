@@ -34,7 +34,7 @@ if not os.getenv("REPLICATE_API_TOKEN"):
 
 # Настройки обучения и генерации
 DEST_OWNER        = os.getenv("REPLICATE_DEST_OWNER", "").strip()
-DEST_MODEL        = os.getenv("REPLICATE_DEST_MODEL", "youtwin-lora").strip()
+DEST_MODEL        = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()
 LORA_TRAINER_SLUG = os.getenv("LORA_TRAINER_SLUG", "replicate/flux-lora-trainer").strip()
 LORA_INPUT_KEY    = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 
