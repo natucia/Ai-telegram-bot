@@ -1,4 +1,4 @@
-# ================== Telegram LoRA Bot (Train -> Generate, fixed) ==================
+# ================== Telegram LoRA Bot (Train -> Generate, tuned realism) ==================
 # Flow:
 # /idenroll -> upload up to 10 photos
 # /iddone   -> finalize profile
@@ -12,10 +12,12 @@ import os, re, io, json, time, asyncio, logging, shutil
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from zipfile import ZipFile
+
 import requests
 from PIL import Image
 import replicate
 from replicate import Client
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -32,30 +34,43 @@ if not TOKEN or not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", TOKEN):
 if not os.getenv("REPLICATE_API_TOKEN"):
     raise RuntimeError("Нет REPLICATE_API_TOKEN.")
 
-# Настройки обучения и генерации
-DEST_OWNER        = os.getenv("REPLICATE_DEST_OWNER", "").strip()
-DEST_MODEL        = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()
+# Репозиторий, куда будет писаться новая версия модели после тренировки
+DEST_OWNER        = os.getenv("REPLICATE_DEST_OWNER", "").strip()       # напр. natucia
+DEST_MODEL        = os.getenv("REPLICATE_DEST_MODEL", "youtwin-lora").strip()
+
+# Тренер LoRA (реальная train-модель, не базовый SDXL!)
 LORA_TRAINER_SLUG = os.getenv("LORA_TRAINER_SLUG", "replicate/flux-lora-trainer").strip()
+# Ключ входа с архивом (у разных тренеров: input_images / images_zip / image_zip / images)
 LORA_INPUT_KEY    = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 
-GEN_STEPS     = int(os.getenv("GEN_STEPS", "28"))
-GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "6.5"))
-GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "1024"))
-GEN_HEIGHT    = int(os.getenv("GEN_HEIGHT", "1024"))
+# Гиперпараметры обучения (подкручены под реалистичность, без «пластика»)
+LORA_MAX_STEPS     = int(os.getenv("LORA_MAX_STEPS", "2200"))
+LORA_LR            = float(os.getenv("LORA_LR", "0.0001"))
+LORA_USE_FACE_DET  = os.getenv("LORA_USE_FACE_DET", "true").lower() in ["1","true","yes","y"]
+LORA_CAPTION_PREF  = os.getenv("LORA_CAPTION_PREFIX", "a photo of a young woman with fair skin, green eyes, ginger hair, natural look").strip()
+LORA_RESOLUTION    = int(os.getenv("LORA_RESOLUTION", "1024"))
 
-NEGATIVE_PROMPT = (
-    "cartoon, anime, cgi, 3d, plastic skin, waxy skin, porcelain, beauty filter, ai-artifacts, "
-    "warped face, changed facial proportions, geometry change, text, watermark, logo"
-)
-AESTHETIC_SUFFIX = (
-    ", highly realistic, preserved facial identity, natural skin texture, balanced lighting, no beauty filter"
+# Генерация — дефолты для реализма (портрет не квадратный)
+GEN_STEPS     = int(os.getenv("GEN_STEPS", "40"))
+GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "4.0"))
+GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "832"))
+GEN_HEIGHT    = int(os.getenv("GEN_HEIGHT", "1216"))
+
+NEGATIVE_PROMPT = os.getenv("NEGATIVE_PROMPT", (
+    "cartoon, anime, 3d, cgi, overprocessed, oversharpen, waxy skin, plastic skin, "
+    "skin smoothing, beauty filter, unrealistic skin, blur, lowres, deformed, distorted, "
+    "bad anatomy, mutated, watermark, text, logo"
+))
+
+AESTHETIC_SUFFIX = os.getenv("AESTHETIC_SUFFIX", 
+    ", photo-realistic, visible skin pores, natural color, filmic color grading, balanced lighting"
 )
 
 STYLE_PRESETS: Dict[str, str] = {
     "natural":     "ultra realistic portrait, subtle makeup, neutral color grading",
     "boho":        "boho portrait, earthy palette, soft daylight",
     "vogue":       "beauty cover shot, soft studio light, calibrated colors",
-    "beauty_soft": "beauty portrait, clean studio light, controlled highlights",
+    "beauty_soft": "beauty portrait, clean studio light, controlled highlights, soft diffusion",
     "windowlight": "soft window light portrait, natural diffusion",
     "editorial":   "editorial fashion portrait, preserved natural imperfections",
     "moody":       "moody cinematic portrait, controlled shadows, subtle rim light",
@@ -67,20 +82,27 @@ logger = logging.getLogger("bot")
 
 # -------------------- storage --------------------
 DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
+
 def user_dir(uid:int) -> Path:
     p = DATA_DIR / str(uid)
     p.mkdir(parents=True, exist_ok=True)
     return p
+
 def list_ref_images(uid:int) -> List[Path]:
     return sorted(user_dir(uid).glob("ref_*.jpg"))
+
 def profile_path(uid:int) -> Path:
     return user_dir(uid) / "profile.json"
+
 def load_profile(uid:int) -> Dict[str, Any]:
     p = profile_path(uid)
     if p.exists():
         return json.loads(p.read_text())
     return {"images": [], "training_id": None, "finetuned_model": None, "status": None}
-def save_profile(uid:int, prof:Dict[str,Any]): profile_path(uid).write_text(json.dumps(prof))
+
+def save_profile(uid:int, prof:Dict[str,Any]):
+    profile_path(uid).write_text(json.dumps(prof))
+
 def save_ref_downscaled(path: Path, raw: bytes, max_side=1024, quality=92):
     im = Image.open(io.BytesIO(raw)).convert("RGB")
     im.thumbnail((max_side, max_side))
@@ -91,6 +113,7 @@ async def tg_download_bytes(message) -> bytes:
     f = await message.photo[-1].get_file()
     ba = await f.download_as_bytearray()
     return bytes(ba)
+
 async def safe_send_image(update: Update, url: str, caption: str = ""):
     msg = update.message
     try:
@@ -105,21 +128,25 @@ async def safe_send_image(update: Update, url: str, caption: str = ""):
 
 # -------------------- replicate helpers --------------------
 def resolve_model_version(slug: str) -> str:
-    if ":" in slug: return slug
+    """Return slug:version_id for latest version."""
+    if ":" in slug:
+        return slug
     model = replicate.models.get(slug)
     versions = list(model.versions.list())
-    if not versions: raise RuntimeError(f"Нет версий модели {slug}")
+    if not versions:
+        raise RuntimeError(f"Нет версий модели {slug}")
     return f"{slug}:{versions[0].id}"
 
 def extract_any_url(out: Any) -> Optional[str]:
-    if isinstance(out, str) and out.startswith(("http", "https")): return out
+    if isinstance(out, str) and out.startswith(("http", "https")):
+        return out
     if isinstance(out, list):
         for v in out:
             u = extract_any_url(v)
             if u: return u
     if isinstance(out, dict):
         for v in out.values():
-            u = extract_any_url(v)
+            u = extract_any_url(v); 
             if u: return u
     return None
 
@@ -129,15 +156,17 @@ def replicate_run_flexible(model: str, inputs_list: Iterable[dict]) -> str:
         try:
             out = replicate.run(model, input=payload)
             url = extract_any_url(out)
-            if not url: raise RuntimeError("Empty output")
+            if not url:
+                raise RuntimeError("Empty output")
             return url
         except Exception as e:
             last = e
             logger.warning("Replicate rejected payload: %s", e)
     raise last or RuntimeError("Все варианты отклонены")
 
-# -------------------- LoRA training --------------------
+# -------------------- LoRA training via Trainings API --------------------
 def _pack_refs_zip(uid:int) -> Path:
+    """Тренер ждёт zip с изображениями."""
     refs = list_ref_images(uid)
     if len(refs) < 10:
         raise RuntimeError("Нужно 10 фото для обучения.")
@@ -148,13 +177,13 @@ def _pack_refs_zip(uid:int) -> Path:
     return zpath
 
 def start_lora_training(uid:int) -> str:
-    """Создаёт job обучения LoRA и пишет новую версию в {owner}/{model}."""
+    """Создать training job; возвращает training.id. Пишем в {DEST_OWNER}/{DEST_MODEL}."""
     if not DEST_OWNER:
         raise RuntimeError("REPLICATE_DEST_OWNER не задан (твой username на Replicate).")
 
     dest_model = f"{DEST_OWNER}/{DEST_MODEL}"
 
-    # Проверим, что destination существует
+    # 1) Проверка, что destination-модель существует (иначе был бы 404).
     try:
         replicate.models.get(dest_model)
     except Exception:
@@ -163,9 +192,21 @@ def start_lora_training(uid:int) -> str:
             f"Создай её на https://replicate.com/create (name='{DEST_MODEL}')."
         )
 
+    # 2) Разрешаем trainer -> version
     trainer_version = resolve_model_version(LORA_TRAINER_SLUG)
     zip_path = _pack_refs_zip(uid)
 
+    # 3) Базовые параметры тренера (добавим zip ключом ниже)
+    trainer_input_base = {
+        "max_train_steps": LORA_MAX_STEPS,
+        "lora_lr": LORA_LR,
+        "use_face_detection_instead": LORA_USE_FACE_DET,
+        "resolution": LORA_RESOLUTION,
+    }
+    if LORA_CAPTION_PREF:
+        trainer_input_base["caption_prefix"] = LORA_CAPTION_PREF
+
+    # 4) Пробуем возможные имена поля для архива
     input_keys = []
     if LORA_INPUT_KEY: input_keys.append(LORA_INPUT_KEY)
     input_keys += ["input_images", "images_zip", "image_zip", "images"]
@@ -176,12 +217,15 @@ def start_lora_training(uid:int) -> str:
 
     client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
     last_err = None
+
     for key in used_keys:
         try:
             with open(zip_path, "rb") as f:
+                payload = dict(trainer_input_base)
+                payload[key] = f
                 training = client.trainings.create(
                     version=trainer_version,
-                    input={key: f},
+                    input=payload,
                     destination=dest_model
                 )
             prof = load_profile(uid)
@@ -193,20 +237,25 @@ def start_lora_training(uid:int) -> str:
         except Exception as e:
             last_err = e
             logger.warning("Trainer rejected key '%s': %s", key, e)
+
     raise RuntimeError(f"Не удалось создать обучение. Последняя ошибка: {last_err}")
 
 def check_training_status(uid:int) -> Tuple[str, Optional[str]]:
     prof = load_profile(uid)
     tid = prof.get("training_id")
-    if not tid: return ("not_started", None)
+    if not tid:
+        return ("not_started", None)
+
     client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
     tr = client.trainings.get(tid)
     status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
+
     prof["status"] = status
     save_profile(uid, prof)
     return (status, prof["finetuned_model"] if status == "succeeded" else None)
 
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int) -> str:
+    """Генерация через обученную модель."""
     model_version = resolve_model_version(model_slug)
     inputs_list = [{
         "prompt": prompt + AESTHETIC_SUFFIX,
@@ -296,7 +345,7 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if len(list_ref_images(uid)) < 10:
-        await update.message.reply_text("Нужно 10 фото.")
+        await update.message.reply_text("Нужно 10 фото. Сначала /idenroll и пришли снимки.")
         return
     await update.message.reply_text("Запускаю обучение LoRA на Replicate…")
     try:
@@ -322,11 +371,13 @@ async def lstyle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     preset = args[0].lower()
     if preset not in STYLE_PRESETS:
         await update.message.reply_text(f"Не знаю стиль '{preset}'. Смотри /styles"); return
+
     prof = load_profile(uid)
     model_slug = prof.get("finetuned_model")
     if not model_slug or prof.get("status") != "succeeded":
         await update.message.reply_text("Модель ещё не готова. Сначала /trainid и дождись /trainstatus = succeeded.")
         return
+
     await update.message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     await update.message.reply_text(f"Генерирую из твоей модели: {preset}… 🎨")
     try:
@@ -343,28 +394,38 @@ async def lstyle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Ошибка генерации: {e}")
 
 # -------------------- system --------------------
-async def _post_init(app): await app.bot.delete_webhook(drop_pending_updates=True)
+async def _post_init(app):
+    await app.bot.delete_webhook(drop_pending_updates=True)
+
 async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.exception("Unhandled error", exc_info=context.error)
+
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(_post_init).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("idenroll", id_enroll))
     app.add_handler(CommandHandler("iddone", id_done))
     app.add_handler(CommandHandler("idstatus", id_status))
     app.add_handler(CommandHandler("idreset", id_reset))
+
     app.add_handler(CommandHandler("trainid", trainid_cmd))
     app.add_handler(CommandHandler("trainstatus", trainstatus_cmd))
+
     app.add_handler(CommandHandler("styles", styles_cmd))
     app.add_handler(CallbackQueryHandler(cb_style, pattern=r"^style:"))
     app.add_handler(CommandHandler("lstyle", lstyle_cmd))
+
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_error_handler(_error_handler)
-    logger.info("Bot up. Trainer=%s DEST_OWNER=%s DEST_MODEL=%s", LORA_TRAINER_SLUG, DEST_OWNER, DEST_MODEL)
+
+    logger.info(
+        "Bot up. Trainer=%s DEST_OWNER=%s DEST_MODEL=%s GEN=%dx%d steps=%s guidance=%s",
+        LORA_TRAINER_SLUG, DEST_OWNER, DEST_MODEL, GEN_WIDTH, GEN_HEIGHT, GEN_STEPS, GEN_GUIDANCE
+    )
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
-
 
 
