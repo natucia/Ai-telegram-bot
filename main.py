@@ -6,7 +6,10 @@ import logging
 import requests
 import replicate
 from typing import Any, Iterable, Tuple, Dict, Optional
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+)
 from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes,
@@ -40,67 +43,50 @@ STYLE_BACKEND = "instantid"  # для реализма держим только
 INSTANTID_MODEL = os.getenv("INSTANTID_MODEL", "grandlineai/instant-id-photorealistic")
 QWEN_EDIT_MODEL  = os.getenv("QWEN_EDIT_MODEL",  "qwen/qwen-image-edit-plus")
 
-# Слабое вмешательство и низкий CFG => меньше пластика
-STYLE_STRENGTH   = float(os.getenv("STYLE_STRENGTH") or 0.26)
+# Слабое вмешательство и низкий CFG => меньше пластика и перекройки
+STYLE_STRENGTH   = float(os.getenv("STYLE_STRENGTH") or 0.20)
 
 NEGATIVE_PROMPT = (
     "cartoon, anime, cgi, 3d, plastic skin, waxy skin, porcelain, airbrushed, beauty filter, smoothing, "
     "overprocessed, oversharpen, hdr effect, halo, neon skin, garish, fake skin, cosplay wig, doll, "
     "ai-artifacts, deformed, bad anatomy, extra fingers, duplicated features, watermark, text, logo, "
-    "overly saturated, extreme skin retouch, low detail, lowres, jpeg artifacts"
+    "overly saturated, extreme skin retouch, low detail, lowres, jpeg artifacts, "
+    "warped face, distorted face, changed facial proportions, big nose, wider nose, altered nose shape, "
+    "asymmetrical face, lopsided features"
 )
 
-# === 20 реалистичных пресетов «как у CheeseAI», но без пластика
+# Лёгкий «эстетический» хвост ко всем стилям (без пластилиновой ретуши)
+AESTHETIC_SUFFIX = (
+    ", natural healthy skin, preserved pores, subtle makeup, balanced contrast, soft realistic light, "
+    "no beauty filter, no plastic look"
+)
+
+# === реалистичные пресеты
 STYLE_PRESETS: Dict[str, str] = {
-    # базовые портретные
-    "natural":      "ultra realistic portrait, real skin texture with pores and tiny vellus hair, subtle makeup, "
-                    "soft natural light, DSLR 85mm look, shallow depth of field, neutral color grading, photographic grain",
-    "editorial":    "editorial fashion portrait, preserved natural imperfections, professional color grading, "
-                    "soft studio key light + fill, realistic micro skin texture, calibrated tones",
-    "headshot_pro": "premium corporate headshot, neutral seamless background, softbox lighting, crisp optics, "
-                    "accurate skin tone, subtle film grain, lifelike detail",
-    "beauty_soft":  "beauty portrait, glossy lips yet real pores visible, clean studio light, controlled highlights, "
-                    "micro-contrast on skin, no beauty filter, neutral grading",
-    "noir":         "cinematic noir portrait, deep yet clean contrast, soft rim light, film grain, "
-                    "true skin detail and pores, realistic tone mapping",
-    "street":       "candid street portrait, dusk city bokeh, available light, realistic color, subtle film grain, "
-                    "skin texture preserved",
-    "retro_film":   "1970s film portrait look, gentle film grain, organic contrast, natural skin texture, "
-                    "neutral-warm color cast, real fabric texture",
-    "hollywood":    "cinematic hollywood key light + kicker, realistic makeup, authentic skin microtexture, "
-                    "balanced dynamic range, subtle grain, high fidelity detail",
-    "vogue":        "beauty cover shot, soft studio lighting, calibrated colors, glossy accents but visible pores, "
-                    "clean background, photographic grain",
-    "windowlight":  "soft window light portrait, natural diffusion, gentle falloff, lifelike skin texture, "
-                    "neutral color grading",
-    "studio_softbox":"studio portrait with large softbox, wraparound light, clean background, neutral grading, "
-                    "high microdetail of skin and hair",
-    "moody":        "moody cinematic portrait, controlled shadows, subtle rim, realistic texture and pores, "
-                    "neutral-cool grading, fine grain",
-    "pinterest":    "lifestyle portrait, soft natural tones, gentle color palette, realistic skin texture, "
-                    "minimal retouch, shallow depth",
+    "natural":      "ultra realistic portrait, real skin texture with pores and tiny vellus hair, subtle makeup, soft natural light, DSLR 85mm look, shallow depth of field, neutral color grading, photographic grain",
+    "editorial":    "editorial fashion portrait, preserved natural imperfections, professional color grading, soft studio key light + fill, realistic micro skin texture, calibrated tones",
+    "headshot_pro": "premium corporate headshot, neutral seamless background, softbox lighting, crisp optics, accurate skin tone, subtle film grain, lifelike detail",
+    "beauty_soft":  "beauty portrait, glossy lips yet real pores visible, clean studio light, controlled highlights, micro-contrast on skin, no beauty filter, neutral grading",
+    "noir":         "cinematic noir portrait, deep yet clean contrast, soft rim light, film grain, true skin detail and pores, realistic tone mapping",
+    "street":       "candid street portrait, dusk city bokeh, available light, realistic color, subtle film grain, skin texture preserved",
+    "retro_film":   "1970s film portrait look, gentle film grain, organic contrast, natural skin texture, neutral-warm color cast, real fabric texture",
+    "hollywood":    "cinematic hollywood key light + kicker, realistic makeup, authentic skin microtexture, balanced dynamic range, subtle grain, high fidelity detail",
+    "vogue":        "beauty cover shot, soft studio lighting, calibrated colors, glossy accents but visible pores, clean background, photographic grain",
+    "windowlight":  "soft window light portrait, natural diffusion, gentle falloff, lifelike skin texture, neutral color grading",
+    "studio_softbox":"studio portrait with large softbox, wraparound light, clean background, neutral grading, high microdetail of skin and hair",
+    "moody":        "moody cinematic portrait, controlled shadows, subtle rim, realistic texture and pores, neutral-cool grading, fine grain",
+    "pinterest":    "lifestyle portrait, soft natural tones, gentle color palette, realistic skin texture, minimal retouch, shallow depth",
     "boho":         "boho portrait, natural fabrics, earthy palette, realistic fabric weave and skin pores, soft daylight",
     "beach":        "beach portrait, golden hour, backlight rim, realistic skin texture, natural highlights, sand texture",
-    "winter":       "winter portrait, cool neutral grading, soft overcast light, realistic skin and hair texture, "
-                    "breath haze subtle",
-    "fitness":      "fitness portrait, natural sheen (not plastic), defined but realistic skin detail, "
-                    "studio rim lights, neutral color",
-    "techwear":     "techwear portrait, matte fabrics with real weave, soft rim neon, realistic skin, city bokeh, "
-                    "neutral saturation",
-    # образы
-    "princess":     "royal look portrait, elegant gown, subtle tiara, realistic skin texture with pores, "
-                    "soft cinematic light, realistic fabric weave",
-    "harley":       "Harley Quinn cosplay but real person, natural skin texture with visible pores, real hair texture "
-                    "(not a wig), blonde pigtails with soft pink and blue tips, lived-in makeup, "
-                    "cinematic key light, no plastic look",
-    "superman":     "Superman cosplay photorealistic, authentic fabric texture, realistic proportions, rim light, "
-                    "natural face detail and pores",
-    "cyberpunk":    "photorealistic cyberpunk portrait, subtle neon rim, city bokeh, realistic speculars, "
-                    "neutral color grading, skin texture preserved",
-    "business":     "professional business portrait, neutral seamless background, softbox lighting, crisp detail, "
-                    "real skin texture with pores, realistic color",
-    "evening":      "evening glam portrait, smoky eyes, glossy lips, controlled highlights, fine skin detail preserved, "
-                    "soft cinematic light",
+    "winter":       "winter portrait, cool neutral grading, soft overcast light, realistic skin and hair texture, breath haze subtle",
+    "fitness":      "fitness portrait, natural sheen (not plastic), defined but realistic skin detail, studio rim lights, neutral color",
+    "techwear":     "techwear portrait, matte fabrics with real weave, soft rim neon, realistic skin, city bokeh, neutral saturation",
+    "princess":     "royal look portrait, elegant gown, subtle tiara, realistic skin texture with pores, soft cinematic light, realistic fabric weave",
+    "harley":       "Harley Quinn cosplay but real person, natural skin texture with visible pores, real hair texture (not a wig), blonde pigtails with soft pink and blue tips, lived-in makeup, cinematic key light, no plastic look",
+    "superman":     "Superman cosplay photorealistic, authentic fabric texture, realistic proportions, rim light, natural face detail and pores",
+    "cyberpunk":    "photorealistic cyberpunk portrait, subtle neon rim, city bokeh, realistic speculars, neutral color grading, skin texture preserved",
+    "business":     "professional business portrait, neutral seamless background, softbox lighting, crisp detail, real skin texture with pores, realistic color",
+    "evening":      "evening glam portrait, smoky eyes, glossy lips, controlled highlights, fine skin detail preserved, soft cinematic light",
 }
 
 # ======================
@@ -222,31 +208,33 @@ def run_style_realistic(image_url: str, prompt: str, strength: float, backend: s
     """
     Максимум реализма: сильное удержание лица, мягкая сила изменений, низкий CFG.
     """
-    denoise  = max(0.18, min(0.30, strength))
-    guidance = 3.4  # ещё ниже => меньше «нейропластика»
+    denoise  = max(0.15, min(0.24, strength))  # мягче, чтобы не «перекраивать»
+    guidance = 3.0                              # меньше упрямства => меньше пластики
+    prompt = (prompt + AESTHETIC_SUFFIX).strip()
 
     if backend == "instantid":
         resolved = resolve_model_version(INSTANTID_MODEL)
-        ip_scale = 0.93  # ещё крепче держим идентичность
+        ip_scale = 0.98  # максимально держим идентичность
         inputs_try = [
             {
                 "face_image": image_url,
                 "image": image_url,
-                "prompt": prompt,
+                "prompt": "preserve facial proportions, do not change nose size or shape. " + prompt,
                 "negative_prompt": NEGATIVE_PROMPT,
                 "ip_adapter_scale": ip_scale,
-                "controlnet_conditioning_scale": 0.50,  # меньше перерисовки
+                "controlnet_conditioning_scale": 0.35,  # меньше перерисовки
                 "strength": denoise,
                 "guidance_scale": guidance,
-                "num_inference_steps": 26,  # чуть короче => меньше мыла
+                "num_inference_steps": 24,
             },
             {
                 "face_image": image_url,
-                "prompt": prompt,
+                "prompt": "preserve facial proportions, do not change nose size or shape. " + prompt,
                 "negative_prompt": NEGATIVE_PROMPT,
                 "ip_adapter_scale": ip_scale,
-                "num_inference_steps": 24,
+                "strength": denoise,
                 "guidance_scale": guidance,
+                "num_inference_steps": 22,
             },
         ]
         url = replicate_run_flexible(resolved, inputs_try)
@@ -276,7 +264,7 @@ def run_style_realistic(image_url: str, prompt: str, strength: float, backend: s
         raise RuntimeError(f"Неизвестный backend '{backend}'.")
 
 # ======================
-# ОТПРАВКА РЕЗУЛЬТАТА (байтами, если надо)
+# ОТПРАВКА РЕЗУЛЬТАТА
 # ======================
 async def safe_send_image(update: Update, url: str, caption: str = ""):
     msg = update.message
@@ -325,7 +313,7 @@ async def safe_send_image(update: Update, url: str, caption: str = ""):
     await msg.reply_text(f"Готово, но Телеграм не принял файл напрямую. Ссылка:\n{url}")
 
 # ======================
-# ПАРСЕР СТИЛЯ ИЗ ТЕКСТА (расширенные алиасы)
+# ПАРСЕР СТИЛЯ ИЗ ТЕКСТА (алиасы)
 # ======================
 RUS_PRESET_ALIASES = {
     "natural":  ["natural","натурал","естественно","натуральный","реализм","реалистично"],
@@ -383,10 +371,8 @@ def detect_preset_from_text(text: Optional[str]) -> Optional[str]:
 # СТИЛИЗАЦИЯ (реалистичная img2img)
 # ======================
 def styles_keyboard() -> InlineKeyboardMarkup:
-    # строим клавиатуру динамически, 4 в ряд
     names = list(STYLE_PRESETS.keys())
-    rows = []
-    row = []
+    rows, row = [], []
     for i, name in enumerate(names, 1):
         row.append(InlineKeyboardButton(name.replace("_"," ").title(), callback_data=f"style:{name}"))
         if i % 4 == 0:
@@ -441,7 +427,7 @@ async def _run_style_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
 
         public_url = await tg_public_url(source)
 
-        use_strength = STYLE_STRENGTH  # 0.26 по умолчанию
+        use_strength = STYLE_STRENGTH
         result_url, used_model = await asyncio.to_thread(
             run_style_realistic, public_url, STYLE_PRESETS[preset], use_strength, STYLE_BACKEND
         )
@@ -489,8 +475,8 @@ async def process_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_direct_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Если в подписи к фото указан стиль — сразу стилизуем (без реставрации).
-    Если стиля нет — предлагаем выбрать стиль.
+    Если в подписи к фото указан стиль — сразу стилизуем.
+    Если стиля нет — предлагаем выбрать.
     """
     m = update.message
     preset = detect_preset_from_text(m.caption)
@@ -607,8 +593,11 @@ def main():
     app.add_handler(CallbackQueryHandler(open_styles_cb, pattern=r"^open_styles$"))
     app.add_handler(MessageHandler(filters.PHOTO, handle_direct_photo))
 
-    logger.info("Бот запущен…")
-    app.run_polling()
+    logger.info("Бот запущен… (polling)")
+
+    # Безопасный запуск polling: сбрасываем возможный webhook и хвост обновлений.
+    # Это помогает от конфликтов, если где-то раньше был webhook.
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
