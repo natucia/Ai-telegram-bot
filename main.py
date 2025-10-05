@@ -263,7 +263,7 @@ def pick_most_similar(candidate_urls: List[str], target_face: np.ndarray) -> str
     logger.info("Picked best candidate score=%.4f", best_score)
     return best_url
 
-async def run_style_multiref(uid:int, photo_url:str, photo_bytes:bytes, preset_prompt:str) -> Tuple[str,str]:
+def run_style_multiref(uid:int, photo_url:str, photo_bytes:bytes, preset_prompt:str) -> Tuple[str,str]:
     # готовим промпт
     base_prompt = (
         "highly realistic portrait, exact facial identity, preserve original facial proportions and features, "
