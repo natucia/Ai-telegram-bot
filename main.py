@@ -205,63 +205,60 @@ def run_restore_with_fallbacks(image_url: str) -> Tuple[str, str]:
 
 # ===== Реалистичная стилизация (ID-сохранение)
 def run_style_realistic(image_url: str, prompt: str, strength: float, backend: str) -> Tuple[str, str]:
-    """
-    Максимум реализма: сильное удержание лица, мягкая сила изменений, низкий CFG.
-    """
-    denoise  = max(0.15, min(0.24, strength))  # мягче, чтобы не «перекраивать»
-    guidance = 3.0                              # меньше упрямства => меньше пластики
-    prompt = (prompt + AESTHETIC_SUFFIX).strip()
+            """
+            Максимум реализма и сохранения черт: мягкое вмешательство,
+            без изменения пропорций лица и с восстановлением объёма волос.
+            """
+            denoise  = max(0.12, min(0.20, strength))   # слабее перерисовка
+            guidance = 2.6                              # мягче воздействие
+            prompt = (
+                "highly realistic portrait, natural proportions, balanced lighting, "
+                "keep natural hair volume, preserve true face geometry, "
+                + prompt +
+                ", natural smooth shadows, soft light, detailed hair texture"
+            )
+            negative = (
+                NEGATIVE_PROMPT +
+                ", enlarged nose, big nose, distorted nose, nose shadow halo, "
+                "flat hair, missing hair volume, wax skin, color shift"
+            )
 
-    if backend == "instantid":
-        resolved = resolve_model_version(INSTANTID_MODEL)
-        ip_scale = 0.98  # максимально держим идентичность
-        inputs_try = [
-            {
-                "face_image": image_url,
-                "image": image_url,
-                "prompt": "preserve facial proportions, do not change nose size or shape. " + prompt,
-                "negative_prompt": NEGATIVE_PROMPT,
-                "ip_adapter_scale": ip_scale,
-                "controlnet_conditioning_scale": 0.35,  # меньше перерисовки
-                "strength": denoise,
-                "guidance_scale": guidance,
-                "num_inference_steps": 24,
-            },
-            {
-                "face_image": image_url,
-                "prompt": "preserve facial proportions, do not change nose size or shape. " + prompt,
-                "negative_prompt": NEGATIVE_PROMPT,
-                "ip_adapter_scale": ip_scale,
-                "strength": denoise,
-                "guidance_scale": guidance,
-                "num_inference_steps": 22,
-            },
-        ]
-        url = replicate_run_flexible(resolved, inputs_try)
-        return url, resolved
+            if backend == "instantid":
+                resolved = resolve_model_version(INSTANTID_MODEL)
+                ip_scale = 1.0  # максимально держим идентичность
+                inputs_try = [
+                    {
+                        "face_image": image_url,
+                        "image": image_url,
+                        "prompt": prompt,
+                        "negative_prompt": negative,
+                        "ip_adapter_scale": ip_scale,
+                        "controlnet_conditioning_scale": 0.25,  # почти не перерисовывает
+                        "strength": denoise,
+                        "guidance_scale": guidance,
+                        "num_inference_steps": 20,
+                    }
+                ]
+                url = replicate_run_flexible(resolved, inputs_try)
+                return url, resolved
 
-    elif backend == "qwen":
-        resolved = resolve_model_version(QWEN_EDIT_MODEL)
-        inputs_try = [
-            {
-                "image": image_url,
-                "prompt": prompt,
-                "negative_prompt": NEGATIVE_PROMPT,
-                "strength": denoise,
-                "guidance_scale": guidance,
-                "num_inference_steps": 28,
-            },
-            {
-                "image": image_url,
-                "instruction": prompt + ". Avoid cartoon look. Keep natural skin texture.",
-                "strength": denoise,
-            },
-        ]
-        url = replicate_run_flexible(resolved, inputs_try)
-        return url, resolved
+            elif backend == "qwen":
+                resolved = resolve_model_version(QWEN_EDIT_MODEL)
+                inputs_try = [
+                    {
+                        "image": image_url,
+                        "prompt": prompt,
+                        "negative_prompt": negative,
+                        "strength": denoise,
+                        "guidance_scale": guidance,
+                        "num_inference_steps": 22,
+                    }
+                ]
+                url = replicate_run_flexible(resolved, inputs_try)
+                return url, resolved
 
-    else:
-        raise RuntimeError(f"Неизвестный backend '{backend}'.")
+            else:
+                raise RuntimeError(f"Неизвестный backend '{backend}'.")
 
 # ======================
 # ОТПРАВКА РЕЗУЛЬТАТА
