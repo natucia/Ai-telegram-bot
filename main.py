@@ -1,5 +1,4 @@
-# === Telegram LoRA Bot (Flux LoRA trainer + pinned versions + THEMATIC RU styles + auto-gender + commercial UX) ===
-# v2 — кино-стили, 85mm look, theme-boost, 3 варианта за клик
+# === Telegram LoRA Bot (Flux LoRA trainer + pinned versions + HARD styles + Redis persist) ===
 # Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1
 
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib
@@ -37,8 +36,8 @@ LORA_INPUT_KEY    = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 # Классификатор пола (опционально; можно заменить)
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
 
-# --- Твики обучения (бережные) ---
-LORA_MAX_STEPS     = int(os.getenv("LORA_MAX_STEPS", "1400"))  # мягче, меньше переобучения
+# --- Твики обучения ---
+LORA_MAX_STEPS     = int(os.getenv("LORA_MAX_STEPS", "1400"))
 LORA_LR            = float(os.getenv("LORA_LR", "0.00006"))
 LORA_USE_FACE_DET  = os.getenv("LORA_USE_FACE_DET", "true").lower() in ["1","true","yes","y"]
 LORA_RESOLUTION    = int(os.getenv("LORA_RESOLUTION", "1024"))
@@ -48,9 +47,9 @@ LORA_CAPTION_PREF  = os.getenv(
     "balanced facial proportions, soft jawline, clear eyes"
 ).strip()
 
-# --- Генерация (кинематографично, без пластика) ---
-GEN_STEPS     = int(os.getenv("GEN_STEPS", "46"))
-GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "3.4"))
+# --- Генерация (жёстче слушает стиль) ---
+GEN_STEPS     = int(os.getenv("GEN_STEPS", "48"))
+GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "4.2"))
 GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "896"))
 GEN_HEIGHT    = int(os.getenv("GEN_HEIGHT", "1152"))
 
@@ -58,8 +57,9 @@ NEGATIVE_PROMPT = (
     "cartoon, anime, 3d, cgi, beauty filter, skin smoothing, waxy, overprocessed, oversharpen, "
     "lowres, blur, jpeg artifacts, text, watermark, logo, bad anatomy, extra fingers, short fingers, "
     "puffy face, swollen face, bulky masseter, wide jaw, clenched jaw, duckface, overfilled lips, "
-    "narrow eyes, tiny eyes, cross-eye, lazy eye, asymmetrical eyes, misaligned pupils, "
-    "overly muscular neck or shoulders, bodybuilder female, extreme makeup, heavy contouring"
+    "narrow eyes, cross-eye, asymmetrical eyes, misaligned pupils, "
+    "bodybuilder female, extreme makeup, heavy contouring, "
+    "casual clothing, casual street background, plain studio background, selfie, tourist photo"
 )
 AESTHETIC_SUFFIX = (
     ", photorealistic, visible skin texture, natural color, soft filmic contrast, gentle micro-sharpen, no beautification"
@@ -74,7 +74,7 @@ def _beauty_guardrail() -> str:
         "realistic body proportions, proportional shoulders and waist, natural posture"
     )
 
-# ---------- Композиция/«линза»/свет ----------
+# ---------- Композиция/линза/свет ----------
 def _comp_text_and_size(comp: str) -> Tuple[str, Tuple[int,int]]:
     if comp == "closeup":
         return ("portrait framing from chest up, 85mm lens look, subject distance 1.2m, shallow depth of field",
@@ -95,197 +95,293 @@ def _tone_text(tone: str) -> str:
         "candle":   "warm candlelight, soft glow, volumetric rays",
     }.get(tone, "balanced soft lighting")
 
-# ---------- Стили «как кадр из кино» ----------
+# ---------- Стили «как кадр из кино» (HARD STYLE-LOCK) ----------
 Style = Dict[str, Any]
 STYLE_PRESETS: Dict[str, Style] = {
-    # Портреты (вкусно, но реалистично)
+    # ===== ПОРТРЕТЫ =====
     "Портрет у окна": {
-        "desc": "Крупный кинопортрет у большого окна; мягкая тень от рамы, живое боке, кожа с текстурой — будто кадр из европейской драмы.",
-        "p": "естественный портрет у большого окна, легкое боке",
+        "desc": "Крупный кинопортрет у большого окна; мягкая тень от рамы, живое боке.",
+        "role": "cinematic window light portrait",
+        "outfit": "neutral top",
+        "props": "soft bokeh, window frame shadow on background",
+        "bg": "large window with daylight glow, interior blur",
         "comp": "closeup", "tone": "daylight"
     },
     "Портрет 85мм": {
-        "desc": "Классика 85мм — малюсенькая ГРИП, глаза как озёра, цвет — как у дорогой фотосессии на плёнку.",
-        "p": "реалистичный портрет с эффектом 85мм объектива, малая глубина резкости",
+        "desc": "Классика 85мм — мизерная ГРИП, глаза — как озёра.",
+        "role": "85mm look beauty portrait",
+        "outfit": "minimal elegant top",
+        "props": "creamy bokeh, shallow depth of field",
+        "bg": "neutral cinematic backdrop",
         "comp": "closeup", "tone": "warm"
     },
     "Бьюти студия": {
-        "desc": "Чистый студийный свет, аккуратные рефлексы, кожа без «пластика». Бьюти-крупняк как из рекламного ролика.",
-        "p": "бьюти-портрет, чистый студийный свет, минимальный макияж",
+        "desc": "Чистый студийный свет, кожа без «пластика».",
+        "role": "studio beauty portrait",
+        "outfit": "clean minimal outfit",
+        "props": "catchlights, controlled specular highlights",
+        "bg": "seamless studio background with soft light gradients",
         "comp": "closeup", "tone": "daylight"
     },
     "Кинопортрет": {
-        "desc": "Рембрандтовский свет и мягкая плёнка. Настроение фестивального кино.",
-        "p": "кинематографичный портрет, рембрандтовский свет, мягкая пленочная зернистость",
+        "desc": "Рембрандтовский свет и мягкая плёнка.",
+        "role": "cinematic rembrandt light portrait",
+        "outfit": "neutral film wardrobe",
+        "props": "subtle film grain",
+        "bg": "moody backdrop with soft falloff",
         "comp": "closeup", "tone": "cool"
     },
     "Фильм-нуар (портрет)": {
-        "desc": "Дым, жёсткие тени, свет из жалюзи — вылитый нуар 40-х.",
-        "p": "портрет в стиле кино-нуар, дым, высокая контрастность",
+        "desc": "Дым, жёсткие тени, свет из жалюзи.",
+        "role": "film noir portrait",
+        "outfit": "vintage attire",
+        "props": "venetian blinds light pattern, cigarette smoke curling",
+        "bg": "high contrast noir backdrop",
         "comp": "closeup", "tone": "noir"
     },
 
-    # Современные сцены
+    # ===== СОВРЕМЕННЫЕ =====
     "Стритвэр город": {
-        "desc": "Уличный лук на дневной улице: граффити, блики на стекле, лёгкая пленочная зернистость. Город дышит.",
-        "p_f": "современный стритвэр, кроп-топ и джоггеры, городская улица",
-        "p_m": "современный стритвэр, худи и джоггеры, городская улица",
+        "desc": "Уличный лук, город дышит.",
+        "role": "streetwear fashion look",
+        "outfit_f": "crop top and joggers, sneakers",
+        "outfit": "hoodie and joggers, sneakers",
+        "props": "glass reflections, soft film grain",
+        "bg": "daytime city street with graffiti and shop windows",
         "comp": "half", "tone": "daylight"
     },
     "Вечерний выход": {
-        "desc": "Красная дорожка, теплый софтбокс, блеск ткани — кадр светского хроникёра.",
-        "p_f": "элегантное вечернее платье на красной дорожке",
-        "p_m": "классический смокинг на красной дорожке",
+        "desc": "Красная дорожка и блеск.",
+        "role": "celebrity on red carpet",
+        "outfit_f": "elegant evening gown",
+        "outfit": "classic tuxedo",
+        "props": "press lights, velvet ropes, photographers",
+        "bg": "red carpet event entrance",
         "comp": "half", "tone": "warm"
     },
     "Бизнес": {
-        "desc": "Лобби стеклянного офиса, холодноватый дневной свет, строгая геометрия — будто титульный кадр сериала про корпорации.",
-        "p_f": "деловой костюм, лобби современного офиса",
-        "p_m": "деловой костюм, лобби современного офиса",
+        "desc": "Лобби стеклянного офиса, строгая геометрия.",
+        "role": "corporate executive portrait",
+        "outfit_f": "tailored business suit",
+        "outfit": "tailored business suit",
+        "props": "tablet or folder",
+        "bg": "modern glass office lobby with depth",
         "comp": "half", "tone": "daylight"
     },
     "Ночной неон": {
-        "desc": "Мокрый асфальт, неоновые вывески, дымка, цветные рефлексы — чистый кибернуар.",
-        "p": "улица в дождь, яркие неоновые вывески, отражения в лужах",
+        "desc": "Кибернуар, мокрый асфальт.",
+        "role": "urban night scene",
+        "outfit_f": "long coat, boots",
+        "outfit": "long coat, boots",
+        "props": "colored reflections on wet asphalt, light rain droplets",
+        "bg": "neon signs and steam from manholes",
         "comp": "half", "tone": "neon"
     },
 
-    # Профессии — читается с одного взгляда
+    # ===== ПРОФЕССИИ =====
     "Врач у палаты": {
-        "desc": "Белый халат, стетоскоп, палата за спиной. Свет из окна — документальная честность кадра.",
-        "p_f": "врач в белом халате и шапочке, стетоскоп; фон: больничная палата",
-        "p_m": "врач в белом халате и шапочке, стетоскоп; фон: больничная палата",
+        "desc": "Белый халат, стетоскоп, палата за спиной.",
+        "role": "medical doctor",
+        "outfit_f": "white lab coat, scrub cap, stethoscope",
+        "outfit": "white lab coat, scrub cap, stethoscope",
+        "props": "ID badge, clipboard",
+        "bg": "hospital ward interior with bed and monitors",
         "comp": "half", "tone": "daylight"
     },
     "Хирург операционная": {
-        "desc": "Холодные приборы, драматичные блики на металле, сосредоточенный взгляд. Медицинский триллер.",
-        "p": "хирург в шапочке и маске, хирургическая форма; фон: операционная с приборами",
+        "desc": "Холодные приборы и блики.",
+        "role": "surgeon in the operating room",
+        "outfit": "surgical scrubs, mask, cap, gloves",
+        "props": "surgical lights and instruments",
+        "bg": "operating theatre with equipment",
         "comp": "half", "tone": "cool"
     },
     "Шеф-повар кухня": {
-        "desc": "Огонь из сковороды, пар, медь и нержавейка на фоне. В кадре — энергия ресторана.",
-        "p": "шеф-повар в кителе; фон: профессиональная кухня, пламя и пар",
+        "desc": "Огонь и пар, энергия ресторана.",
+        "role": "head chef",
+        "outfit": "white chef jacket and apron",
+        "props": "pan with flames, stainless steel counters, copper pans",
+        "bg": "professional restaurant kitchen",
         "comp": "half", "tone": "warm"
     },
     "Учёный лаборатория": {
-        "desc": "Стеклянная посуда, подсветки приборов, рефлексы. Научно-популярный вайб.",
-        "p": "лабораторный халат, пробирки и стеклянная посуда; фон: современная лаборатория",
+        "desc": "Стекло, приборы, подсветки.",
+        "role": "scientist in a lab",
+        "outfit": "lab coat, safety glasses",
+        "props": "flasks, pipettes, LED indicators",
+        "bg": "modern laboratory benches and glassware",
         "comp": "half", "tone": "cool"
     },
     "Боксер на ринге": {
-        "desc": "Жесткий верхний свет, пот на перчатках, канаты ринга — спортивная драма.",
-        "p_f": "боксерша в перчатках; фон: ринг, пот, жёсткий верхний свет",
-        "p_m": "боксер в перчатках; фон: ринг, пот, жёсткий верхний свет",
+        "desc": "Жёсткий верхний свет, пот, канаты.",
+        "role": "boxer on the ring",
+        "outfit_f": "boxing sports bra and shorts, gloves",
+        "outfit": "boxing shorts and gloves, mouthguard visible",
+        "props": "ring ropes, sweat sheen, tape on wrists",
+        "bg": "boxing ring under harsh top lights",
         "comp": "half", "tone": "cool"
     },
     "Фитнес зал": {
-        "desc": "Контровый свет между тренажёрами, пыль в лучах — сцена «победа над собой».",
-        "p_f": "спортивный топ и легинсы; фон: тренажерный зал, драматичная контровая",
-        "p_m": "майка и шорты; фон: тренажерный зал, драматичная контровая",
+        "desc": "Контровый свет между тренажёрами.",
+        "role": "fitness athlete training",
+        "outfit_f": "sports bra and leggings",
+        "outfit": "tank top and shorts",
+        "props": "chalk dust, dumbbells or cable machine",
+        "bg": "gym with machines and dramatic backlight",
         "comp": "half", "tone": "cool"
     },
 
-    # Приключения / Экшн
+    # ===== ПРИКЛЮЧЕНИЯ / ЭКШН =====
     "Приключенец (руины)": {
-        "desc": "Пыльные лучи света, древние камни, тактические ремни — кадр из приключенческого блокбастера.",
-        "p_f": "исследовательница гробниц, тактический костюм, перчатки без пальцев; фон: древние руины",
-        "p_m": "исследователь гробниц, тактический костюм, перчатки без пальцев; фон: древние руины",
+        "desc": "Пыльные лучи, древние камни.",
+        "role_f": "tomb raider explorer",
+        "role": "tomb raider explorer",
+        "outfit_f": "tactical outfit, fingerless gloves, utility belt",
+        "outfit": "tactical outfit, fingerless gloves, utility belt",
+        "props": "leather straps patina, map tube",
+        "bg": "ancient sandstone ruins with sun rays and dust motes",
         "comp": "full", "tone": "warm"
     },
     "Пустынный исследователь": {
-        "desc": "Дюны, ветровой песок, жар мерцает в воздухе — дух «Лоуренса Аравийского».",
-        "p": "шарф, карго-экипировка; фон: песчаные дюны и каньон",
+        "desc": "Дюны, песок и жар.",
+        "role": "desert explorer",
+        "outfit": "scarf, cargo outfit, boots",
+        "props": "sand blowing in wind",
+        "bg": "sand dunes and canyon under harsh sun",
         "comp": "full", "tone": "warm"
     },
     "Горы снег": {
-        "desc": "Синие тени на снегу, ледоруб, ветер в капюшоне — суровая красота высокогорья.",
-        "p": "альпинистская куртка, кошки/ледоруб; фон: заснеженный гребень и небо",
+        "desc": "Суровая красота высокогорья.",
+        "role": "alpinist",
+        "outfit": "mountain jacket, harness, crampons",
+        "props": "ice axe in hand, spindrift",
+        "bg": "snow ridge and blue shadows, cloudy sky",
         "comp": "full", "tone": "cool"
     },
     "Серфер": {
-        "desc": "Брызги, солнечные блики на воде, доска в кадре — летний спортфильм.",
-        "p": "гидрокостюм, доска; фон: океанская волна и брызги",
+        "desc": "Брызги, солнечные блики, доска.",
+        "role": "surfer athlete on a wave",
+        "outfit_f": "black wetsuit",
+        "outfit": "black wetsuit",
+        "props": "a visible surfboard under the subject's arm or feet, water spray, droplets",
+        "bg": "ocean wave breaking, golden backlight",
         "comp": "full", "tone": "warm"
     },
 
-    # Фэнтези / История
+    # ===== ФЭНТЕЗИ / ИСТОРИЯ =====
     "Эльфийская знать": {
-        "desc": "Изумрудный лесной храм, лучи в тумане, драгоценные узоры — высокая фэнтези-сказка.",
-        "p_f": "эльфийская королева в струящемся платье; фон: лесной храм и лучи света",
-        "p_m": "эльфийский король в плаще и доспехах; фон: лесной храм и лучи света",
+        "desc": "Лесной храм и лучи в тумане.",
+        "role_f": "elven queen in a regal pose",
+        "role": "elven king in a regal pose",
+        "outfit_f": "flowing emerald gown with golden embroidery, delicate crown",
+        "outfit": "ornate armor with emerald cloak, elegant crown",
+        "props": "elven jewelry, filigree filigree patterns",
+        "bg": "ancient forest temple, god rays in mist",
         "comp": "full", "tone": "candle"
     },
     "Самурай в храме": {
-        "desc": "Тёплые фонари, лакированные доспехи, листья в воздухе — дзен и сталь.",
-        "p": "самурайские доспехи и катана; фон: двор синтоистского храма с фонарями",
+        "desc": "Лакированные доспехи, фонари, листья.",
+        "role": "samurai warrior in a shrine courtyard",
+        "outfit": "lacquered samurai armor, kabuto helmet",
+        "props": "katana visible in hand",
+        "bg": "Shinto shrine with lanterns, falling leaves",
         "comp": "full", "tone": "warm"
     },
     "Средневековый рыцарь": {
-        "desc": "Полированный латный доспех, штандарты, пыль турнира — историческое кино.",
-        "p": "полный комплект доспехов и плащ; фон: замковый турнирный двор",
+        "desc": "Полированный латный доспех, штандарты.",
+        "role": "medieval knight",
+        "outfit": "full plate armor with cloak",
+        "props": "sword and shield",
+        "bg": "castle tournament yard with banners and dust",
         "comp": "full", "tone": "daylight"
     },
     "Пират на палубе": {
-        "desc": "Треуголка, сабля, мокрая палуба, канаты, шторм — запах солёного приключения в каждом пикселе.",
-        "p_f": "пиратская капитанша в треуголке, кожаный жилет, белая рубаха, корсет, сабля в руке; "
-               "фон: деревянная палуба корабля, штормовое море, такелаж и паруса, брызги и туман, чайки",
-        "p_m": "пиратский капитан в треуголке, кожаный жилет, белая рубаха, сабля в руке; "
-               "фон: палуба корабля, штормовое море, такелаж, брызги и туман, чайки",
+        "desc": "Треуголка, сабля, мокрая палуба, шторм.",
+        "role_f": "pirate captain",
+        "role": "pirate captain",
+        "outfit_f": "tricorn hat, leather corset, white shirt",
+        "outfit": "tricorn hat, leather vest, white shirt",
+        "props": "cutlass in hand, rope rigging, wet wood highlights",
+        "bg": "ship deck in storm, sails and rigging, sea spray, gulls",
         "comp": "full", "tone": "cool"
     },
     "Древняя Греция": {
-        "desc": "Белый мрамор, лазурная вода, золочёная отделка на ткани — античный миф оживает.",
-        "p_f": "богиня в белой тунике (хитон) с золотой отделкой, диадема/вена, украшения; "
-               "фон: колоннада, мраморные статуи, кипарисы, лазурный бассейн, мягкое южное солнце",
-        "p_m": "герой в хитоне с золотой отделкой, лавровый венец; "
-               "фон: колоннада, мраморные статуи, кипарисы, лазурный бассейн, мягкое южное солнце",
+        "desc": "Белый мрамор и лазурь.",
+        "role_f": "ancient Greek goddess",
+        "role": "ancient Greek hero",
+        "outfit_f": "white chiton with gold trim, diadem",
+        "outfit": "white chiton with gold trim, laurel wreath",
+        "props": "gold accessories",
+        "bg": "white marble colonnade, statues, olive trees, turquoise pool",
+        "comp": "half", "tone": "warm"
+    },
+    "Королева": {
+        "desc": "Коронованная особа в тронном зале.",
+        "role_f": "queen on a throne",
+        "role": "king on a throne",
+        "outfit_f": "royal gown with long train, jeweled crown, scepter",
+        "outfit": "royal robe with golden embroidery, jeweled crown, scepter",
+        "props": "ornate jewelry, velvet textures",
+        "bg": "grand castle throne room with chandeliers and marble columns",
         "comp": "half", "tone": "warm"
     },
 
-    # Sci-Fi
+    # ===== SCI-FI =====
     "Киберпанк улица": {
-        "desc": "Голограммы, пар из люков, мокрый асфальт — неон режет тьму как в «Бегущем по лезвию».",
-        "p": "кожаная куртка; фон: неоновые вывески, мокрый асфальт, голограммы",
+        "desc": "Неон, мокрый асфальт, голограммы.",
+        "role": "cyberpunk character walking in the street",
+        "outfit_f": "leather jacket, high-waist pants, boots",
+        "outfit": "leather jacket, techwear pants, boots",
+        "props": "holographic billboards, overhead cables",
+        "bg": "neon signs, wet asphalt reflections, steam from manholes",
         "comp": "full", "tone": "neon"
     },
     "Космический скафандр": {
-        "desc": "Звёздный ангар, отражения на стекле шлема — реалистичный hard-sci-fi.",
-        "p": "реалистичный EVA-скафандр; фон: звёздное небо, ангар корабля",
+        "desc": "Хард sci-fi.",
+        "role": "astronaut",
+        "outfit": "realistic EVA spacesuit",
+        "props": "helmet reflections, suit details",
+        "bg": "starfield and spaceship hangar",
         "comp": "full", "tone": "cool"
     },
     "Космопилот на мостике": {
-        "desc": "Пульт с индикаторами, свет приборов на лице — готовность к гиперпрыжку.",
-        "p": "лётный комбинезон, шлем под мышкой; фон: мостик звездолёта",
+        "desc": "Пульт, индикаторы, готовность к гиперпрыжку.",
+        "role": "starship pilot on the bridge",
+        "outfit": "flight suit, helmet under arm",
+        "props": "control panels with glowing indicators",
+        "bg": "spaceship bridge interior",
         "comp": "half", "tone": "cool"
     },
 }
 
-# Категории для UX
+# Категории
 STYLE_CATEGORIES: Dict[str, List[str]] = {
     "Портреты": ["Портрет у окна", "Портрет 85мм", "Бьюти студия", "Кинопортрет", "Фильм-нуар (портрет)"],
     "Современные": ["Стритвэр город", "Вечерний выход", "Бизнес", "Ночной неон"],
     "Профессии": ["Врач у палаты", "Хирург операционная", "Шеф-повар кухня", "Учёный лаборатория", "Боксер на ринге", "Фитнес зал"],
     "Приключения": ["Приключенец (руины)", "Пустынный исследователь", "Горы снег", "Серфер"],
-    "Фэнтези/История": ["Эльфийская знать", "Самурай в храме", "Средневековый рыцарь", "Пират на палубе", "Древняя Греция"],
+    "Фэнтези/История": ["Эльфийская знать", "Самурай в храме", "Средневековый рыцарь", "Пират на палубе", "Древняя Греция", "Королева"],
     "Sci-Fi": ["Киберпанк улица", "Космический скафандр", "Космопилот на мостике"],
 }
 
-# Усилители тематики — добавляются в промпт
+# Усилители фактуры (необязательно)
 THEME_BOOST = {
-    "Пират на палубе": "rope rigging, wooden deck planks, storm clouds, wet highlights on wood, sea spray, gulls in distance",
-    "Древняя Греция": "white marble columns, ionic capitals, olive trees, turquoise water reflections, gold trim accents",
-    "Ночной неон":     "rain droplets on lens, steam from manholes, colored reflections on wet asphalt",
+    "Пират на палубе": "rope rigging, storm clouds, wet highlights on wood, sea spray, gulls",
+    "Древняя Греция": "ionic capitals, olive trees, turquoise water reflections, gold trim accents",
+    "Ночной неон":     "rain droplets on lens, colored reflections on wet asphalt",
     "Фильм-нуар (портрет)": "venetian blinds light pattern, cigarette smoke curling, deep black shadows",
     "Приключенец (руины)": "floating dust motes in sunrays, chipped sandstone blocks, leather straps patina",
     "Горы снег":      "spindrift blown by wind, crampon scratches on ice, distant ridge line",
     "Киберпанк улица":"holographic billboards flicker, cable bundles overhead, neon kanji signs",
+    "Серфер":         "rimlight on water droplets, sun flare",
+    "Королева":       "subtle film grain, ceremonial ambience",
 }
 
 # ---------- logging ----------
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger("bot")
 
-# ---------- storage (persistent via Redis, fallback to FS) ----------
+# ---------- storage (Redis persistent, fallback to FS) ----------
 DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
 
 def user_dir(uid:int) -> Path:
@@ -485,6 +581,47 @@ def _prompt_for_gender(meta: Style, gender: str) -> str:
     if gender == "male" and meta.get("p_m"): return meta["p_m"]
     return meta.get("p", "")
 
+def _style_lock(role:str, outfit:str, props:str, background:str, comp_hint:str) -> str:
+    bits = [
+        f"{role}" if role else "",
+        f"wearing {outfit}" if outfit else "",
+        f"with {props}" if props else "",
+        f"background: {background}" if background else "",
+        comp_hint,
+        "unmistakable scene identity"
+    ]
+    return ", ".join([b for b in bits if b])
+
+def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_boost:str) -> str:
+    role = meta.get("role_f") if (gender=="female" and meta.get("role_f")) else meta.get("role","")
+    if not role and meta.get("role_m") and gender=="male":
+        role = meta.get("role_m","")
+    outfit = meta.get("outfit_f") if (gender=="female" and meta.get("outfit_f")) else meta.get("outfit","")
+    props = meta.get("props","")
+    bg = meta.get("bg","")
+
+    if role or outfit or props or bg:
+        core = ", ".join([
+            _style_lock(role, outfit, props, bg, comp_text),
+            tone_text,
+            "photorealistic, realistic body proportions, natural skin texture, filmic look",
+            _beauty_guardrail(),
+            theme_boost
+        ])
+        core += ", the costume and background must clearly communicate the role; avoid plain portrait"
+        return core
+
+    # Fallback на старые p/p_f/p_m (если где-то забудем поля)
+    base_prompt = _prompt_for_gender(meta, gender)
+    return ", ".join([
+        f"{base_prompt}, {comp_text}, {tone_text}",
+        "exact facial identity, identity preserved, identity preserved",
+        "cinematic key light and rim light, soft bounce fill, film grain subtle",
+        "skin tone faithful",
+        _beauty_guardrail(),
+        theme_boost
+    ])
+
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int) -> str:
     mv = resolve_model_version(model_slug)
     out = replicate.run(mv, input={
@@ -534,12 +671,10 @@ ENROLL_FLAG: Dict[int,bool] = {}
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя "
-        "в **узнаваемых кино-сценах** — от пирата на палубе до богини Древней Греции.\n\n"
-        "Как пользоваться:\n"
-        "1) «📸 Набор фото» — пришли подряд до 10 снимков (фронтально, без фильтров).\n"
-        "2) «🧪 Обучение» — запущу тренировку LoRA.\n"
-        "3) «🧭 Выбрать стиль» — выбери сцену и получи 3 варианта.\n\n"
-        "Красиво. Реалистично. Без «пластика».",
+        "в узнаваемых кино-сценах — от королевы в тронном зале до серфера на волне.\n\n"
+        "1) «📸 Набор фото» — пришли до 10 снимков.\n"
+        "2) «🧪 Обучение» — тренировка LoRA.\n"
+        "3) «🧭 Выбрать стиль» — получи 3 варианта.",
         reply_markup=main_menu_kb()
     )
 
@@ -570,7 +705,7 @@ async def cb_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id; ENROLL_FLAG[uid] = True
     await update.effective_message.reply_text(
-        "Набор включён. Пришли подряд до 10 фото (фронтально, без фильтров, расслабленное лицо). "
+        "Набор включён. Пришли подряд до 10 фото (фронтально, без фильтров). "
         "Когда закончишь — нажми /iddone."
     )
 
@@ -586,7 +721,7 @@ async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"Готово ✅ В профиле {len(prof['images'])} фото.\n"
         f"Определённый пол: {prof['gender']}.\n"
-        "Далее — нажми «🧪 Обучение» или команду /trainid.",
+        "Далее — нажми «🧪 Обучение» или /trainid.",
         reply_markup=main_menu_kb()
     )
 
@@ -602,7 +737,7 @@ async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    delete_profile(uid)  # персистентный сброс
+    delete_profile(uid)
     ENROLL_FLAG[uid] = False
     await update.message.reply_text("Профиль очищен. Жми «📸 Набор фото» и загрузи снимки заново.")
 
@@ -669,19 +804,11 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
 
     meta = STYLE_PRESETS[preset]
     gender = (prof.get("gender") or "female").lower()
-    base_prompt = _prompt_for_gender(meta, gender)
     comp_text, (w,h) = _comp_text_and_size(meta.get("comp","half"))
     tone_text = _tone_text(meta.get("tone","daylight"))
     theme_boost = THEME_BOOST.get(preset, "")
 
-    prompt_core = (
-        f"{base_prompt}, {comp_text}, {tone_text}, "
-        "exact facial identity, identity preserved, identity preserved, "
-        "cinematic key light and rim light, soft bounce fill, film grain subtle, "
-        "skin tone faithful, "
-        f"{_beauty_guardrail()}, {theme_boost}"
-    )
-
+    prompt_core = build_prompt(meta, gender, comp_text, tone_text, theme_boost)
     model_slug = _pinned_slug(prof)
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
@@ -696,8 +823,8 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                 generate_from_finetune,
                 model_slug=model_slug,
                 prompt=prompt_core,
-                steps=max(40, GEN_STEPS - 2),
-                guidance=max(2.8, GEN_GUIDANCE - 0.6),
+                steps=max(40, GEN_STEPS),
+                guidance=max(3.2, GEN_GUIDANCE),
                 seed=s, w=w, h=h
             )
             urls.append(url)
