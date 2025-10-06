@@ -1,4 +1,4 @@
-# === Telegram LoRA Bot (Flux LoRA trainer + pinned versions + HARD styles + Redis persist) ===
+# === Telegram LoRA Bot (Flux LoRA trainer + HARD styles + Redis persist + Identity/Gender locks) ===
 # Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1
 
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib
@@ -59,7 +59,10 @@ NEGATIVE_PROMPT = (
     "puffy face, swollen face, bulky masseter, wide jaw, clenched jaw, duckface, overfilled lips, "
     "narrow eyes, cross-eye, asymmetrical eyes, misaligned pupils, "
     "bodybuilder female, extreme makeup, heavy contouring, "
-    "casual clothing, casual street background, plain studio background, selfie, tourist photo"
+    "casual clothing, casual street background, plain studio background, selfie, tourist photo, "
+    "identity drift, different person, ethnicity change, age change, "
+    "fisheye, lens distortion, warped face, stretched face, deformed skull, "
+    "double pupils, misaligned eyes"
 )
 AESTHETIC_SUFFIX = (
     ", photorealistic, visible skin texture, natural color, soft filmic contrast, gentle micro-sharpen, no beautification"
@@ -73,6 +76,19 @@ def _beauty_guardrail() -> str:
         "open expressive almond-shaped eyes, clean catchlights, clear irises, "
         "realistic body proportions, proportional shoulders and waist, natural posture"
     )
+
+def _anti_distort() -> str:
+    return ("no fisheye, no lens distortion, no warping, no stretched face, "
+            "natural perspective, proportional head size, realistic human anatomy")
+
+def _gender_lock(gender:str) -> Tuple[str, str]:
+    if gender == "female":
+        pos = "female woman, feminine facial features"
+        neg = "male, man, masculine face, beard, stubble, mustache, adam's apple, broad jaw, thick neck"
+    else:
+        pos = "male man, masculine facial features"
+        neg = "female, woman, feminine face, makeup eyelashes, narrow shoulders, breasts"
+    return pos, neg
 
 # ---------- Композиция/линза/свет ----------
 def _comp_text_and_size(comp: str) -> Tuple[str, Tuple[int,int]]:
@@ -95,10 +111,10 @@ def _tone_text(tone: str) -> str:
         "candle":   "warm candlelight, soft glow, volumetric rays",
     }.get(tone, "balanced soft lighting")
 
-# ---------- Стили «как кадр из кино» (HARD STYLE-LOCK) ----------
+# ---------- Стили (HARD STYLE-LOCK) ----------
 Style = Dict[str, Any]
 STYLE_PRESETS: Dict[str, Style] = {
-    # ===== ПОРТРЕТЫ =====
+    # Портреты
     "Портрет у окна": {
         "desc": "Крупный кинопортрет у большого окна; мягкая тень от рамы, живое боке.",
         "role": "cinematic window light portrait",
@@ -108,7 +124,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "closeup", "tone": "daylight"
     },
     "Портрет 85мм": {
-        "desc": "Классика 85мм — мизерная ГРИП, глаза — как озёра.",
+        "desc": "Классика 85мм — мизерная ГРИП.",
         "role": "85mm look beauty portrait",
         "outfit": "minimal elegant top",
         "props": "creamy bokeh, shallow depth of field",
@@ -140,7 +156,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "closeup", "tone": "noir"
     },
 
-    # ===== СОВРЕМЕННЫЕ =====
+    # Современные
     "Стритвэр город": {
         "desc": "Уличный лук, город дышит.",
         "role": "streetwear fashion look",
@@ -178,7 +194,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "neon"
     },
 
-    # ===== ПРОФЕССИИ =====
+    # Профессии
     "Врач у палаты": {
         "desc": "Белый халат, стетоскоп, палата за спиной.",
         "role": "medical doctor",
@@ -231,7 +247,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "cool"
     },
 
-    # ===== ПРИКЛЮЧЕНИЯ / ЭКШН =====
+    # Приключения / Экшн
     "Приключенец (руины)": {
         "desc": "Пыльные лучи, древние камни.",
         "role_f": "tomb raider explorer",
@@ -268,7 +284,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "full", "tone": "warm"
     },
 
-    # ===== ФЭНТЕЗИ / ИСТОРИЯ =====
+    # Фэнтези / История
     "Эльфийская знать": {
         "desc": "Лесной храм и лучи в тумане.",
         "role_f": "elven queen in a regal pose",
@@ -326,7 +342,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "warm"
     },
 
-    # ===== SCI-FI =====
+    # Sci-Fi
     "Киберпанк улица": {
         "desc": "Неон, мокрый асфальт, голограммы.",
         "role": "cyberpunk character walking in the street",
@@ -354,7 +370,6 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 }
 
-# Категории
 STYLE_CATEGORIES: Dict[str, List[str]] = {
     "Портреты": ["Портрет у окна", "Портрет 85мм", "Бьюти студия", "Кинопортрет", "Фильм-нуар (портрет)"],
     "Современные": ["Стритвэр город", "Вечерний выход", "Бизнес", "Ночной неон"],
@@ -364,7 +379,6 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
     "Sci-Fi": ["Киберпанк улица", "Космический скафандр", "Космопилот на мостике"],
 }
 
-# Усилители фактуры (необязательно)
 THEME_BOOST = {
     "Пират на палубе": "rope rigging, storm clouds, wet highlights on wood, sea spray, gulls",
     "Древняя Греция": "ionic capitals, olive trees, turquoise water reflections, gold trim accents",
@@ -377,11 +391,19 @@ THEME_BOOST = {
     "Королева":       "subtle film grain, ceremonial ambience",
 }
 
+# Точечный буст послушности для сцен, где часто уводит
+SCENE_GUIDANCE = {
+    "Киберпанк улица": 4.8,
+    "Космический скафандр": 4.6,
+    "Самурай в храме": 4.6,
+    "Средневековый рыцарь": 4.6,
+}
+
 # ---------- logging ----------
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger("bot")
 
-# ---------- storage (Redis persistent, fallback to FS) ----------
+# ---------- storage (Redis persistent, fallback к FS если чего-то нет) ----------
 DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
 
 def user_dir(uid:int) -> Path:
@@ -592,7 +614,7 @@ def _style_lock(role:str, outfit:str, props:str, background:str, comp_hint:str) 
     ]
     return ", ".join([b for b in bits if b])
 
-def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_boost:str) -> str:
+def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_boost:str) -> Tuple[str, str]:
     role = meta.get("role_f") if (gender=="female" and meta.get("role_f")) else meta.get("role","")
     if not role and meta.get("role_m") and gender=="male":
         role = meta.get("role_m","")
@@ -600,33 +622,41 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_b
     props = meta.get("props","")
     bg = meta.get("bg","")
 
+    gpos, gneg = _gender_lock(gender)
+    anti = _anti_distort()
+
     if role or outfit or props or bg:
         core = ", ".join([
             _style_lock(role, outfit, props, bg, comp_text),
             tone_text,
+            gpos,
+            "same person as the training photos, no ethnicity change, no age change, exact facial identity, identity preserved",
             "photorealistic, realistic body proportions, natural skin texture, filmic look",
+            anti,
             _beauty_guardrail(),
             theme_boost
         ])
         core += ", the costume and background must clearly communicate the role; avoid plain portrait"
-        return core
+        return core, gneg
 
-    # Fallback на старые p/p_f/p_m (если где-то забудем поля)
     base_prompt = _prompt_for_gender(meta, gender)
-    return ", ".join([
+    core = ", ".join([
         f"{base_prompt}, {comp_text}, {tone_text}",
-        "exact facial identity, identity preserved, identity preserved",
+        gpos,
+        "same person as the training photos, exact facial identity, identity preserved",
         "cinematic key light and rim light, soft bounce fill, film grain subtle",
         "skin tone faithful",
+        anti,
         _beauty_guardrail(),
         theme_boost
     ])
+    return core, gneg
 
-def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int) -> str:
+def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
     mv = resolve_model_version(model_slug)
     out = replicate.run(mv, input={
         "prompt": prompt + AESTHETIC_SUFFIX,
-        "negative_prompt": NEGATIVE_PROMPT,
+        "negative_prompt": negative_prompt,
         "width": w, "height": h,
         "num_inference_steps": steps,
         "guidance_scale": guidance,
@@ -808,8 +838,11 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     tone_text = _tone_text(meta.get("tone","daylight"))
     theme_boost = THEME_BOOST.get(preset, "")
 
-    prompt_core = build_prompt(meta, gender, comp_text, tone_text, theme_boost)
+    prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost)
     model_slug = _pinned_slug(prof)
+
+    # guidance с учётом сцены
+    guidance = max(3.2, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE))
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
@@ -818,14 +851,16 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     try:
         seeds = [int(time.time()) & 0xFFFFFFFF, random.randrange(2**32), random.randrange(2**32)]
         urls = []
+        neg_base = NEGATIVE_PROMPT + (", " + gender_negative if gender_negative else "")
         for s in seeds:
             url = await asyncio.to_thread(
                 generate_from_finetune,
                 model_slug=model_slug,
                 prompt=prompt_core,
                 steps=max(40, GEN_STEPS),
-                guidance=max(3.2, GEN_GUIDANCE),
-                seed=s, w=w, h=h
+                guidance=guidance,
+                seed=s, w=w, h=h,
+                negative_prompt=neg_base
             )
             urls.append(url)
 
