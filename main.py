@@ -3,17 +3,23 @@
     # Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0
 
 import os, re, io, json, time, asyncio, logging, shutil, random
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-from zipfile import ZipFile
-
+from pathlib
+import Path
+from typing
+import Any, Dict, List, Optional, Tuple
+from zipfile
+import ZipFile
 import replicate
-from replicate import Client
-from PIL import Image
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ChatAction
-from telegram.ext import (
+from replicate
+import Client
+from PIL
+import Image
+from telegram
+import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants
+import ChatAction
+from telegram.ext
+import (
         ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes,
         CallbackQueryHandler, filters
     )
