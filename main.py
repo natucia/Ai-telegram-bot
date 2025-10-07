@@ -1,5 +1,5 @@
 # === Telegram LoRA Bot (Flux LoRA trainer + Redis persist)
-# + InstantID LOCKFACE (1/2-step fallback)
+# + InstantID LOCKFACE (2-step)
 # + MULTI-AVATARS
 # + NATURAL/Pretty per-user (cheese-like)
 # + CONSISTENT FACE SCALE + anti-wide-face
@@ -13,7 +13,7 @@ from styles import (  # твой styles.py
     SCENE_GUIDANCE, RISKY_PRESETS
 )
 
-import os, re, io, json, time, asyncio, logging, shutil, random, contextlib
+import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, base64
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -62,7 +62,7 @@ LORA_RESOLUTION = int(os.getenv("LORA_RESOLUTION", "1024"))
 UPSCALER_SLUG   = os.getenv("UPSCALER_SLUG", "").strip()
 UPSCALE_FACTOR  = int(os.getenv("UPSCALE_FACTOR", "2"))
 def upscale_url(url: str) -> str:
-    """Универсальный апскейл: скачиваем URL и отдаем в любой ESRGAN-модель на Replicate."""
+    """Универсальный апскейл: скачиваем URL и отдаем в любую ESRGAN-модель на Replicate."""
     if not UPSCALER_SLUG:
         return url
     mv = resolve_model_version(UPSCALER_SLUG)
@@ -70,7 +70,6 @@ def upscale_url(url: str) -> str:
     try:
         out = replicate.run(mv, input={"image": img_bytes, "scale": UPSCALE_FACTOR})
     except Exception:
-        # на случай модели без параметра scale
         out = replicate.run(mv, input={"image": img_bytes})
     up = extract_any_url(out)
     return up or url
@@ -87,12 +86,11 @@ DEFAULT_MALE_CAPTION = (
 )
 
 # --- Генерация ---
-GEN_STEPS    = int(os.getenv("GEN_STEPS", "52"))      # было 48
+GEN_STEPS    = int(os.getenv("GEN_STEPS", "52"))
 GEN_GUIDANCE = float(os.getenv("GEN_GUIDANCE", "4.4"))
-GEN_WIDTH    = int(os.getenv("GEN_WIDTH", "1024"))    # было 896
-GEN_HEIGHT   = int(os.getenv("GEN_HEIGHT", "1344"))   # было 1152
-MAX_STEPS    = int(os.getenv("MAX_STEPS", "56"))      # лимит на всякий
-
+GEN_WIDTH    = int(os.getenv("GEN_WIDTH", "1024"))
+GEN_HEIGHT   = int(os.getenv("GEN_HEIGHT", "1344"))
+MAX_STEPS    = int(os.getenv("MAX_STEPS", "56"))
 
 # --- CONSISTENT FACE SCALE ---
 CONSISTENT_SCALE = os.getenv("CONSISTENT_SCALE", "1").lower() in ("1","true","yes","y")
@@ -112,7 +110,6 @@ NEGATIVE_PROMPT_BASE = (
     "plain selfie, tourist photo, plain studio backdrop, denoise artifacts, waxy highlight roll-off, "
     "excessive frequency separation, face slimming or widening, retouched pores"
 )
-
 AESTHETIC_SUFFIX = (
     ", photorealistic, visible fine skin texture, natural color, soft filmic contrast, "
     "micro-sharpen on eyes and lips only, anatomically plausible facial landmarks"
@@ -127,8 +124,6 @@ NATURAL_NEG = (
     "skin smoothing, airbrush, beauty-filter, porcelain skin, waxy skin, HDR glam, "
     "overprocessed clarity, excessive de-noise, plastic texture, glam retouch"
 )
-
-# — «красиво, но тот же человек»
 PRETTY_POS = (
     "subtle beauty retouch, even skin tone, faint under-eye cleanup, micro-dodge-and-burn on eyes and lips, "
     "soft specular highlights in eyes (catchlights), gentle filmic bloom, refined cinematic color grading"
@@ -290,6 +285,19 @@ if REDIS_URL:
 else:
     logger.info("Storage: FS (no REDIS_URL)")
 
+# ---------- КЭШ ЛИЦА В REDIS (новое) ----------
+def _face_cache_key(uid:int, avatar:str) -> str:
+    return f"face:{uid}:{avatar}"
+
+def save_face_cache(uid:int, avatar:str, jpeg_bytes:bytes):
+    if _redis:
+        _redis.set(_face_cache_key(uid, avatar), base64.b64encode(jpeg_bytes).decode("ascii"))
+
+def load_face_cache(uid:int, avatar:str) -> Optional[bytes]:
+    if not _redis: return None
+    b64 = _redis.get(_face_cache_key(uid, avatar))
+    return base64.b64decode(b64) if b64 else None
+
 def load_profile(uid:int) -> Dict[str, Any]:
     if _redis:
         try:
@@ -327,7 +335,8 @@ def delete_profile(uid:int):
     p.mkdir(parents=True, exist_ok=True)
 
 # ---------- Рефы ----------
-def save_ref_downscaled(path: Path, raw: bytes, max_side=1152, quality=95):
+def save_ref_downscaled(path: Path, raw: bytes, max_side=1152, quality=95, uid:int=None, avatar:str=None):
+    """Сохраняем обрезанный JPEG и кладём копию в Redis-кэш лица (если доступен)."""
     im = Image.open(io.BytesIO(raw)).convert("RGB")
     w, h = im.size
     side = int(min(w, h) * 0.85)  # центральные 85% — меньше краёв/фона
@@ -335,7 +344,12 @@ def save_ref_downscaled(path: Path, raw: bytes, max_side=1152, quality=95):
     left = max(0, cx - side // 2); top = max(0, cy - side // 2)
     im = im.crop((left, top, left + side, top + side))
     im.thumbnail((max_side, max_side))
-    im.save(path, "JPEG", quality=quality, optimize=True, progressive=True)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=quality, optimize=True, progressive=True)
+    jpeg = buf.getvalue()
+    path.write_bytes(jpeg)
+    if uid is not None and avatar is not None:
+        save_face_cache(uid, avatar, jpeg)
 
 # ---------- Аватарные утилиты ----------
 def get_current_avatar_name(prof:Dict[str,Any]) -> str:
@@ -507,7 +521,9 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
 def generate_with_instantid(face_path: Path, prompt: str, steps: int, guidance: float,
                             seed: int, w: int, h: int, negative_prompt: str,
                             natural: bool = True, pretty: bool = False,
-                            content_image_bytes: Optional[bytes] = None) -> str:
+                            content_image_bytes: Optional[bytes] = None,
+                            face_bytes: Optional[bytes] = None) -> str:
+    """Теперь принимает face_bytes (фолбэк из Redis), если файла нет."""
     mv = resolve_model_version(INSTANTID_SLUG)
 
     base = INSTANTID_STRENGTH
@@ -522,8 +538,9 @@ def generate_with_instantid(face_path: Path, prompt: str, steps: int, guidance: 
         strength = base
         face_w = base_face
 
-    with open(face_path, "rb") as fb:
-        face_bytes = fb.read()
+    if face_bytes is None:
+        with open(face_path, "rb") as fb:
+            face_bytes = fb.read()
 
     inputs: Dict[str, Any] = {
         "prompt": prompt + AESTHETIC_SUFFIX,
@@ -541,16 +558,10 @@ def generate_with_instantid(face_path: Path, prompt: str, steps: int, guidance: 
     if content_image_bytes:
         inputs["image"] = content_image_bytes
 
-    try:
-        out = replicate.run(mv, input=inputs)
-        url = extract_any_url(out)
-        if not url: raise RuntimeError("Empty output (InstantID)")
-        return url
-    except Exception as e:
-        msg = str(e).lower()
-        if ("image is required" in msg or "input.image" in msg) and not content_image_bytes:
-            raise RuntimeError("INSTANTID_NEEDS_IMAGE")
-        raise
+    out = replicate.run(mv, input=inputs)
+    url = extract_any_url(out)
+    if not url: raise RuntimeError("Empty output (InstantID)")
+    return url
 
 # ---------- UI ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -718,7 +729,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Уже 10/10. Нажми /iddone."); return
         f = await update.message.photo[-1].get_file()
         data = await f.download_as_bytearray()
-        save_ref_downscaled(avatar_dir(uid, av_name) / f"ref_{int(time.time()*1000)}.jpg", bytes(data))
+        save_ref_downscaled(
+            avatar_dir(uid, av_name) / f"ref_{int(time.time()*1000)}.jpg",
+            bytes(data),
+            uid=uid, avatar=av_name
+        )
         await update.message.reply_text(f"Сохранила ({len(refs)+1}/10) для «{av_name}». Ещё?")
     else:
         await update.message.reply_text("Сначала включи набор: «📸 Набор фото» или /idenroll.")
@@ -974,8 +989,6 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
         guidance = min(4.8, guidance + 0.4)
         steps = min(MAX_STEPS, max(50, steps))
 
-    # ... ПОСЛЕ вычисления prompt_core / model_slug / steps / guidance
-
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
     await update.effective_message.reply_text(f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nГенерирую (InstantID lock, {gender}, {w}×{h}) …")
@@ -983,11 +996,15 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     try:
         face_refs = list_ref_images(uid, av_name)
         face_ref = face_refs[0] if face_refs else None
+        face_bytes = None
+        if not face_ref:
+            # Фолбэк: берём лицо из Redis-кэша
+            face_bytes = load_face_cache(uid, av_name)
 
-        if not (INSTANTID_SLUG and face_ref):
+        if not (INSTANTID_SLUG and (face_ref or face_bytes)):
             raise RuntimeError("InstantID не настроен или нет реф-фото. Заполни INSTANTID_SLUG и загрузи 10 фото.")
 
-        # ТРИ ВСЕГДА-LOCK варианта, все — двухшаговые (LoRA → InstantID)
+        # всегда двухшаговый рендер: LoRA сцена -> InstantID встраивает лицо
         seeds = [random.randrange(2**32) for _ in range(3)]
         neg_base = _neg_with_gender(NEGATIVE_PROMPT_BASE, gender_negative)
 
@@ -995,7 +1012,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
         inst_steps = min(MAX_STEPS, max(40, steps))  # InstantID чуть дольше для чёткости
 
         for s in seeds:
-            # 1) базовая сцена из твоей LoRA (чтобы стиль/фон были богатыми)
+            # 1) базовая сцена из твоей LoRA
             base_url = await asyncio.to_thread(
                 generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
                 steps=base_steps, guidance=guidance, seed=random.randrange(2**32),
@@ -1003,15 +1020,15 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
             )
             base_bytes = requests.get(base_url, timeout=60).content
 
-            # 2) InstantID «вклеивает» исходное лицо в эту сцену
+            # 2) InstantID «вклеивает» исходное лицо в эту сцену (с фолбэком на кэш)
             url = await asyncio.to_thread(
-                generate_with_instantid, face_path=face_ref, prompt=prompt_core,
-                steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
+                generate_with_instantid, face_path=face_ref if face_ref else Path("/dev/null"),
+                prompt=prompt_core, steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
                 negative_prompt=neg_base, natural=natural, pretty=pretty,
-                content_image_bytes=base_bytes
+                content_image_bytes=base_bytes, face_bytes=face_bytes
             )
 
-            # 3) (опционально) апскейл/шарп для зума без мыла
+            # 3) (опционально) апскейл/шарп
             try:
                 if UPSCALER_SLUG:
                     url = await asyncio.to_thread(upscale_url, url)
