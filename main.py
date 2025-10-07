@@ -59,6 +59,21 @@ LORA_MAX_STEPS = int(os.getenv("LORA_MAX_STEPS", "1400"))
 LORA_LR = float(os.getenv("LORA_LR", "0.0006"))
 LORA_USE_FACE_DET = os.getenv("LORA_USE_FACE_DET", "true").lower() in ("1","true","yes","y")
 LORA_RESOLUTION = int(os.getenv("LORA_RESOLUTION", "1024"))
+UPSCALER_SLUG   = os.getenv("UPSCALER_SLUG", "").strip()
+UPSCALE_FACTOR  = int(os.getenv("UPSCALE_FACTOR", "2"))
+def upscale_url(url: str) -> str:
+    """Универсальный апскейл: скачиваем URL и отдаем в любой ESRGAN-модель на Replicate."""
+    if not UPSCALER_SLUG:
+        return url
+    mv = resolve_model_version(UPSCALER_SLUG)
+    img_bytes = requests.get(url, timeout=60).content
+    try:
+        out = replicate.run(mv, input={"image": img_bytes, "scale": UPSCALE_FACTOR})
+    except Exception:
+        # на случай модели без параметра scale
+        out = replicate.run(mv, input={"image": img_bytes})
+    up = extract_any_url(out)
+    return up or url
 
 DEFAULT_FEMALE_CAPTION = (
     "a high quality photo of the same woman, natural brows, medium-length hair with natural hairline, "
@@ -72,11 +87,12 @@ DEFAULT_MALE_CAPTION = (
 )
 
 # --- Генерация ---
-GEN_STEPS = int(os.getenv("GEN_STEPS", "48"))
-GEN_GUIDANCE = float(os.getenv("GEN_GUIDANCE", "4.2"))
-GEN_WIDTH = int(os.getenv("GEN_WIDTH", "896"))
-GEN_HEIGHT = int(os.getenv("GEN_HEIGHT", "1152"))
-MAX_STEPS = int(os.getenv("MAX_STEPS", "50"))
+GEN_STEPS    = int(os.getenv("GEN_STEPS", "52"))      # было 48
+GEN_GUIDANCE = float(os.getenv("GEN_GUIDANCE", "4.4"))
+GEN_WIDTH    = int(os.getenv("GEN_WIDTH", "1024"))    # было 896
+GEN_HEIGHT   = int(os.getenv("GEN_HEIGHT", "1344"))   # было 1152
+MAX_STEPS    = int(os.getenv("MAX_STEPS", "56"))      # лимит на всякий
+
 
 # --- CONSISTENT FACE SCALE ---
 CONSISTENT_SCALE = os.getenv("CONSISTENT_SCALE", "1").lower() in ("1","true","yes","y")
@@ -311,16 +327,15 @@ def delete_profile(uid:int):
     p.mkdir(parents=True, exist_ok=True)
 
 # ---------- Рефы ----------
-def save_ref_downscaled(path: Path, raw: bytes, max_side=1024, quality=92):
+def save_ref_downscaled(path: Path, raw: bytes, max_side=1152, quality=95):
     im = Image.open(io.BytesIO(raw)).convert("RGB")
     w, h = im.size
-    side = int(min(w, h) * 0.8)  # центральные 80%
+    side = int(min(w, h) * 0.85)  # центральные 85% — меньше краёв/фона
     cx, cy = w // 2, h // 2
-    left = max(0, cx - side // 2)
-    top = max(0, cy - side // 2)
+    left = max(0, cx - side // 2); top = max(0, cy - side // 2)
     im = im.crop((left, top, left + side, top + side))
     im.thumbnail((max_side, max_side))
-    im.save(path, "JPEG", quality=quality)
+    im.save(path, "JPEG", quality=quality, optimize=True, progressive=True)
 
 # ---------- Аватарные утилиты ----------
 def get_current_avatar_name(prof:Dict[str,Any]) -> str:
@@ -959,66 +974,51 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
         guidance = min(4.8, guidance + 0.4)
         steps = min(MAX_STEPS, max(50, steps))
 
+    # ... ПОСЛЕ вычисления prompt_core / model_slug / steps / guidance
+
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
-    await update.effective_message.reply_text(f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nГенерирую ({gender}, {w}×{h}) …")
+    await update.effective_message.reply_text(f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nГенерирую (InstantID lock, {gender}, {w}×{h}) …")
 
     try:
         face_refs = list_ref_images(uid, av_name)
         face_ref = face_refs[0] if face_refs else None
 
-        variants = [("lock", random.randrange(2**32)), ("lock", random.randrange(2**32)), ("plain", random.randrange(2**32))]
+        if not (INSTANTID_SLUG and face_ref):
+            raise RuntimeError("InstantID не настроен или нет реф-фото. Заполни INSTANTID_SLUG и загрузи 10 фото.")
+
+        # ТРИ ВСЕГДА-LOCK варианта, все — двухшаговые (LoRA → InstantID)
+        seeds = [random.randrange(2**32) for _ in range(3)]
         neg_base = _neg_with_gender(NEGATIVE_PROMPT_BASE, gender_negative)
 
-        for mode, s in variants:
-            use_lock = (mode == "lock") and (av.get("lockface") is not False) and INSTANTID_SLUG and face_ref
-            if use_lock:
-                inst_steps = min(MAX_STEPS, max(38, steps))
-                if INSTANTID_FORCE_TWOSTEP:
-                    base_url = await asyncio.to_thread(
-                        generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
-                        steps=steps, guidance=guidance, seed=random.randrange(2**32),
-                        w=w, h=h, negative_prompt=neg_base
-                    )
-                    base_bytes = requests.get(base_url, timeout=60).content
-                    url = await asyncio.to_thread(
-                        generate_with_instantid, face_path=face_ref, prompt=prompt_core,
-                        steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                        negative_prompt=neg_base, natural=natural, pretty=pretty,
-                        content_image_bytes=base_bytes
-                    )
-                else:
-                    try:
-                        url = await asyncio.to_thread(
-                            generate_with_instantid, face_path=face_ref, prompt=prompt_core,
-                            steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                            negative_prompt=neg_base, natural=natural, pretty=pretty
-                        )
-                    except Exception as e:
-                        if "INSTANTID_NEEDS_IMAGE" in str(e):
-                            base_url = await asyncio.to_thread(
-                                generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
-                                steps=steps, guidance=guidance, seed=random.randrange(2**32),
-                                w=w, h=h, negative_prompt=neg_base
-                            )
-                            base_bytes = requests.get(base_url, timeout=60).content
-                            url = await asyncio.to_thread(
-                                generate_with_instantid, face_path=face_ref, prompt=prompt_core,
-                                steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                                negative_prompt=neg_base, natural=natural, pretty=pretty,
-                                content_image_bytes=base_bytes
-                            )
-                        else:
-                            raise
-            else:
-                url = await asyncio.to_thread(
-                    generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
-                    steps=steps, guidance=guidance, seed=s, w=w, h=h, negative_prompt=neg_base
-                )
-            tag = "🔒" if use_lock else "◻️"
-            await update.effective_message.reply_photo(photo=url, caption=f"{preset} • {av_name} • {tag}")
+        base_steps = steps
+        inst_steps = min(MAX_STEPS, max(40, steps))  # InstantID чуть дольше для чёткости
 
-        await update.effective_message.reply_text("Готово. Если какой-то пресет «плывёт», скажи его имя — подтяну лок.")
+        for s in seeds:
+            # 1) базовая сцена из твоей LoRA (чтобы стиль/фон были богатыми)
+            base_url = await asyncio.to_thread(
+                generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
+                steps=base_steps, guidance=guidance, seed=random.randrange(2**32),
+                w=w, h=h, negative_prompt=neg_base
+            )
+            base_bytes = requests.get(base_url, timeout=60).content
+
+            # 2) InstantID «вклеивает» исходное лицо в эту сцену
+            url = await asyncio.to_thread(
+                generate_with_instantid, face_path=face_ref, prompt=prompt_core,
+                steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
+                negative_prompt=neg_base, natural=natural, pretty=pretty,
+                content_image_bytes=base_bytes
+            )
+
+            # 3) (опционально) апскейл/шарп для зума без мыла
+            try:
+                if UPSCALER_SLUG:
+                    url = await asyncio.to_thread(upscale_url, url)
+            except Exception as up_e:
+                logger.warning("Upscale failed: %s", up_e)
+
+            await update.effective_message.reply_photo(photo=url, caption=f"{preset} • {av_name} • 🔒")
 
     except Exception as e:
         logging.exception("generation failed")
