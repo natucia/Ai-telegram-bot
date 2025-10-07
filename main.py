@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 Style = Dict[str, Any]
 
-from styles import (  # все твои словари лежат в styles.py
+from styles import (  # словари лежат в styles.py
     STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST,
     SCENE_GUIDANCE, RISKY_PRESETS
 )
@@ -45,10 +45,10 @@ LORA_INPUT_KEY    = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 # Классификатор пола (опц.)
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
 
-# LOCKFACE (InstantID / FaceID adapter)
-INSTANTID_SLUG = os.getenv("INSTANTID_SLUG", "").strip()  # можно пустым — тогда не используем
+# LOCKFACE (InstantID / FaceID adapter) — можно оставить пустым, тогда не используем
+INSTANTID_SLUG = os.getenv("INSTANTID_SLUG", "").strip()
 
-# --- Твики обучения ---
+# --- Параметры обучения ---
 LORA_MAX_STEPS     = int(os.getenv("LORA_MAX_STEPS", "1400"))
 LORA_LR            = float(os.getenv("LORA_LR", "0.00006"))
 LORA_USE_FACE_DET  = os.getenv("LORA_USE_FACE_DET", "true").lower() in ["1","true","yes","y"]
@@ -65,7 +65,7 @@ GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "4.2"))
 GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "896"))
 GEN_HEIGHT    = int(os.getenv("GEN_HEIGHT", "1152"))
 
-# --- Жёсткий верхний предел шагов у текущей версии модели (чтоб не ловить 422) ---
+# Верхний предел шагов у модели (чтобы не ловить 422)
 MAX_STEPS = int(os.getenv("MAX_STEPS", "50"))
 
 # ---- Anti-drift / aesthetics
@@ -741,16 +741,34 @@ def start_lora_training(uid:int, avatar:str) -> str:
     save_profile(uid, prof)
     return training.id
 
-def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str]]:
+def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str], Optional[str]]:
     prof = load_profile(uid)
     av = get_avatar(prof, avatar)
     tid = av.get("training_id")
-    if not tid: return ("not_started", None)
+    if not tid:
+        return ("not_started", None, None)
+
     client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
     tr = client.trainings.get(tid)
+
     status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
+
+    err = None
+    for key in ("error", "failure", "message", "reason", "detail"):
+        try:
+            v = getattr(tr, key, None) if not isinstance(tr, dict) else tr.get(key)
+            if isinstance(v, str) and v.strip():
+                err = v.strip(); break
+            if isinstance(v, dict):
+                msg = v.get("message") or v.get("detail")
+                if msg: err = str(msg); break
+        except Exception:
+            pass
+
     if status != "succeeded":
-        av["status"] = status; save_profile(uid, prof); return (status, None)
+        av["status"] = status
+        save_profile(uid, prof)
+        return (status, None, err)
 
     destination = getattr(tr, "destination", None) or (isinstance(tr, dict) and tr.get("destination")) \
                   or av.get("finetuned_model") or _dest_model_slug(avatar)
@@ -777,7 +795,7 @@ def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str]]:
     if slug_with_version and ":" in slug_with_version:
         av["finetuned_version"] = slug_with_version.split(":",1)[1]
     save_profile(uid, prof)
-    return (status, slug_with_version)
+    return (status, slug_with_version, None)
 
 def _pinned_slug(av: Dict[str, Any]) -> str:
     base = av.get("finetuned_model") or ""
@@ -794,6 +812,11 @@ async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         training_id = await asyncio.to_thread(start_lora_training, uid, av_name)
         await update.effective_message.reply_text(f"Стартанула. ID: `{training_id}`\nПроверяй /trainstatus время от времени.")
+        # Ссылка на логи
+        if DEST_OWNER and DEST_MODEL and training_id:
+            await update.effective_message.reply_text(
+                f"Логи тренировки: https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{training_id}"
+            )
     except Exception as e:
         logging.exception("trainid failed")
         await update.effective_message.reply_text(f"Не удалось запустить обучение: {e}")
@@ -802,14 +825,42 @@ async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     prof = load_profile(uid)
     av_name = get_current_avatar_name(prof)
-    status, slug_with_ver = await asyncio.to_thread(check_training_status, uid, av_name)
-    if slug_with_ver and status == "succeeded":
+
+    status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
+    av = get_avatar(prof, av_name)
+    tid = av.get("training_id")
+    train_url = f"https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{tid}" if (DEST_OWNER and DEST_MODEL and tid) else None
+
+    if status == "succeeded" and slug_with_ver:
         await update.effective_message.reply_text(
-            f"Готово ✅\nАватар: {av_name}\nСтатус: {status}\nМодель: `{slug_with_ver}`\nТеперь — «🧭 Выбрать стиль».",
+            f"Готово ✅\nАватар: {av_name}\nМодель: `{slug_with_ver}`\nТеперь — «🧭 Выбрать стиль».",
             reply_markup=categories_kb()
         )
-    else:
-        await update.effective_message.reply_text(f"Статус «{av_name}»: {status}. Ещё в процессе…")
+        return
+
+    if status in ("starting", "processing", "running", "queued", "pending"):
+        await update.effective_message.reply_text(
+            f"Статус «{av_name}»: {status}… В процессе{(' — см. логи: ' + train_url) if train_url else ''}."
+        )
+        return
+
+    if status in ("failed", "canceled"):
+        msg = f"⚠️ Тренировка «{av_name}»: {status.upper()}."
+        if err:
+            msg += f"\nПричина: {err}"
+        if train_url:
+            msg += f"\nЛоги: {train_url}"
+        msg += (
+            "\n\nЧто проверить:\n"
+            "• Целевая модель существует (REPLICATE_DEST_OWNER/DEST_MODEL).\n"
+            "• 10 фото, лицо крупно, без фильтров.\n"
+            "• Кредиты Replicate не закончились.\n"
+            "• Верны LORA_TRAINER_SLUG и LORA_INPUT_KEY."
+        )
+        await update.effective_message.reply_text(msg)
+        return
+
+    await update.effective_message.reply_text(f"Статус «{av_name}»: {status}. {('Логи: ' + train_url) if train_url else ''}")
 
 async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -838,7 +889,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost)
     model_slug = _pinned_slug(av)
 
-    # guidance/steps (pretty mode + лимит)
+    # guidance/steps (pretty + лимит)
     guidance = max(3.0, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE))
     desired_steps = max(52, GEN_STEPS) if PRETTY_MODE else max(40, GEN_STEPS)
     steps = min(MAX_STEPS, desired_steps)
@@ -852,7 +903,6 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
         urls = []
         neg_base = _neg_with_gender(NEGATIVE_PROMPT, gender_negative)
 
-        # LOCKFACE для этого аватара или рискованной сцены
         do_lock = (av.get("lockface") is True) or (preset in RISKY_PRESETS)
         face_refs = list_ref_images(uid, av_name)
         face_ref = face_refs[0] if face_refs else None
