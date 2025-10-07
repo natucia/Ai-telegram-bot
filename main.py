@@ -368,6 +368,143 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "starfield and spaceship hangar",
         "comp": "full", "tone": "cool"
     },
+    # --- Новые стили ---
+    "Арктика": {
+        "desc": "Холодное сияние, айсберги и белый медвежонок.",
+        "role_f": "arctic explorer holding a white polar bear cub",
+        "role":   "arctic explorer holding a white polar bear cub",
+        "outfit_f": "white thermal parka with fur hood, knit beanie and mittens",
+        "outfit":   "white thermal parka with fur hood, knit beanie and gloves",
+        "props": "polar bear cub cuddled safely in arms, drifting ice, snow crystals in air",
+        "bg": "icebergs and frozen sea, low sun halo, blowing snow",
+        "comp": "half", "tone": "cool"
+    },
+
+    "Альпы (гламур)": {
+        "desc": "Гламурный отдых в горах: лыжи/сноуборд, террасы, горное солнце.",
+        "role_f": "alpine fashion vacationer with skis",
+        "role":   "alpine fashion vacationer with snowboard",
+        "outfit_f": "sleek white ski suit, fur-trimmed hood, chic goggles",
+        "outfit":   "stylish ski jacket and pants, goggles on helmet",
+        "props": "skis or snowboard, steam from mulled wine cup",
+        "bg": "alpine chalet terrace with snowy peaks and cable cars",
+        "comp": "half", "tone": "warm"
+    },
+
+    "Франция (Париж)": {
+        "desc": "Берет, багет, круассан и башня на фоне.",
+        "role": "parisian street scene character",
+        "outfit_f": "striped shirt, red beret, trench, scarf",
+        "outfit":   "striped shirt, beret, trench, scarf",
+        "props": "baguette and croissant in paper bag, café tables",
+        "bg": "Eiffel Tower in the distance, Haussmann buildings, café awning",
+        "comp": "half", "tone": "daylight"
+    },
+
+    "Джунгли (Тарзан)": {
+        "desc": "Густые тропики и дикие звери рядом (безопасно).",
+        "role_f": "jungle adventurer",
+        "role":   "jungle adventurer",
+        "outfit_f": "leather jungle top and skirt, rope belt",
+        "outfit":   "leather jungle outfit, rope belt",
+        "props": "jungle vines, soft mist, a crocodile or a snake or a panther nearby, not attacking",
+        "bg": "dense tropical jungle, waterfalls and sunbeams through canopy",
+        "comp": "full", "tone": "warm"
+    },
+
+    "Детство": {
+        "desc": "Съёмка в детском образе: игрушки, флажки, шарики.",
+        "role": "child portrait in playful setting",
+        "outfit_f": "cute cardigan, skirt with suspenders, bow headband",
+        "outfit":   "cute sweater and suspenders",
+        "props": "teddy bear, balloons, crayons, building blocks",
+        "bg": "cozy kids room with garlands and soft daylight",
+        "comp": "closeup", "tone": "daylight",
+        "allow_age_change": True,         # снимаем возрастной лок только тут
+        "force_lockface": True            # если хочешь, можешь учитывать этот флаг в генерации
+    },
+
+    "Свадьба": {
+        "desc": "Классическая свадебная сцена.",
+        "role_f": "bride in elegant wedding dress",
+        "role":   "groom in classic tuxedo",
+        "outfit_f": "white lace wedding gown, veil, bouquet",
+        "outfit":   "black tuxedo with boutonnière",
+        "props": "flower petals in air, ring box visible",
+        "bg": "sunlit ceremony arch with flowers",
+        "comp": "half", "tone": "warm"
+    },
+
+    "Хаос": {
+        "desc": "Кинематографический бардак: всё рушится, но герой спокоен.",
+        "role": "hero in cinematic disaster scene",
+        "outfit_f": "modern streetwear with dust marks",
+        "outfit":   "modern streetwear with dust marks",
+        "props": "embers and sparks in the air, flying papers, cracked glass",
+        "bg": "burning house and collapsing structures in background, dramatic smoke",
+        "comp": "full", "tone": "noir"
+    },
+
+    "Инопланетяне": {
+        "desc": "Фантастика: НЛО, лучи, загадочная пыль.",
+        "role": "person confronted by hovering UFOs",
+        "outfit_f": "sleek sci-fi coat",
+        "outfit":   "sleek sci-fi coat",
+        "props": "tractor beams, dust motes, floating debris",
+        "bg": "night field with hovering saucers and moody clouds",
+        "comp": "full", "tone": "cool"
+    },
+
+    "Фридайвер под водой": {
+        "desc": "Подводная съёмка, пузыри, лучи сквозь толщу воды.",
+        "role_f": "freediver underwater",
+        "role":   "freediver underwater",
+        "outfit_f": "apnea wetsuit without tank, long fins, mask",
+        "outfit":   "apnea wetsuit without tank, long fins, mask",
+        "props": "air bubbles, sunbeams from surface, small fish around",
+        "bg": "deep blue water with rocky arch or reef",
+        "comp": "full", "tone": "cool"
+    },
+
+    "Деревня": {
+        "desc": "Теплая сельская сцена.",
+        "role": "villager in rustic setting",
+        "outfit_f": "linen dress, knitted cardigan, headscarf optional",
+        "outfit":   "linen shirt, vest",
+        "props": "basket with apples, wooden fence, hay",
+        "bg": "rural cottage yard with garden and chickens far in background",
+        "comp": "half", "tone": "warm"
+    },
+
+    "Россия (зимняя)": {
+        "desc": "Зимний пейзаж, берёзы, снежные сугробы.",
+        "role": "person in Russian winter scene",
+        "outfit_f": "down coat, ushanka hat, woolen scarf, felt boots",
+        "outfit":   "down parka, ushanka hat, woolen scarf, felt boots",
+        "props": "steam from breath, snowflakes in air, samovar on wooden table",
+        "bg": "traditional wooden house with ornate window frames and birch trees",
+        "comp": "half", "tone": "cool"
+    },
+
+    "Теннис": {
+        "desc": "Теннисный корт и динамика.",
+        "role": "tennis player on court",
+        "outfit_f": "white tennis dress and visor",
+        "outfit":   "white tennis kit and headband",
+        "props": "racket in hand, tennis balls mid-air motion blur",
+        "bg": "hard court with service lines and green windscreen",
+        "comp": "half", "tone": "daylight"
+    },
+
+    "Дельтаплан": {
+        "desc": "Свобода полёта над горами.",
+        "role": "hang glider pilot running a takeoff",
+        "outfit": "windbreaker, harness, helmet, gloves",
+        "props": "hang glider wings overhead, lines and A-frame visible",
+        "bg": "ridge launch with valley and clouds below",
+        "comp": "full", "tone": "daylight"
+    },
+
     "Космопилот на мостике": {
         "desc": "Пульт, индикаторы, готовность к гиперпрыжку.",
         "role": "starship pilot on the bridge",
@@ -386,7 +523,11 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
     "Фэнтези/История": ["Эльфийская знать", "Самурай в храме", "Средневековый рыцарь", "Пират на палубе", "Древняя Греция", "Королева"],
     "Sci-Fi": ["Киберпанк улица", "Космический скафандр", "Космопилот на мостике"],
 }
-
+STYLE_CATEGORIES.update({
+    "Путешествия": ["Арктика", "Альпы (гламур)", "Франция (Париж)", "Россия (зимняя)", "Деревня"],
+    "Экшен/Адвенчур": ["Джунгли (Тарзан)", "Хаос", "Инопланетяне", "Дельтаплан"],
+    "Спорт/Вода": ["Теннис", "Фридайвер под водой", "Серфер"]
+})
 THEME_BOOST = {
     "Пират на палубе": "rope rigging, storm clouds, wet highlights on wood, sea spray, gulls",
     "Древняя Греция": "ionic capitals, olive trees, turquoise water reflections, gold trim accents",
@@ -398,6 +539,21 @@ THEME_BOOST = {
     "Серфер":         "rimlight on water droplets, sun flare",
     "Королева":       "subtle film grain, ceremonial ambience",
 }
+THEME_BOOST.update({
+    "Арктика": "diamond-dust glitter in cold air, low sun halo, frost crystals on clothing",
+    "Альпы (гламур)": "sunflare off snow, chalet wood textures, gondola cables in distance",
+    "Франция (Париж)": "café chalk menu board, wrought iron balcony rails, warm bakery glow",
+    "Джунгли (Тарзан)": "god rays through canopy, wet leaf speculars, mist near ground",
+    "Детство": "soft pastel garlands, shallow dof sparkles, gentle vignette",
+    "Свадьба": "bokeh from fairy lights, soft veil translucency",
+    "Хаос": "embers, flying paper scraps, dramatic smoke layers, slight camera shake feeling",
+    "Инопланетяне": "volumetric beams, dust motes, faint radio-glitch halation",
+    "Фридайвер под водой": "caustic light patterns, particulate backscatter, gentle blue gradient",
+    "Деревня": "warm wood patina, sun dust in air, linen texture details",
+    "Россия (зимняя)": "crisp breath vapor, snow sparkle, frosty window details",
+    "Теннис": "chalk dust from lines, motion blur of ball strings",
+    "Дельтаплан": "wind-rippled jacket, wing fabric texture, valley haze layers"
+})
 
 # Сцены, где чаще всего уводит лицо → понижаем CFG и принудительно включаем lockface
 SCENE_GUIDANCE = {
@@ -407,6 +563,17 @@ SCENE_GUIDANCE = {
     "Средневековый рыцарь": 3.2,
 }
 RISKY_PRESETS = set(SCENE_GUIDANCE.keys())
+SCENE_GUIDANCE.update({
+    "Джунгли (Тарзан)": 3.2,
+    "Инопланетяне": 3.2,
+    "Хаос": 3.2,
+    "Фридайвер под водой": 3.0,
+    "Дельтаплан": 3.2,
+    "Арктика": 3.2,
+    "Детство": 3.0,
+})
+# Если используешь автоматический lockface для рискованных:
+RISKY_PRESETS.update({"Джунгли (Тарзан)", "Инопланетяне", "Хаос", "Фридайвер под водой", "Дельтаплан", "Арктика", "Детство"})
 
 # ---------- logging ----------
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -625,44 +792,46 @@ def _style_lock(role:str, outfit:str, props:str, background:str, comp_hint:str) 
     return ", ".join([b for b in bits if b])
 
 def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_boost:str) -> Tuple[str, str]:
-    role = meta.get("role_f") if (gender=="female" and meta.get("role_f")) else meta.get("role","")
-    if not role and meta.get("role_m") and gender=="male":
-        role = meta.get("role_m","")
-    outfit = meta.get("outfit_f") if (gender=="female" and meta.get("outfit_f")) else meta.get("outfit","")
-    props = meta.get("props","")
-    bg = meta.get("bg","")
+        role = meta.get("role_f") if (gender=="female" and meta.get("role_f")) else meta.get("role","")
+        if not role and meta.get("role_m") and gender=="male":
+            role = meta.get("role_m","")
+        outfit = meta.get("outfit_f") if (gender=="female" and meta.get("outfit_f")) else meta.get("outfit","")
+        props = meta.get("props","")
+        bg = meta.get("bg","")
 
-    gpos, gneg = _gender_lock(gender)
-    anti = _anti_distort()
+        gpos, gneg = _gender_lock(gender)
+        anti = _anti_distort()
+        age_lock = "" if meta.get("allow_age_change") else "no age change, "
 
-    if role or outfit or props or bg:
+        if role or outfit or props or bg:
+            core = ", ".join([
+                _style_lock(role, outfit, props, bg, comp_text),
+                tone_text,
+                gpos,
+                f"same person as the training photos, no ethnicity change, {age_lock}exact facial identity, identity preserved",
+                "photorealistic, realistic body proportions, natural skin texture, filmic look",
+                anti,
+                _beauty_guardrail(),
+                _face_lock(),
+                theme_boost
+            ])
+            core += ", the costume and background must clearly communicate the role; avoid plain portrait"
+            return core, gneg
+
+        base_prompt = meta.get("p", "")
         core = ", ".join([
-            _style_lock(role, outfit, props, bg, comp_text),
-            tone_text,
+            f"{base_prompt}, {comp_text}, {tone_text}",
             gpos,
-            "same person as the training photos, no ethnicity change, no age change, exact facial identity, identity preserved",
-            "photorealistic, realistic body proportions, natural skin texture, filmic look",
+            f"same person as the training photos, {age_lock}exact facial identity, identity preserved",
+            "cinematic key light and rim light, soft bounce fill, film grain subtle",
+            "skin tone faithful",
             anti,
             _beauty_guardrail(),
             _face_lock(),
             theme_boost
         ])
-        core += ", the costume and background must clearly communicate the role; avoid plain portrait"
         return core, gneg
 
-    base_prompt = _prompt_for_gender(meta, gender)
-    core = ", ".join([
-        f"{base_prompt}, {comp_text}, {tone_text}",
-        gpos,
-        "same person as the training photos, exact facial identity, identity preserved",
-        "cinematic key light and rim light, soft bounce fill, film grain subtle",
-        "skin tone faithful",
-        anti,
-        _beauty_guardrail(),
-        _face_lock(),
-        theme_boost
-    ])
-    return core, gneg
 
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
     mv = resolve_model_version(model_slug)
