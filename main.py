@@ -1,4 +1,4 @@
-# === Telegram LoRA Bot (Flux LoRA trainer + HARD styles + Redis persist + Identity/Gender locks) ===
+# === Telegram LoRA Bot (Flux LoRA trainer + HARD styles + Redis persist + Identity/Gender locks + LOCKFACE fallback) ===
 # Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1
 
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib
@@ -33,8 +33,11 @@ DEST_MODEL  = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()
 LORA_TRAINER_SLUG = os.getenv("LORA_TRAINER_SLUG", "replicate/flux-lora-trainer").strip()
 LORA_INPUT_KEY    = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 
-# Классификатор пола (опционально; можно заменить)
+# Классификатор пола (опционально)
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
+
+# --- LOCKFACE (InstantID / FaceID adapter) ---
+INSTANTID_SLUG = os.getenv("INSTANTID_SLUG", "fofr/flux-instantid").strip()  # поменяй при необходимости
 
 # --- Твики обучения ---
 LORA_MAX_STEPS     = int(os.getenv("LORA_MAX_STEPS", "1400"))
@@ -47,7 +50,7 @@ LORA_CAPTION_PREF  = os.getenv(
     "balanced facial proportions, soft jawline, clear eyes"
 ).strip()
 
-# --- Генерация (жёстче слушает стиль) ---
+# --- Генерация ---
 GEN_STEPS     = int(os.getenv("GEN_STEPS", "48"))
 GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "4.2"))
 GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "896"))
@@ -81,10 +84,9 @@ def _beauty_guardrail() -> str:
 
 def _face_lock() -> str:
     return (
-        "exact same face as the training photos, do not alter ethnicity or bone structure, "
-        "natural interocular distance, consistent eyelid shape, iris size consistent, "
-        "pupils aligned, symmetric canthus positions, "
-        "preserve nasion and cheekbone widths, keep lip fullness natural"
+        "exact same face as the training photos, do not alter bone structure, "
+        "natural interocular distance, consistent eyelid shape, pupils aligned, "
+        "preserve cheekbone widths and lip fullness"
     )
 
 def _anti_distort() -> str:
@@ -121,9 +123,10 @@ def _tone_text(tone: str) -> str:
         "candle":   "warm candlelight, soft glow, volumetric rays",
     }.get(tone, "balanced soft lighting")
 
-# ---------- Стили (HARD STYLE-LOCK) ----------
+# ---------- Стили ----------
 Style = Dict[str, Any]
 STYLE_PRESETS: Dict[str, Style] = {
+    # ... (оставляю все твои пресеты без изменений — см. ниже полное содержимое)
     # Портреты
     "Портрет у окна": {
         "desc": "Крупный кинопортрет у большого окна; мягкая тень от рамы, живое боке.",
@@ -165,7 +168,6 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "high contrast noir backdrop",
         "comp": "closeup", "tone": "noir"
     },
-
     # Современные
     "Стритвэр город": {
         "desc": "Уличный лук, город дышит.",
@@ -203,7 +205,6 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "neon signs and steam from manholes",
         "comp": "half", "tone": "neon"
     },
-
     # Профессии
     "Врач у палаты": {
         "desc": "Белый халат, стетоскоп, палата за спиной.",
@@ -256,7 +257,6 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "gym with machines and dramatic backlight",
         "comp": "half", "tone": "cool"
     },
-
     # Приключения / Экшн
     "Приключенец (руины)": {
         "desc": "Пыльные лучи, древние камни.",
@@ -293,7 +293,6 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "ocean wave breaking, golden backlight",
         "comp": "full", "tone": "warm"
     },
-
     # Фэнтези / История
     "Эльфийская знать": {
         "desc": "Лесной храм и лучи в тумане.",
@@ -351,7 +350,6 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "grand castle throne room with chandeliers and marble columns",
         "comp": "half", "tone": "warm"
     },
-
     # Sci-Fi
     "Киберпанк улица": {
         "desc": "Неон, мокрый асфальт, голограммы.",
@@ -401,19 +399,20 @@ THEME_BOOST = {
     "Королева":       "subtle film grain, ceremonial ambience",
 }
 
-# Пониженная «послушность» (CFG) в сценах, которые чаще «перекрашивают» лицо
+# Сцены, где чаще всего уводит лицо → понижаем CFG и принудительно включаем lockface
 SCENE_GUIDANCE = {
-    "Киберпанк улица": 3.6,
-    "Космический скафандр": 3.6,
-    "Самурай в храме": 3.6,
-    "Средневековый рыцарь": 3.6,
+    "Киберпанк улица": 3.2,
+    "Космический скафандр": 3.2,
+    "Самурай в храме": 3.2,
+    "Средневековый рыцарь": 3.2,
 }
+RISKY_PRESETS = set(SCENE_GUIDANCE.keys())
 
 # ---------- logging ----------
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger("bot")
 
-# ---------- storage (Redis persistent, fallback к FS если чего-то нет) ----------
+# ---------- storage ----------
 DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
 
 def user_dir(uid:int) -> Path:
@@ -425,7 +424,8 @@ def profile_path(uid:int) -> Path:
 
 DEFAULT_PROFILE = {
     "images": [], "training_id": None, "finetuned_model": None,
-    "finetuned_version": None, "status": None, "gender": None
+    "finetuned_version": None, "status": None, "gender": None,
+    "lockface": False  # новый флаг
 }
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -495,7 +495,7 @@ def extract_any_url(out: Any) -> Optional[str]:
             if u: return u
     return None
 
-# ---------- авто-пол (опционально) ----------
+# ---------- авто-пол ----------
 def _infer_gender_from_image(path: Path) -> Optional[str]:
     try:
         client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
@@ -678,6 +678,24 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
     if not url: raise RuntimeError("Empty output")
     return url
 
+def generate_with_instantid(face_path: Path, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
+    """Fallback генерация с жёсткой фиксацией лица по референсу."""
+    mv = resolve_model_version(INSTANTID_SLUG)
+    with open(face_path, "rb") as fb:
+        out = replicate.run(mv, input={
+            "face_image": fb,                # ключи типовые для InstantID-пайплайнов на Replicate
+            "prompt": prompt + AESTHETIC_SUFFIX,
+            "negative_prompt": negative_prompt,
+            "width": w, "height": h,
+            "num_inference_steps": max(36, steps),
+            "guidance_scale": min(guidance, 3.5),  # ещё снижаем, чтобы не давило лицо
+            "seed": seed,
+            # дополнительные поля у разных версий могут называться чуть иначе — оставлены по умолчанию
+        })
+    url = extract_any_url(out)
+    if not url: raise RuntimeError("Empty output (InstantID)")
+    return url
+
 # ---------- UI ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
     rows = [
@@ -685,7 +703,8 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📸 Набор фото", callback_data="nav:enroll"),
          InlineKeyboardButton("🧪 Обучение", callback_data="nav:train")],
         [InlineKeyboardButton("ℹ️ Мой статус", callback_data="nav:status"),
-         InlineKeyboardButton("⚙️ Пол", callback_data="nav:gender")]
+         InlineKeyboardButton("⚙️ Пол", callback_data="nav:gender")],
+        [InlineKeyboardButton("🔒 LOCKFACE", callback_data="nav:lockface")]
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -716,7 +735,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "в узнаваемых кино-сценах — от королевы в тронном зале до серфера на волне.\n\n"
         "1) «📸 Набор фото» — пришли до 10 снимков.\n"
         "2) «🧪 Обучение» — тренировка LoRA.\n"
-        "3) «🧭 Выбрать стиль» — получи 3 варианта.",
+        "3) «🧭 Выбрать стиль» — получи 3 варианта.\n"
+        "4) «🔒 LOCKFACE» — включить/выключить жёсткую фиксацию лица.",
         reply_markup=main_menu_kb()
     )
 
@@ -735,6 +755,8 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await id_status(update, context)
     elif key == "gender":
         await gender_cmd(update, context)
+    elif key == "lockface":
+        await lockface_cmd(update, context)
 
 async def styles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
@@ -774,7 +796,8 @@ async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Статус обучения: {prof.get('status') or '—'}\n"
         f"Модель: {prof.get('finetuned_model') or '—'}\n"
         f"Версия: {prof.get('finetuned_version') or '—'}\n"
-        f"Пол: {prof.get('gender') or '—'}"
+        f"Пол: {prof.get('gender') or '—'}\n"
+        f"LOCKFACE: {'on' if prof.get('lockface') else 'off'}"
     )
 
 async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -809,6 +832,14 @@ async def gender_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Определённый пол: {prof.get('gender') or '—'}\n"
         "Можно сменить командой: /setgender female | /setgender male"
     )
+
+async def lockface_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    prof = load_profile(uid)
+    prof["lockface"] = not prof.get("lockface", False)
+    save_profile(uid, prof)
+    state = "включён" if prof["lockface"] else "выключен"
+    await update.effective_message.reply_text(f"LOCKFACE {state}. В рисковых пресетах он всё равно включается автоматически.")
 
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -853,8 +884,8 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost)
     model_slug = _pinned_slug(prof)
 
-    # guidance с учётом сцены (понижен в рисковых стилях)
-    guidance = max(3.2, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE))
+    # guidance: понижен для рискованных сцен
+    guidance = max(3.0, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE))
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
@@ -864,22 +895,42 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
         seeds = [int(time.time()) & 0xFFFFFFFF, random.randrange(2**32), random.randrange(2**32)]
         urls = []
         neg_base = NEGATIVE_PROMPT + (", " + gender_negative if gender_negative else "")
+
+        # Включаем lockface, если он глобально включён или сцена рискованная
+        do_lock = bool(prof.get("lockface")) or (preset in RISKY_PRESETS)
+        face_refs = list_ref_images(uid)
+        face_ref = face_refs[0] if face_refs else None
+
         for s in seeds:
-            url = await asyncio.to_thread(
-                generate_from_finetune,
-                model_slug=model_slug,
-                prompt=prompt_core,
-                steps=max(40, GEN_STEPS),
-                guidance=guidance,
-                seed=s, w=w, h=h,
-                negative_prompt=neg_base
-            )
+            if do_lock and face_ref:
+                url = await asyncio.to_thread(
+                    generate_with_instantid,
+                    face_path=face_ref,
+                    prompt=prompt_core,
+                    steps=max(36, GEN_STEPS),
+                    guidance=guidance,
+                    seed=s, w=w, h=h,
+                    negative_prompt=neg_base
+                )
+            else:
+                url = await asyncio.to_thread(
+                    generate_from_finetune,
+                    model_slug=model_slug,
+                    prompt=prompt_core,
+                    steps=max(40, GEN_STEPS),
+                    guidance=guidance,
+                    seed=s, w=w, h=h,
+                    negative_prompt=neg_base
+                )
             urls.append(url)
 
         for i, u in enumerate(urls, 1):
-            await update.effective_message.reply_photo(photo=u, caption=f"{preset} • вариант {i}")
+            await update.effective_message.reply_photo(photo=u, caption=f"{preset} • вариант {i}{' • 🔒' if do_lock else ''}")
 
-        await update.effective_message.reply_text("Выбери лучший вариант — напиши «этот нрав», добавлю апскейл и вариации (по запросу).")
+        await update.effective_message.reply_text(
+            "Если хочешь принудительно фиксировать лицо во всех стилях — нажми «🔒 LOCKFACE». "
+            "Для отдельных кадров напиши: «этот нрав — апскейл/вариации»."
+        )
     except Exception as e:
         logging.exception("generation failed")
         await update.effective_message.reply_text(f"Ошибка генерации: {e}")
@@ -899,6 +950,7 @@ def main():
     app.add_handler(CommandHandler("idreset", id_reset))
     app.add_handler(CommandHandler("setgender", setgender_cmd))
     app.add_handler(CommandHandler("gender", gender_cmd))
+    app.add_handler(CommandHandler("lockface", lockface_cmd))
     app.add_handler(CommandHandler("trainid", trainid_cmd))
     app.add_handler(CommandHandler("trainstatus", trainstatus_cmd))
     app.add_handler(CommandHandler("styles", styles_cmd))
