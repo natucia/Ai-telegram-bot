@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 Style = Dict[str, Any]
 
-from styles import (  # словари лежат в styles.py
+from styles import (  # словари лежат в styles.py (STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST, SCENE_GUIDANCE, RISKY_PRESETS)
     STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST,
     SCENE_GUIDANCE, RISKY_PRESETS
 )
@@ -35,12 +35,12 @@ if not TOKEN or not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", TOKEN):
 if not os.getenv("REPLICATE_API_TOKEN"):
     raise RuntimeError("Нет REPLICATE_API_TOKEN.")
 
-DEST_OWNER  = os.getenv("REPLICATE_DEST_OWNER", "").strip()
-DEST_MODEL  = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()
+DEST_OWNER = os.getenv("REPLICATE_DEST_OWNER", "").strip()
+DEST_MODEL = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()
 
 # Тренер LoRA
 LORA_TRAINER_SLUG = os.getenv("LORA_TRAINER_SLUG", "replicate/flux-lora-trainer").strip()
-LORA_INPUT_KEY    = os.getenv("LORA_INPUT_KEY", "input_images").strip()
+LORA_INPUT_KEY = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 
 # Классификатор пола (опц.)
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
@@ -49,53 +49,53 @@ GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").str
 INSTANTID_SLUG = os.getenv("INSTANTID_SLUG", "").strip()
 
 # --- Параметры обучения ---
-LORA_MAX_STEPS     = int(os.getenv("LORA_MAX_STEPS", "1400"))
-LORA_LR            = float(os.getenv("LORA_LR", "0.00006"))
-LORA_USE_FACE_DET  = os.getenv("LORA_USE_FACE_DET", "true").lower() in ["1","true","yes","y"]
-LORA_RESOLUTION    = int(os.getenv("LORA_RESOLUTION", "1024"))
-LORA_CAPTION_PREF  = os.getenv(
+LORA_MAX_STEPS = int(os.getenv("LORA_MAX_STEPS", "1400"))
+LORA_LR = float(os.getenv("LORA_LR", "0.00006"))
+LORA_USE_FACE_DET = os.getenv("LORA_USE_FACE_DET", "true").lower() in ["1","true","yes","y"]
+LORA_RESOLUTION = int(os.getenv("LORA_RESOLUTION", "1024"))
+LORA_CAPTION_PREF = os.getenv(
     "LORA_CAPTION_PREFIX",
-    "a high quality photo of the same person, neutral expression, gentle smile, "
-    "balanced facial proportions, soft jawline, clear eyes"
+    "a high quality photo of the same person, neutral expression, balanced facial proportions, clear eyes"
 ).strip()
 
 # --- Генерация (дефолты) ---
-GEN_STEPS     = int(os.getenv("GEN_STEPS", "48"))
-GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "4.2"))
-GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "896"))
-GEN_HEIGHT    = int(os.getenv("GEN_HEIGHT", "1152"))
+GEN_STEPS = int(os.getenv("GEN_STEPS", "48"))
+GEN_GUIDANCE = float(os.getenv("GEN_GUIDANCE", "4.6"))  # чуть выше чтобы не 'плыло'
+GEN_WIDTH = int(os.getenv("GEN_WIDTH", "960"))
+GEN_HEIGHT = int(os.getenv("GEN_HEIGHT", "1280"))
 
 # Верхний предел шагов у модели (чтобы не ловить 422)
 MAX_STEPS = int(os.getenv("MAX_STEPS", "50"))
 
-# ---- Anti-drift / aesthetics
+# ---- Anti-drift / aesthetics (усилен против сглаживания и чужих черт) ----
 NEGATIVE_PROMPT = (
-    "cartoon, anime, 3d, cgi, plastic skin, overprocessed, oversharpen, "
-    "lowres, blur, jpeg artifacts, text, watermark, logo, bad anatomy, extra fingers, short fingers, "
-    "puffy face, swollen face, bulky masseter, wide jaw, clenched jaw, duckface, overfilled lips, "
+    "cartoon, anime, cgi, 3d, stylized, plastic skin, overprocessed, over-smoothed, airbrushed, "
+    "lowres, blur, textureless skin, porcelain skin, waxy, beauty-filter, "
+    "text, watermark, logo, bad anatomy, extra fingers, short fingers, "
+    "identity drift, different person, face swap, face morph, "
+    "ethnicity change, age change, hairline change, skull shape change, "
+    "puffy face, swollen face, widened jaw, clenched jaw, duckface, overfilled lips, "
     "cross-eye, misaligned pupils, double pupils, heterochromia, mismatched eye direction, "
-    "identity drift, different person, ethnicity change, age change, face morph, face swap, "
-    "eye spacing change, stretched face, narrowed eyes, exaggerated eyelid fold, "
-    "fisheye, lens distortion, warped face, deformed skull, tiny head, giant head on small body, "
+    "stretched face, narrow eyes, exaggerated eyelid fold, "
+    "fisheye, lens distortion, warped face, tiny head, giant head, "
     "bodybuilder female, extreme makeup, heavy contouring, "
-    "casual clothing, plain studio background, selfie, tourist photo"
+    "plain selfie, tourist photo, plain studio backdrop"
 )
+
 AESTHETIC_SUFFIX = (
-    ", photorealistic, visible skin texture, natural color, soft filmic contrast, gentle micro-sharpen, "
-    "anatomically plausible facial landmarks, natural interocular distance"
+    ", photorealistic, visible fine skin texture, natural color, soft filmic contrast, "
+    "micro-sharpen only on eyes and lips, anatomically plausible facial landmarks"
 )
 
 # --- Pretty mode (мягкая красота без пластика) ---
 PRETTY_MODE = os.getenv("PRETTY_MODE", "1").lower() in ("1","true","yes","y")
 PRETTY_POS = (
     "subtle beauty retouch, even skin tone, faint under-eye smoothing, "
-    "soft diffusion on highlights, slight glow, healthy complexion, "
-    "delicate catchlights, softened nasolabial shadows, gentle friendly smile, "
-    "micro-contrast on eyes and lips, tidy eyebrows"
+    "slight glow, healthy complexion, delicate catchlights, tidy eyebrows, "
+    "gentle friendly smile"
 )
 PRETTY_NEG = (
-    "harsh pores, deep nasolabial folds, eye bags, blotchy redness, "
-    "oily hotspot shine, over-sharpened skin, beauty filter"
+    "harsh pores, deep nasolabial folds, prominent eye bags, blotchy redness, oily hotspot shine, oversharpened skin, beauty filter"
 )
 PRETTY_COMP_HINT = "camera slightly above eye level, flattering portrait angle"
 
@@ -103,8 +103,9 @@ def _inject_pretty(core_prompt: str, comp_text: str) -> str:
     if not PRETTY_MODE:
         return core_prompt
     parts = [core_prompt]
-    if PRETTY_POS: parts.append(PRETTY_POS)
-    if PRETTY_COMP_HINT and "camera at eye level" in comp_text:
+    if PRETTY_POS:
+        parts.append(PRETTY_POS)
+    if PRETTY_COMP_HINT and ("eye level" in comp_text or "chest level" in comp_text):
         parts.append(PRETTY_COMP_HINT)
     return ", ".join(parts)
 
@@ -112,50 +113,52 @@ def _beauty_guardrail() -> str:
     return (
         "exact facial identity, identity preserved, "
         "balanced facial proportions, symmetrical face, natural oval, soft jawline, "
-        "smooth cheek contour, relaxed neutral expression, subtle gentle smile, "
-        "open expressive almond-shaped eyes, clean catchlights, clear irises, "
-        "realistic body proportions, proportional shoulders and waist, natural posture"
+        "smooth cheek contour, relaxed neutral expression, open expressive eyes, clean catchlights"
     )
 
 def _face_lock() -> str:
     return (
-        "exact same face as the training photos, do not alter bone structure, "
-        "natural interocular distance, consistent eyelid shape, pupils aligned, "
-        "preserve cheekbone widths and lip fullness"
+        "keep same bone structure, natural interocular distance, consistent eyelid shape, "
+        "aligned pupils, preserve cheekbone width and lip fullness"
     )
 
 def _anti_distort() -> str:
-    return ("no fisheye, no lens distortion, no warping, no stretched face, "
-            "natural perspective, proportional head size, realistic human anatomy")
+    return ("no fisheye, no lens distortion, no warping, natural perspective, proportional head size")
 
 def _gender_lock(gender:str) -> Tuple[str, str]:
     if gender == "female":
         pos = "female woman, feminine facial features"
         neg = "male, man, beard, stubble, mustache, adam's apple"
     else:
-        pos = "male man, masculine facial features"
-        neg = "female, woman, long eyelashes makeup, visible breasts"
+        pos = "male man, masculine facial features, light stubble allowed"
+        neg = "female, woman, heavy mascara, long eyelashes makeup"
     return pos, neg
 
 # ---------- Композиция/линза/свет ----------
 def _comp_text_and_size(comp: str) -> Tuple[str, Tuple[int,int]]:
     if comp == "closeup":
-        return ("portrait framing from chest up, 85mm lens look, camera at eye level, subject distance 1.2m, "
-                "no perspective distortion on face", (896, 1152))
+        return (
+            "portrait framing from chest up, 85mm lens look, camera at eye level, subject distance ~1.0m, "
+            "no perspective distortion on face", (896, 1152)
+        )
     if comp == "half":
-        return ("half body framing, 85mm lens look, camera at chest level, subject distance 2.5m, "
-                "no perspective distortion on face", (896, 1344))
-    return ("full body framing, 85mm lens look, camera at mid-torso level, head size natural for frame, "
-            "no perspective distortion on face", (896, 1408))
+        return (
+            "half body framing, 85mm lens look, camera at chest level, subject distance ~2.0m, "
+            "no perspective distortion on face", (GEN_WIDTH, GEN_HEIGHT if GEN_HEIGHT>1200 else 1344)
+        )
+    return (
+        "full body framing, 85mm lens look, camera at mid-torso level, head size natural for frame, "
+        "no perspective distortion on face", (GEN_WIDTH, 1408)
+    )
 
 def _tone_text(tone: str) -> str:
     return {
         "daylight": "soft natural daylight, neutral colors",
-        "warm":     "golden hour warmth, gentle highlights",
-        "cool":     "cool cinematic light, clean color balance",
-        "noir":     "high contrast noir lighting, strong rim light, subtle haze",
-        "neon":     "neon signs, wet reflections, cinematic backlight, vibrant saturation",
-        "candle":   "warm candlelight, soft glow, volumetric rays",
+        "warm": "golden hour warmth, gentle highlights",
+        "cool": "cool cinematic light, clean color balance",
+        "noir": "high contrast noir lighting, subtle rim light",
+        "neon": "neon signs, wet reflections, cinematic backlight, vibrant saturation",
+        "candle": "warm candlelight, soft glow, volumetric rays",
     }.get(tone, "balanced soft lighting")
 
 # ---------- logging ----------
@@ -261,11 +264,14 @@ def delete_profile(uid:int):
         with contextlib.suppress(Exception):
             _redis.delete(f"profile:{uid}")
     p = user_dir(uid)
-    if p.exists(): shutil.rmtree(p)
+    if p.exists():
+        shutil.rmtree(p)
     p.mkdir(parents=True, exist_ok=True)
 
 def save_ref_downscaled(path: Path, raw: bytes, max_side=1024, quality=92):
-    im = Image.open(io.BytesIO(raw)).convert("RGB"); im.thumbnail((max_side, max_side)); im.save(path, "JPEG", quality=quality)
+    im = Image.open(io.BytesIO(raw)).convert("RGB")
+    im.thumbnail((max_side, max_side))
+    im.save(path, "JPEG", quality=quality)
 
 # ---------- Аватарные утилиты ----------
 def get_current_avatar_name(prof:Dict[str,Any]) -> str:
@@ -292,7 +298,7 @@ def ensure_avatar(uid:int, name:str):
     prof = load_profile(uid)
     if name not in prof["avatars"]:
         prof["avatars"][name] = DEFAULT_AVATAR.copy()
-        save_profile(uid, prof)
+    save_profile(uid, prof)
 
 def del_avatar(uid:int, name:str):
     prof = load_profile(uid)
@@ -302,7 +308,8 @@ def del_avatar(uid:int, name:str):
         return
     adir = avatar_dir(uid, name)
     with contextlib.suppress(Exception):
-        if adir.exists(): shutil.rmtree(adir)
+        if adir.exists():
+            shutil.rmtree(adir)
     prof["avatars"].pop(name, None)
     if prof["current_avatar"] == name:
         prof["current_avatar"] = "default"
@@ -310,13 +317,17 @@ def del_avatar(uid:int, name:str):
 
 # ---------- Replicate helpers ----------
 def resolve_model_version(slug: str) -> str:
-    if ":" in slug: return slug
-    model = replicate.models.get(slug); versions = list(model.versions.list())
-    if not versions: raise RuntimeError(f"Нет версий модели {slug}")
+    if ":" in slug:
+        return slug
+    model = replicate.models.get(slug)
+    versions = list(model.versions.list())
+    if not versions:
+        raise RuntimeError(f"Нет версий модели {slug}")
     return f"{slug}:{versions[0].id}"
 
 def extract_any_url(out: Any) -> Optional[str]:
-    if isinstance(out, str) and out.startswith(("http","https")): return out
+    if isinstance(out, str) and out.startswith(("http","https")):
+        return out
     if isinstance(out, list):
         for v in out:
             u = extract_any_url(v)
@@ -346,8 +357,10 @@ def _infer_gender_from_image(path: Path) -> Optional[str]:
                     pred.wait()
                     out = pred.output
                     g = (out.get("gender") if isinstance(out, dict) else str(out)).lower()
-                    if "female" in g or "woman" in g: return "female"
-                    if "male" in g or "man" in g: return "male"
+                    if "female" in g or "woman" in g:
+                        return "female"
+                    if "male" in g or "man" in g:
+                        return "male"
                 except Exception as e:
                     logger.warning("Gender key '%s' failed: %s", key, e)
     except Exception as e:
@@ -358,7 +371,8 @@ def auto_detect_gender(uid:int) -> str:
     prof = load_profile(uid)
     av_name = get_current_avatar_name(prof)
     refs = list_ref_images(uid, av_name)
-    if not refs: return "female"
+    if not refs:
+        return "female"
     g = _infer_gender_from_image(refs[0])
     return g or "female"
 
@@ -391,8 +405,8 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_b
             _style_lock(role, outfit, props, bg, comp_text),
             tone_text,
             gpos,
-            f"same person as the training photos, no ethnicity change, {age_lock}exact facial identity, identity preserved",
-            "photorealistic, realistic body proportions, natural skin texture, filmic look",
+            "same person as the training photos, no ethnicity change, " + age_lock + "exact facial identity, identity preserved +++",
+            "photorealistic, realistic body proportions, natural fine skin texture, filmic look",
             anti,
             _beauty_guardrail(),
             _face_lock(),
@@ -407,8 +421,8 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_b
     core = ", ".join([
         f"{base_prompt}, {comp_text}, {tone_text}",
         gpos,
-        f"same person as the training photos, {age_lock}exact facial identity, identity preserved",
-        "cinematic key light and rim light, soft bounce fill, film grain subtle",
+        "same person as the training photos, " + age_lock + "exact facial identity, identity preserved +++",
+        "cinematic key light and rim light, soft bounce fill, subtle film grain",
         "skin tone faithful",
         anti,
         _beauty_guardrail(),
@@ -425,13 +439,15 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
     out = replicate.run(mv, input={
         "prompt": prompt + AESTHETIC_SUFFIX,
         "negative_prompt": negative_prompt,
-        "width": w, "height": h,
+        "width": w,
+        "height": h,
         "num_inference_steps": min(MAX_STEPS, steps),
         "guidance_scale": guidance,
         "seed": seed,
     })
     url = extract_any_url(out)
-    if not url: raise RuntimeError("Empty output")
+    if not url:
+        raise RuntimeError("Empty output")
     return url
 
 def generate_with_instantid(face_path: Path, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
@@ -441,23 +457,23 @@ def generate_with_instantid(face_path: Path, prompt:str, steps:int, guidance:flo
             "face_image": fb,
             "prompt": prompt + AESTHETIC_SUFFIX,
             "negative_prompt": negative_prompt,
-            "width": w, "height": h,
+            "width": w,
+            "height": h,
             "num_inference_steps": min(MAX_STEPS, steps),
             "guidance_scale": guidance,
             "seed": seed,
         })
     url = extract_any_url(out)
-    if not url: raise RuntimeError("Empty output (InstantID)")
+    if not url:
+        raise RuntimeError("Empty output (InstantID)")
     return url
 
 # ---------- UI ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton("🧭 Выбрать стиль", callback_data="nav:styles")],
-        [InlineKeyboardButton("📸 Набор фото", callback_data="nav:enroll"),
-         InlineKeyboardButton("🧪 Обучение", callback_data="nav:train")],
-        [InlineKeyboardButton("ℹ️ Мой статус", callback_data="nav:status"),
-         InlineKeyboardButton("⚙️ Пол", callback_data="nav:gender")],
+        [InlineKeyboardButton("📸 Набор фото", callback_data="nav:enroll"), InlineKeyboardButton("🧪 Обучение", callback_data="nav:train")],
+        [InlineKeyboardButton("ℹ️ Мой статус", callback_data="nav:status"), InlineKeyboardButton("⚙️ Пол", callback_data="nav:gender")],
         [InlineKeyboardButton("🔒 LOCKFACE", callback_data="nav:lockface")],
         [InlineKeyboardButton("🤖 Аватары", callback_data="nav:avatars")]
     ]
@@ -468,7 +484,8 @@ def categories_kb() -> InlineKeyboardMarkup:
     rows, row = [], []
     for i, name in enumerate(names, 1):
         row.append(InlineKeyboardButton(name, callback_data=f"cat:{name}"))
-        if i % 2 == 0: rows.append(row); row=[]
+        if i % 2 == 0:
+            rows.append(row); row=[]
     if row: rows.append(row)
     rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="nav:menu")])
     return InlineKeyboardMarkup(rows)
@@ -550,7 +567,7 @@ async def styles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cb_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     cat = q.data.split(":",1)[1]
-    await q.message.reply_text(f"Стиль — {cat}.\nВыбери сцену:", reply_markup=styles_kb_for_category(cat))
+    await q.message.reply_text(f"Стиль — {cat}. Выбери сцену:", reply_markup=styles_kb_for_category(cat))
 
 async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -639,7 +656,7 @@ async def lockface_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     av["lockface"] = not av.get("lockface", False)
     save_profile(uid, prof)
     state = "включён" if av["lockface"] else "выключен"
-    await update.effective_message.reply_text(f"LOCKFACE {state} для активного аватара. В рискованных пресетах он всё равно включается автоматически.")
+    await update.effective_message.reply_text(f"LOCKFACE {state} для активного аватара. В рискованных пресетах он включается автоматически.")
 
 # ---- Аватарные команды ----
 async def avatarnew_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -669,7 +686,7 @@ async def avatarlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["Твои аватары:"]
     for n, av in prof["avatars"].items():
         refs = len(list_ref_images(uid, n))
-        lines.append(f"{'▶️' if n==cur else '  '} {n}: фото {refs}, статус: {av.get('status') or '—'}, верс: {av.get('finetuned_version') or '—'}")
+        lines.append(f"{'▶️' if n==cur else ' '} {n}: фото {refs}, статус: {av.get('status') or '—'}, верс: {av.get('finetuned_version') or '—'}")
     await update.message.reply_text("\n".join(lines), reply_markup=avatars_kb(uid))
 
 async def avatardel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -679,8 +696,7 @@ async def avatardel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args[:]
     force = False
     if "--force" in args:
-        force = True
-        args.remove("--force")
+        force = True; args.remove("--force")
     name = " ".join(args).strip()
     if name == "default":
         await update.message.reply_text("«default» удалять нельзя — на нём дом держится 😅"); return
@@ -697,18 +713,21 @@ async def avatardel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- Обучение / Генерация ----
 def _dest_model_slug(avatar:str) -> str:
-    if not DEST_OWNER: raise RuntimeError("REPLICATE_DEST_OWNER не задан.")
+    if not DEST_OWNER:
+        raise RuntimeError("REPLICATE_DEST_OWNER не задан.")
     return f"{DEST_OWNER}/{DEST_MODEL}"
 
 def _ensure_destination_exists(slug: str):
-    try: replicate.models.get(slug)
+    try:
+        replicate.models.get(slug)
     except Exception:
         o, name = slug.split("/",1)
         raise RuntimeError(f"Целевая модель '{slug}' не найдена. Создай на https://replicate.com/create (owner={o}, name='{name}').")
 
 def _pack_refs_zip(uid:int, avatar:str) -> Path:
     refs = list_ref_images(uid, avatar)
-    if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
+    if len(refs) < 10:
+        raise RuntimeError("Нужно 10 фото для обучения.")
     zpath = avatar_dir(uid, avatar) / "train.zip"
     with ZipFile(zpath, "w") as z:
         for i, p in enumerate(refs, 1):
@@ -747,12 +766,9 @@ def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str], Opti
     tid = av.get("training_id")
     if not tid:
         return ("not_started", None, None)
-
     client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
     tr = client.trainings.get(tid)
-
     status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
-
     err = None
     for key in ("error", "failure", "message", "reason", "detail"):
         try:
@@ -764,16 +780,16 @@ def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str], Opti
                 if msg: err = str(msg); break
         except Exception:
             pass
-
     if status != "succeeded":
         av["status"] = status
         save_profile(uid, prof)
         return (status, None, err)
 
     destination = getattr(tr, "destination", None) or (isinstance(tr, dict) and tr.get("destination")) \
-                  or av.get("finetuned_model") or _dest_model_slug(avatar)
+        or av.get("finetuned_model") or _dest_model_slug(avatar)
     version_id = getattr(tr, "output", None) if not isinstance(tr, dict) else tr.get("output")
-    if isinstance(version_id, dict): version_id = version_id.get("id") or version_id.get("version")
+    if isinstance(version_id, dict):
+        version_id = version_id.get("id") or version_id.get("version")
 
     slug_with_version = None
     try:
@@ -786,7 +802,8 @@ def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str], Opti
         try:
             model_obj = replicate.models.get(destination)
             versions = list(model_obj.versions.list())
-            if versions: slug_with_version = f"{destination}:{versions[0].id}"
+            if versions:
+                slug_with_version = f"{destination}:{versions[0].id}"
         except Exception:
             slug_with_version = destination
 
@@ -799,7 +816,7 @@ def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str], Opti
 
 def _pinned_slug(av: Dict[str, Any]) -> str:
     base = av.get("finetuned_model") or ""
-    ver  = av.get("finetuned_version")
+    ver = av.get("finetuned_version")
     return f"{base}:{ver}" if (base and ver) else base
 
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -811,8 +828,7 @@ async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(f"Запускаю обучение LoRA для «{av_name}» на Replicate…")
     try:
         training_id = await asyncio.to_thread(start_lora_training, uid, av_name)
-        await update.effective_message.reply_text(f"Стартанула. ID: `{training_id}`\nПроверяй /trainstatus время от времени.")
-        # Ссылка на логи
+        await update.effective_message.reply_text(f"Стартанула. ID: {training_id}\nПроверяй /trainstatus время от времени.")
         if DEST_OWNER and DEST_MODEL and training_id:
             await update.effective_message.reply_text(
                 f"Логи тренировки: https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{training_id}"
@@ -825,7 +841,6 @@ async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     prof = load_profile(uid)
     av_name = get_current_avatar_name(prof)
-
     status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
     av = get_avatar(prof, av_name)
     tid = av.get("training_id")
@@ -833,23 +848,19 @@ async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if status == "succeeded" and slug_with_ver:
         await update.effective_message.reply_text(
-            f"Готово ✅\nАватар: {av_name}\nМодель: `{slug_with_ver}`\nТеперь — «🧭 Выбрать стиль».",
+            f"Готово ✅\nАватар: {av_name}\nМодель: {slug_with_ver}\nТеперь — «🧭 Выбрать стиль».",
             reply_markup=categories_kb()
-        )
-        return
+        ); return
 
     if status in ("starting", "processing", "running", "queued", "pending"):
         await update.effective_message.reply_text(
             f"Статус «{av_name}»: {status}… В процессе{(' — см. логи: ' + train_url) if train_url else ''}."
-        )
-        return
+        ); return
 
     if status in ("failed", "canceled"):
         msg = f"⚠️ Тренировка «{av_name}»: {status.upper()}."
-        if err:
-            msg += f"\nПричина: {err}"
-        if train_url:
-            msg += f"\nЛоги: {train_url}"
+        if err: msg += f"\nПричина: {err}"
+        if train_url: msg += f"\nЛоги: {train_url}"
         msg += (
             "\n\nЧто проверить:\n"
             "• Целевая модель существует (REPLICATE_DEST_OWNER/DEST_MODEL).\n"
@@ -857,25 +868,23 @@ async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Кредиты Replicate не закончились.\n"
             "• Верны LORA_TRAINER_SLUG и LORA_INPUT_KEY."
         )
-        await update.effective_message.reply_text(msg)
-        return
+        await update.effective_message.reply_text(msg); return
 
     await update.effective_message.reply_text(f"Статус «{av_name}»: {status}. {('Логи: ' + train_url) if train_url else ''}")
+
+def _neg_with_gender(neg_base:str, gender_negative:str) -> str:
+    return neg_base + (", " + gender_negative if gender_negative else "")
 
 async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     preset = q.data.split(":",1)[1]
     await start_generation_for_preset(update, context, preset)
 
-def _neg_with_gender(neg_base:str, gender_negative:str) -> str:
-    return neg_base + (", " + gender_negative if gender_negative else "")
-
 async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
     uid = update.effective_user.id
     prof = load_profile(uid)
     av_name = get_current_avatar_name(prof)
     av = get_avatar(prof, av_name)
-
     if av.get("status") != "succeeded":
         await update.effective_message.reply_text(f"Модель аватара «{av_name}» ещё не готова. Сначала /trainid и дождись /trainstatus = succeeded.")
         return
@@ -885,13 +894,12 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     comp_text, (w,h) = _comp_text_and_size(meta.get("comp","half"))
     tone_text = _tone_text(meta.get("tone","daylight"))
     theme_boost = THEME_BOOST.get(preset, "")
-
     prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost)
     model_slug = _pinned_slug(av)
 
     # guidance/steps (pretty + лимит)
-    guidance = max(3.0, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE))
-    desired_steps = max(52, GEN_STEPS) if PRETTY_MODE else max(40, GEN_STEPS)
+    guidance = max(4.2, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE))
+    desired_steps = max(52, GEN_STEPS) if PRETTY_MODE else max(44, GEN_STEPS)
     steps = min(MAX_STEPS, desired_steps)
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
@@ -903,14 +911,19 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
         urls = []
         neg_base = _neg_with_gender(NEGATIVE_PROMPT, gender_negative)
 
-        do_lock = (av.get("lockface") is True) or (preset in RISKY_PRESETS)
+        # Включаем LOCKFACE по умолчанию для большей похожести (можно выключить в UI)
+        do_lock = True if av.get("lockface") is True else (preset in RISKY_PRESETS)
+        # Если InstantID не задан, падаем на чистую LoRA
+        if do_lock and not INSTANTID_SLUG:
+            do_lock = False
+
         face_refs = list_ref_images(uid, av_name)
         face_ref = face_refs[0] if face_refs else None
 
         for s in seeds:
-            if do_lock and face_ref and INSTANTID_SLUG:
+            if do_lock and face_ref:
                 try:
-                    inst_steps = min(MAX_STEPS, max(36, steps))
+                    inst_steps = min(MAX_STEPS, max(38, steps))
                     url = await asyncio.to_thread(
                         generate_with_instantid,
                         face_path=face_ref,
@@ -927,8 +940,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                             generate_from_finetune,
                             model_slug=model_slug,
                             prompt=prompt_core,
-                            steps=steps,
-                            guidance=guidance,
+                            steps=steps, guidance=guidance,
                             seed=s, w=w, h=h,
                             negative_prompt=neg_base
                         )
@@ -939,8 +951,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                     generate_from_finetune,
                     model_slug=model_slug,
                     prompt=prompt_core,
-                    steps=steps,
-                    guidance=guidance,
+                    steps=steps, guidance=guidance,
                     seed=s, w=w, h=h,
                     negative_prompt=neg_base
                 )
@@ -950,9 +961,10 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
             await update.effective_message.reply_photo(photo=u, caption=f"{preset} • {av_name} • вариант {i}{' • 🔒' if do_lock else ''}")
 
         await update.effective_message.reply_text(
-            "Хочешь фиксировать лицо во всех стилях — переключай LOCKFACE для этого аватара. "
+            "Если нужно фиксировать лицо во всех стилях — включай LOCKFACE для этого аватара. "
             "Нужно мягче/глянец — PRETTY_MODE уже включён; можно выключить командой /pretty."
         )
+
     except Exception as e:
         logging.exception("generation failed")
         await update.effective_message.reply_text(f"Ошибка генерации: {e}")
@@ -964,14 +976,15 @@ async def pretty_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Pretty mode: {'ON' if PRETTY_MODE else 'OFF'}")
 
 # ---------- System ----------
-async def _post_init(app): await app.bot.delete_webhook(drop_pending_updates=True)
+async def _post_init(app):
+    await app.bot.delete_webhook(drop_pending_updates=True)
 
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(_post_init).build()
 
     # Команды
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("menu", styles_cmd))
+    app.add_handler(CommandHandler("menu", start))  # возвращаем главное меню
     app.add_handler(CommandHandler("idenroll", id_enroll))
     app.add_handler(CommandHandler("iddone", id_done))
     app.add_handler(CommandHandler("idstatus", id_status))
@@ -1006,9 +1019,11 @@ def main():
     else:
         logger.info("InstantID disabled (no INSTANTID_SLUG).")
 
-    logger.info("Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s Pretty=%s MAX_STEPS=%s",
-                LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}",
-                GEN_WIDTH, GEN_HEIGHT, GEN_STEPS, GEN_GUIDANCE, PRETTY_MODE, MAX_STEPS)
+    logger.info(
+        "Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s Pretty=%s MAX_STEPS=%s",
+        LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}", GEN_WIDTH, GEN_HEIGHT,
+        GEN_STEPS, GEN_GUIDANCE, PRETTY_MODE, MAX_STEPS
+    )
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
