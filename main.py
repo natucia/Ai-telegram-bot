@@ -1,5 +1,7 @@
 # === Telegram LoRA Bot (Flux LoRA trainer + HARD styles + Redis persist + Identity/Gender locks + LOCKFACE fallback + MULTI-AVATARS) ===
 # Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1
+from typing import Any, Dict, List, Optional, Tuple
+Style = Dict[str, Any]
 from styles import (
     STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST,
     SCENE_GUIDANCE, RISKY_PRESETS
