@@ -53,19 +53,21 @@ GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "4.2"))
 GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "896"))
 GEN_HEIGHT    = int(os.getenv("GEN_HEIGHT", "1152"))
 
+# ---- Anti-drift negatives / aesthetics
 NEGATIVE_PROMPT = (
     "cartoon, anime, 3d, cgi, beauty filter, skin smoothing, waxy, overprocessed, oversharpen, "
     "lowres, blur, jpeg artifacts, text, watermark, logo, bad anatomy, extra fingers, short fingers, "
     "puffy face, swollen face, bulky masseter, wide jaw, clenched jaw, duckface, overfilled lips, "
-    "narrow eyes, cross-eye, asymmetrical eyes, misaligned pupils, "
+    "cross-eye, misaligned pupils, double pupils, heterochromia, mismatched eye direction, "
+    "identity drift, different person, ethnicity change, age change, face morph, face swap, "
+    "eye spacing change, stretched face, narrowed eyes, exaggerated eyelid fold, "
+    "fisheye, lens distortion, warped face, deformed skull, tiny head, giant head on small body, "
     "bodybuilder female, extreme makeup, heavy contouring, "
-    "casual clothing, casual street background, plain studio background, selfie, tourist photo, "
-    "identity drift, different person, ethnicity change, age change, "
-    "fisheye, lens distortion, warped face, stretched face, deformed skull, "
-    "double pupils, misaligned eyes"
+    "casual clothing, casual street background, plain studio background, selfie, tourist photo"
 )
 AESTHETIC_SUFFIX = (
-    ", photorealistic, visible skin texture, natural color, soft filmic contrast, gentle micro-sharpen, no beautification"
+    ", photorealistic, visible skin texture, natural color, soft filmic contrast, gentle micro-sharpen, "
+    "no beautification, anatomically plausible facial landmarks, natural interocular distance"
 )
 
 def _beauty_guardrail() -> str:
@@ -77,6 +79,14 @@ def _beauty_guardrail() -> str:
         "realistic body proportions, proportional shoulders and waist, natural posture"
     )
 
+def _face_lock() -> str:
+    return (
+        "exact same face as the training photos, do not alter ethnicity or bone structure, "
+        "natural interocular distance, consistent eyelid shape, iris size consistent, "
+        "pupils aligned, symmetric canthus positions, "
+        "preserve nasion and cheekbone widths, keep lip fullness natural"
+    )
+
 def _anti_distort() -> str:
     return ("no fisheye, no lens distortion, no warping, no stretched face, "
             "natural perspective, proportional head size, realistic human anatomy")
@@ -84,22 +94,22 @@ def _anti_distort() -> str:
 def _gender_lock(gender:str) -> Tuple[str, str]:
     if gender == "female":
         pos = "female woman, feminine facial features"
-        neg = "male, man, masculine face, beard, stubble, mustache, adam's apple, broad jaw, thick neck"
+        neg = "male, man, beard, stubble, mustache, adam's apple"
     else:
         pos = "male man, masculine facial features"
-        neg = "female, woman, feminine face, makeup eyelashes, narrow shoulders, breasts"
+        neg = "female, woman, long eyelashes makeup, visible breasts"
     return pos, neg
 
 # ---------- Композиция/линза/свет ----------
 def _comp_text_and_size(comp: str) -> Tuple[str, Tuple[int,int]]:
     if comp == "closeup":
-        return ("portrait framing from chest up, 85mm lens look, subject distance 1.2m, shallow depth of field",
-                (896, 1152))
+        return ("portrait framing from chest up, 85mm lens look, camera at eye level, subject distance 1.2m, "
+                "no perspective distortion on face", (896, 1152))
     if comp == "half":
-        return ("half body framing, 85mm lens look, subject distance 2.5m, shallow depth of field",
-                (896, 1344))
-    return ("full body framing, 85mm lens look, subject distance 5m, natural perspective",
-            (896, 1408))
+        return ("half body framing, 85mm lens look, camera at chest level, subject distance 2.5m, "
+                "no perspective distortion on face", (896, 1344))
+    return ("full body framing, 85mm lens look, camera at mid-torso level, head size natural for frame, "
+            "no perspective distortion on face", (896, 1408))
 
 def _tone_text(tone: str) -> str:
     return {
@@ -391,12 +401,12 @@ THEME_BOOST = {
     "Королева":       "subtle film grain, ceremonial ambience",
 }
 
-# Точечный буст послушности для сцен, где часто уводит
+# Пониженная «послушность» (CFG) в сценах, которые чаще «перекрашивают» лицо
 SCENE_GUIDANCE = {
-    "Киберпанк улица": 4.8,
-    "Космический скафандр": 4.6,
-    "Самурай в храме": 4.6,
-    "Средневековый рыцарь": 4.6,
+    "Киберпанк улица": 3.6,
+    "Космический скафандр": 3.6,
+    "Самурай в храме": 3.6,
+    "Средневековый рыцарь": 3.6,
 }
 
 # ---------- logging ----------
@@ -634,6 +644,7 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_b
             "photorealistic, realistic body proportions, natural skin texture, filmic look",
             anti,
             _beauty_guardrail(),
+            _face_lock(),
             theme_boost
         ])
         core += ", the costume and background must clearly communicate the role; avoid plain portrait"
@@ -648,6 +659,7 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_b
         "skin tone faithful",
         anti,
         _beauty_guardrail(),
+        _face_lock(),
         theme_boost
     ])
     return core, gneg
@@ -841,7 +853,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost)
     model_slug = _pinned_slug(prof)
 
-    # guidance с учётом сцены
+    # guidance с учётом сцены (понижен в рисковых стилях)
     guidance = max(3.2, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE))
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
