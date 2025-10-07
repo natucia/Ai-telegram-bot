@@ -1,18 +1,22 @@
-# === Telegram LoRA Bot (Flux LoRA trainer + HARD styles + Redis persist + Identity/Gender locks + LOCKFACE fallback + MULTI-AVATARS) ===
+# === Telegram LoRA Bot (Flux LoRA trainer + HARD styles + Redis persist
+# + Identity/Gender locks + LOCKFACE fallback + MULTI-AVATARS + PRETTY MODE) ===
 # Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1
+
 from typing import Any, Dict, List, Optional, Tuple
-Style = Dict[str, Any]
-from styles import (
+Style = Dict[str, Any]  # алиас типа для аннотаций
+
+from styles import (  # твои словари лежат в styles.py без изменений
     STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST,
     SCENE_GUIDANCE, RISKY_PRESETS
 )
+
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 from zipfile import ZipFile
 
 import replicate
 from replicate import Client
+from replicate.exceptions import ReplicateError
 from PIL import Image
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -42,7 +46,7 @@ LORA_INPUT_KEY    = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
 
 # --- LOCKFACE (InstantID / FaceID adapter) ---
-INSTANTID_SLUG = os.getenv("INSTANTID_SLUG", "fofr/flux-instantid").strip()  # поменяй при необходимости
+INSTANTID_SLUG = os.getenv("INSTANTID_SLUG", "cjwbw/flux-instantid").strip()  # можно поменять
 
 # --- Твики обучения ---
 LORA_MAX_STEPS     = int(os.getenv("LORA_MAX_STEPS", "1400"))
@@ -55,7 +59,7 @@ LORA_CAPTION_PREF  = os.getenv(
     "balanced facial proportions, soft jawline, clear eyes"
 ).strip()
 
-# --- Генерация ---
+# --- Генерация (глобальные дефолты; далее можем мягко править) ---
 GEN_STEPS     = int(os.getenv("GEN_STEPS", "48"))
 GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "4.2"))
 GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "896"))
@@ -63,7 +67,7 @@ GEN_HEIGHT    = int(os.getenv("GEN_HEIGHT", "1152"))
 
 # ---- Anti-drift negatives / aesthetics
 NEGATIVE_PROMPT = (
-    "cartoon, anime, 3d, cgi, beauty filter, skin smoothing, waxy, overprocessed, oversharpen, "
+    "cartoon, anime, 3d, cgi, plastic skin, overprocessed, oversharpen, "
     "lowres, blur, jpeg artifacts, text, watermark, logo, bad anatomy, extra fingers, short fingers, "
     "puffy face, swollen face, bulky masseter, wide jaw, clenched jaw, duckface, overfilled lips, "
     "cross-eye, misaligned pupils, double pupils, heterochromia, mismatched eye direction, "
@@ -71,12 +75,35 @@ NEGATIVE_PROMPT = (
     "eye spacing change, stretched face, narrowed eyes, exaggerated eyelid fold, "
     "fisheye, lens distortion, warped face, deformed skull, tiny head, giant head on small body, "
     "bodybuilder female, extreme makeup, heavy contouring, "
-    "casual clothing, casual street background, plain studio background, selfie, tourist photo"
+    "casual clothing, plain studio background, selfie, tourist photo"
 )
 AESTHETIC_SUFFIX = (
     ", photorealistic, visible skin texture, natural color, soft filmic contrast, gentle micro-sharpen, "
-    "no beautification, anatomically plausible facial landmarks, natural interocular distance"
+    "anatomically plausible facial landmarks, natural interocular distance"
 )
+
+# --- Pretty mode (мягкая красота без пластика) ---
+PRETTY_MODE = os.getenv("PRETTY_MODE", "1").lower() in ("1","true","yes","y")
+PRETTY_POS = (
+    "subtle beauty retouch, even skin tone, faint under-eye smoothing, "
+    "soft diffusion on highlights, slight glow, healthy complexion, "
+    "delicate catchlights, softened nasolabial shadows, gentle friendly smile, "
+    "micro-contrast on eyes and lips, tidy eyebrows"
+)
+PRETTY_NEG = (
+    "harsh pores, deep nasolabial folds, eye bags, blotchy redness, "
+    "oily hotspot shine, over-sharpened skin, beauty filter"
+)
+PRETTY_COMP_HINT = "camera slightly above eye level, flattering portrait angle"
+
+def _inject_pretty(core_prompt: str, comp_text: str) -> str:
+    if not PRETTY_MODE:
+        return core_prompt
+    parts = [core_prompt]
+    if PRETTY_POS: parts.append(PRETTY_POS)
+    if PRETTY_COMP_HINT and "camera at eye level" in comp_text:
+        parts.append(PRETTY_COMP_HINT)
+    return ", ".join(parts)
 
 def _beauty_guardrail() -> str:
     return (
@@ -136,22 +163,6 @@ logger = logging.getLogger("bot")
 DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
 
 # === МУЛЬТИ-АВАТАРЫ: структура профиля ===
-# профайл верхнего уровня: {
-#   gender: "female" | "male" | None,
-#   current_avatar: "default",
-#   avatars: {
-#     "<name>": {
-#        images: [ "ref_xxx.jpg", ... ]  # лежат в profiles/<uid>/avatars/<name>/
-#        training_id: str | None
-#        finetuned_model: str | None
-#        finetuned_version: str | None
-#        status: str | None
-#        lockface: bool
-#     },
-#     ...
-#   }
-# }
-
 DEFAULT_AVATAR = {
     "images": [],
     "training_id": None,
@@ -170,36 +181,28 @@ DEFAULT_PROFILE = {
 
 def user_dir(uid:int) -> Path:
     p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
-
 def avatars_root(uid:int) -> Path:
     p = user_dir(uid) / "avatars"; p.mkdir(parents=True, exist_ok=True); return p
-
 def avatar_dir(uid:int, avatar:str) -> Path:
     p = avatars_root(uid) / avatar; p.mkdir(parents=True, exist_ok=True); return p
-
 def list_ref_images(uid:int, avatar:str) -> List[Path]:
     return sorted(avatar_dir(uid, avatar).glob("ref_*.jpg"))
-
 def profile_path(uid:int) -> Path:
     return user_dir(uid) / "profile.json"
 
 def _migrate_single_to_multi(uid:int, prof:Dict[str,Any]) -> Dict[str,Any]:
-    """Миграция старой схемы в новую (одна модель → avatars/default)."""
     if "avatars" in prof:
-        return prof  # уже новая схема
+        return prof
     migrated = DEFAULT_PROFILE.copy()
     migrated["gender"] = prof.get("gender")
-    # перенести одиночные поля в default
     default = DEFAULT_AVATAR.copy()
     default["training_id"] = prof.get("training_id")
     default["finetuned_model"] = prof.get("finetuned_model")
     default["finetuned_version"] = prof.get("finetuned_version")
     default["status"] = prof.get("status")
     default["lockface"] = prof.get("lockface", False)
-    # перенос списка изображений (если был)
     imgs = prof.get("images", [])
     if imgs:
-        # переместить файлы в avatars/default
         for name in imgs:
             src = user_dir(uid) / name
             if src.exists():
@@ -267,8 +270,7 @@ def save_ref_downscaled(path: Path, raw: bytes, max_side=1024, quality=92):
 def get_current_avatar_name(prof:Dict[str,Any]) -> str:
     name = prof.get("current_avatar") or "default"
     if name not in prof["avatars"]:
-        name = "default"
-        prof["current_avatar"] = name
+        name = "default"; prof["current_avatar"] = name
     return name
 
 def get_avatar(prof:Dict[str,Any], name:Optional[str]=None) -> Dict[str,Any]:
@@ -297,12 +299,9 @@ def del_avatar(uid:int, name:str):
         raise RuntimeError("Нельзя удалить аватар 'default'.")
     if name not in prof["avatars"]:
         return
-    # снести папку с фотками
     adir = avatar_dir(uid, name)
     with contextlib.suppress(Exception):
-        if adir.exists():
-            shutil.rmtree(adir)
-    # убрать из профиля
+        if adir.exists(): shutil.rmtree(adir)
     prof["avatars"].pop(name, None)
     if prof["current_avatar"] == name:
         prof["current_avatar"] = "default"
@@ -327,6 +326,13 @@ def extract_any_url(out: Any) -> Optional[str]:
             if u: return u
     return None
 
+def _check_slug(slug: str, label: str):
+    try:
+        mv = resolve_model_version(slug)
+        logger.info("%s OK: %s", label, mv)
+    except Exception as e:
+        logger.warning("%s BAD ('%s'): %s", label, slug, e)
+
 # ---------- авто-пол (общий для всех аватаров) ----------
 def _infer_gender_from_image(path: Path) -> Optional[str]:
     try:
@@ -349,103 +355,13 @@ def _infer_gender_from_image(path: Path) -> Optional[str]:
 
 def auto_detect_gender(uid:int) -> str:
     prof = load_profile(uid)
-    av = get_avatar(prof)  # текущий
-    refs = list_ref_images(uid, get_current_avatar_name(prof))
+    av_name = get_current_avatar_name(prof)
+    refs = list_ref_images(uid, av_name)
     if not refs: return "female"
     g = _infer_gender_from_image(refs[0])
     return g or "female"
 
-# ---------- LoRA training ----------
-def _pack_refs_zip(uid:int, avatar:str) -> Path:
-    refs = list_ref_images(uid, avatar)
-    if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
-    zpath = avatar_dir(uid, avatar) / "train.zip"
-    with ZipFile(zpath, "w") as z:
-        for i, p in enumerate(refs, 1):
-            z.write(p, arcname=f"img_{i:02d}.jpg")
-    return zpath
-
-def _dest_model_slug(avatar:str) -> str:
-    # Для простоты — одна «база» модели с разными версиями. Можно добавить префикс по аватару в name, если хочешь разнести.
-    if not DEST_OWNER: raise RuntimeError("REPLICATE_DEST_OWNER не задан.")
-    return f"{DEST_OWNER}/{DEST_MODEL}"
-
-def _ensure_destination_exists(slug: str):
-    try: replicate.models.get(slug)
-    except Exception:
-        o, name = slug.split("/",1)
-        raise RuntimeError(f"Целевая модель '{slug}' не найдена. Создай на https://replicate.com/create (owner={o}, name='{name}').")
-
-def start_lora_training(uid:int, avatar:str) -> str:
-    dest_model = _dest_model_slug(avatar); _ensure_destination_exists(dest_model)
-    trainer_version = resolve_model_version(LORA_TRAINER_SLUG)
-    zip_path = _pack_refs_zip(uid, avatar)
-    client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-    with open(zip_path, "rb") as f:
-        training = client.trainings.create(
-            version=trainer_version,
-            input={
-                LORA_INPUT_KEY: f,
-                "max_train_steps": LORA_MAX_STEPS,
-                "lora_lr": LORA_LR,
-                "use_face_detection_instead": LORA_USE_FACE_DET,
-                "caption_prefix": LORA_CAPTION_PREF,
-                "resolution": LORA_RESOLUTION,
-            },
-            destination=dest_model
-        )
-    prof = load_profile(uid)
-    av = get_avatar(prof, avatar)
-    av["training_id"] = training.id
-    av["status"] = "starting"
-    av["finetuned_model"] = dest_model
-    save_profile(uid, prof)
-    return training.id
-
-def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str]]:
-    prof = load_profile(uid)
-    av = get_avatar(prof, avatar)
-    tid = av.get("training_id")
-    if not tid: return ("not_started", None)
-    client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-    tr = client.trainings.get(tid)
-    status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
-    if status != "succeeded":
-        av["status"] = status; save_profile(uid, prof); return (status, None)
-
-    destination = getattr(tr, "destination", None) or (isinstance(tr, dict) and tr.get("destination")) \
-                  or av.get("finetuned_model") or _dest_model_slug(avatar)
-    version_id = getattr(tr, "output", None) if not isinstance(tr, dict) else tr.get("output")
-    if isinstance(version_id, dict): version_id = version_id.get("id") or version_id.get("version")
-
-    slug_with_version = None
-    try:
-        if version_id:
-            replicate.models.get(f"{destination}:{version_id}")
-            slug_with_version = f"{destination}:{version_id}"
-    except Exception:
-        pass
-    if not slug_with_version:
-        try:
-            model_obj = replicate.models.get(destination)
-            versions = list(model_obj.versions.list())
-            if versions: slug_with_version = f"{destination}:{versions[0].id}"
-        except Exception:
-            slug_with_version = destination
-
-    av["status"] = status
-    av["finetuned_model"] = destination
-    if slug_with_version and ":" in slug_with_version:
-        av["finetuned_version"] = slug_with_version.split(":",1)[1]
-    save_profile(uid, prof)
-    return (status, slug_with_version)
-
-def _pinned_slug(av: Dict[str, Any]) -> str:
-    base = av.get("finetuned_model") or ""
-    ver  = av.get("finetuned_version")
-    return f"{base}:{ver}" if (base and ver) else base
-
-# ---------- Генерация ----------
+# ---------- Генерация промпта ----------
 def _style_lock(role:str, outfit:str, props:str, background:str, comp_hint:str) -> str:
     bits = [
         f"{role}" if role else "",
@@ -482,6 +398,8 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_b
             theme_boost
         ])
         core += ", the costume and background must clearly communicate the role; avoid plain portrait"
+        core = _inject_pretty(core, comp_text)
+        gneg = (gneg + ", " + PRETTY_NEG) if PRETTY_MODE else gneg
         return core, gneg
 
     base_prompt = meta.get("p", "")
@@ -496,8 +414,11 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_b
         _face_lock(),
         theme_boost
     ])
+    core = _inject_pretty(core, comp_text)
+    gneg = (gneg + ", " + PRETTY_NEG) if PRETTY_MODE else gneg
     return core, gneg
 
+# ---------- Инференс ----------
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
     mv = resolve_model_version(model_slug)
     out = replicate.run(mv, input={
@@ -520,8 +441,8 @@ def generate_with_instantid(face_path: Path, prompt:str, steps:int, guidance:flo
             "prompt": prompt + AESTHETIC_SUFFIX,
             "negative_prompt": negative_prompt,
             "width": w, "height": h,
-            "num_inference_steps": max(36, steps),
-            "guidance_scale": min(guidance, 3.5),
+            "num_inference_steps": steps,
+            "guidance_scale": guidance,
             "seed": seed,
         })
     url = extract_any_url(out)
@@ -553,9 +474,7 @@ def categories_kb() -> InlineKeyboardMarkup:
 
 def styles_kb_for_category(cat: str) -> InlineKeyboardMarkup:
     names = STYLE_CATEGORIES.get(cat, [])
-    rows = []
-    for name in names:
-        rows.append([InlineKeyboardButton(name, callback_data=f"style:{name}")])
+    rows = [[InlineKeyboardButton(name, callback_data=f"style:{name}")] for name in names]
     rows.append([InlineKeyboardButton("⬅️ Категории", callback_data="nav:styles")])
     return InlineKeyboardMarkup(rows)
 
@@ -673,7 +592,8 @@ async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Модель: {av.get('finetuned_model') or '—'}\n"
         f"Версия: {av.get('finetuned_version') or '—'}\n"
         f"Пол (общий): {prof.get('gender') or '—'}\n"
-        f"LOCKFACE (для аватара): {'on' if av.get('lockface') else 'off'}"
+        f"LOCKFACE (для аватара): {'on' if av.get('lockface') else 'off'}\n"
+        f"Pretty mode: {'ON' if PRETTY_MODE else 'OFF'}"
     )
 
 async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -773,7 +693,96 @@ async def avatardel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Не удалось удалить: {e}")
 
-# ---- Обучение / Генерация с учётом активного аватара ----
+# ---- Обучение / Генерация ----
+def _dest_model_slug(avatar:str) -> str:
+    if not DEST_OWNER: raise RuntimeError("REPLICATE_DEST_OWNER не задан.")
+    # Один общий DEST_MODEL для всех аватаров (версии различаются). Можно разнести по желанию.
+    return f"{DEST_OWNER}/{DEST_MODEL}"
+
+def _ensure_destination_exists(slug: str):
+    try: replicate.models.get(slug)
+    except Exception:
+        o, name = slug.split("/",1)
+        raise RuntimeError(f"Целевая модель '{slug}' не найдена. Создай на https://replicate.com/create (owner={o}, name='{name}').")
+
+def _pack_refs_zip(uid:int, avatar:str) -> Path:
+    refs = list_ref_images(uid, avatar)
+    if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
+    zpath = avatar_dir(uid, avatar) / "train.zip"
+    with ZipFile(zpath, "w") as z:
+        for i, p in enumerate(refs, 1):
+            z.write(p, arcname=f"img_{i:02d}.jpg")
+    return zpath
+
+def start_lora_training(uid:int, avatar:str) -> str:
+    dest_model = _dest_model_slug(avatar); _ensure_destination_exists(dest_model)
+    trainer_version = resolve_model_version(LORA_TRAINER_SLUG)
+    zip_path = _pack_refs_zip(uid, avatar)
+    client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+    with open(zip_path, "rb") as f:
+        training = client.trainings.create(
+            version=trainer_version,
+            input={
+                LORA_INPUT_KEY: f,
+                "max_train_steps": LORA_MAX_STEPS,
+                "lora_lr": LORA_LR,
+                "use_face_detection_instead": LORA_USE_FACE_DET,
+                "caption_prefix": LORA_CAPTION_PREF,
+                "resolution": LORA_RESOLUTION,
+            },
+            destination=dest_model
+        )
+    prof = load_profile(uid)
+    av = get_avatar(prof, avatar)
+    av["training_id"] = training.id
+    av["status"] = "starting"
+    av["finetuned_model"] = dest_model
+    save_profile(uid, prof)
+    return training.id
+
+def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str]]:
+    prof = load_profile(uid)
+    av = get_avatar(prof, avatar)
+    tid = av.get("training_id")
+    if not tid: return ("not_started", None)
+    client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+    tr = client.trainings.get(tid)
+    status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
+    if status != "succeeded":
+        av["status"] = status; save_profile(uid, prof); return (status, None)
+
+    destination = getattr(tr, "destination", None) or (isinstance(tr, dict) and tr.get("destination")) \
+                  or av.get("finetuned_model") or _dest_model_slug(avatar)
+    version_id = getattr(tr, "output", None) if not isinstance(tr, dict) else tr.get("output")
+    if isinstance(version_id, dict): version_id = version_id.get("id") or version_id.get("version")
+
+    slug_with_version = None
+    try:
+        if version_id:
+            replicate.models.get(f"{destination}:{version_id}")
+            slug_with_version = f"{destination}:{version_id}"
+    except Exception:
+        pass
+    if not slug_with_version:
+        try:
+            model_obj = replicate.models.get(destination)
+            versions = list(model_obj.versions.list())
+            if versions: slug_with_version = f"{destination}:{versions[0].id}"
+        except Exception:
+            slug_with_version = destination
+
+    av["status"] = status
+    av["finetuned_model"] = destination
+    if slug_with_version and ":" in slug_with_version:
+        av["finetuned_version"] = slug_with_version.split(":",1)[1]
+    save_profile(uid, prof)
+    return (status, slug_with_version)
+
+def _pinned_slug(av: Dict[str, Any]) -> str:
+    base = av.get("finetuned_model") or ""
+    ver  = av.get("finetuned_version")
+    return f"{base}:{ver}" if (base and ver) else base
+
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     prof = load_profile(uid)
@@ -828,8 +837,13 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost)
     model_slug = _pinned_slug(av)
 
-    # guidance: понижен для рискованных сцен
+    # guidance/steps с учётом pretty mode и рискованности сцены
     guidance = max(3.0, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE))
+    if PRETTY_MODE:
+        guidance = max(2.8, min(guidance, 3.6))
+        steps = max(52, GEN_STEPS)
+    else:
+        steps = max(40, GEN_STEPS)
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
@@ -847,21 +861,36 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
 
         for s in seeds:
             if do_lock and face_ref:
-                url = await asyncio.to_thread(
-                    generate_with_instantid,
-                    face_path=face_ref,
-                    prompt=prompt_core,
-                    steps=max(36, GEN_STEPS),
-                    guidance=guidance,
-                    seed=s, w=w, h=h,
-                    negative_prompt=neg_base
-                )
+                try:
+                    url = await asyncio.to_thread(
+                        generate_with_instantid,
+                        face_path=face_ref,
+                        prompt=prompt_core,
+                        steps=max(36, steps),
+                        guidance=guidance,
+                        seed=s, w=w, h=h,
+                        negative_prompt=neg_base
+                    )
+                except ReplicateError as e:
+                    if "Model not found" in str(e) or "404" in str(e):
+                        logger.warning("InstantID slug '%s' не найден. Фолбэк на LoRA.", INSTANTID_SLUG)
+                        url = await asyncio.to_thread(
+                            generate_from_finetune,
+                            model_slug=model_slug,
+                            prompt=prompt_core,
+                            steps=steps,
+                            guidance=guidance,
+                            seed=s, w=w, h=h,
+                            negative_prompt=neg_base
+                        )
+                    else:
+                        raise
             else:
                 url = await asyncio.to_thread(
                     generate_from_finetune,
                     model_slug=model_slug,
                     prompt=prompt_core,
-                    steps=max(40, GEN_STEPS),
+                    steps=steps,
                     guidance=guidance,
                     seed=s, w=w, h=h,
                     negative_prompt=neg_base
@@ -873,11 +902,17 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
 
         await update.effective_message.reply_text(
             "Хочешь фиксировать лицо во всех стилях — переключай LOCKFACE для этого аватара. "
-            "Для отдельных кадров напиши: «этот нрав — апскейл/вариации»."
+            "Нужно мягче/гламурнее — PRETTY_MODE уже включён; можно выключить командой /pretty."
         )
     except Exception as e:
         logging.exception("generation failed")
         await update.effective_message.reply_text(f"Ошибка генерации: {e}")
+
+# --- Pretty mode toggle (по желанию)
+async def pretty_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global PRETTY_MODE
+    PRETTY_MODE = not PRETTY_MODE
+    await update.message.reply_text(f"Pretty mode: {'ON' if PRETTY_MODE else 'OFF'}")
 
 # ---------- System ----------
 async def _post_init(app): await app.bot.delete_webhook(drop_pending_updates=True)
@@ -898,6 +933,7 @@ def main():
     app.add_handler(CommandHandler("trainid", trainid_cmd))
     app.add_handler(CommandHandler("trainstatus", trainstatus_cmd))
     app.add_handler(CommandHandler("styles", styles_cmd))
+    app.add_handler(CommandHandler("pretty", pretty_cmd))
 
     # Аватары
     app.add_handler(CommandHandler("avatarnew", avatarnew_cmd))
@@ -914,8 +950,13 @@ def main():
     # Фото
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    logger.info("Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s",
-                LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}", GEN_WIDTH, GEN_HEIGHT, GEN_STEPS, GEN_GUIDANCE)
+    # Быстрый пинг важный слагов в логах
+    _check_slug(LORA_TRAINER_SLUG, "LoRA trainer")
+    _check_slug(INSTANTID_SLUG, "InstantID")
+
+    logger.info("Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s Pretty=%s",
+                LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}",
+                GEN_WIDTH, GEN_HEIGHT, GEN_STEPS, GEN_GUIDANCE, PRETTY_MODE)
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
