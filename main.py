@@ -544,6 +544,34 @@ def avatars_kb(uid:int) -> InlineKeyboardMarkup:
                  InlineKeyboardButton("🗑 Удалить", callback_data="avatar:del")])
     rows.append([InlineKeyboardButton("⬅️ Меню", callback_data="nav:menu")])
     return InlineKeyboardMarkup(rows)
+# ----- Callback для кнопок "Аватары" -----
+async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = update.effective_user.id
+
+    parts = q.data.split(":")
+    # форматы: avatar:set:<name> | avatar:new | avatar:del
+    if len(parts) < 2:
+        return
+    action = parts[1]
+
+    if action == "set":
+        if len(parts) < 3:
+            await q.message.reply_text("Не указан аватар. Используй /avatarlist.")
+            return
+        name = parts[2]
+        set_current_avatar(uid, name)
+        await q.message.reply_text(f"Активный аватар: {name}", reply_markup=avatars_kb(uid))
+
+    elif action == "new":
+        await q.message.reply_text("Создай новый: /avatarnew <имя> (пример: /avatarnew travel)")
+
+    elif action == "del":
+        await q.message.reply_text("Удаление: /avatardel <имя> --force")
+
+    else:
+        await q.message.reply_text("Неизвестное действие. Открой «🤖 Аватары» ещё раз.")
 
 # ---------- Handlers ----------
 ENROLL_FLAG: Dict[Tuple[int,str],bool] = {}
