@@ -1,6 +1,9 @@
-# === Telegram LoRA Bot (Flux LoRA trainer + HARD styles + Redis persist + Identity/Gender locks + LOCKFACE fallback) ===
+# === Telegram LoRA Bot (Flux LoRA trainer + HARD styles + Redis persist + Identity/Gender locks + LOCKFACE fallback + MULTI-AVATARS) ===
 # Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1
-
+from styles import (
+    STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST,
+    SCENE_GUIDANCE, RISKY_PRESETS
+)
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -123,458 +126,6 @@ def _tone_text(tone: str) -> str:
         "candle":   "warm candlelight, soft glow, volumetric rays",
     }.get(tone, "balanced soft lighting")
 
-# ---------- Стили ----------
-Style = Dict[str, Any]
-STYLE_PRESETS: Dict[str, Style] = {
-    # ... (оставляю все твои пресеты без изменений — см. ниже полное содержимое)
-    # Портреты
-    "Портрет у окна": {
-        "desc": "Крупный кинопортрет у большого окна; мягкая тень от рамы, живое боке.",
-        "role": "cinematic window light portrait",
-        "outfit": "neutral top",
-        "props": "soft bokeh, window frame shadow on background",
-        "bg": "large window with daylight glow, interior blur",
-        "comp": "closeup", "tone": "daylight"
-    },
-    "Портрет 85мм": {
-        "desc": "Классика 85мм — мизерная ГРИП.",
-        "role": "85mm look beauty portrait",
-        "outfit": "minimal elegant top",
-        "props": "creamy bokeh, shallow depth of field",
-        "bg": "neutral cinematic backdrop",
-        "comp": "closeup", "tone": "warm"
-    },
-    "Бьюти студия": {
-        "desc": "Чистый студийный свет, кожа без «пластика».",
-        "role": "studio beauty portrait",
-        "outfit": "clean minimal outfit",
-        "props": "catchlights, controlled specular highlights",
-        "bg": "seamless studio background with soft light gradients",
-        "comp": "closeup", "tone": "daylight"
-    },
-    "Кинопортрет": {
-        "desc": "Рембрандтовский свет и мягкая плёнка.",
-        "role": "cinematic rembrandt light portrait",
-        "outfit": "neutral film wardrobe",
-        "props": "subtle film grain",
-        "bg": "moody backdrop with soft falloff",
-        "comp": "closeup", "tone": "cool"
-    },
-    "Фильм-нуар (портрет)": {
-        "desc": "Дым, жёсткие тени, свет из жалюзи.",
-        "role": "film noir portrait",
-        "outfit": "vintage attire",
-        "props": "venetian blinds light pattern, cigarette smoke curling",
-        "bg": "high contrast noir backdrop",
-        "comp": "closeup", "tone": "noir"
-    },
-    # Современные
-    "Стритвэр город": {
-        "desc": "Уличный лук, город дышит.",
-        "role": "streetwear fashion look",
-        "outfit_f": "crop top and joggers, sneakers",
-        "outfit": "hoodie and joggers, sneakers",
-        "props": "glass reflections, soft film grain",
-        "bg": "daytime city street with graffiti and shop windows",
-        "comp": "half", "tone": "daylight"
-    },
-    "Вечерний выход": {
-        "desc": "Красная дорожка и блеск.",
-        "role": "celebrity on red carpet",
-        "outfit_f": "elegant evening gown",
-        "outfit": "classic tuxedo",
-        "props": "press lights, velvet ropes, photographers",
-        "bg": "red carpet event entrance",
-        "comp": "half", "tone": "warm"
-    },
-    "Бизнес": {
-        "desc": "Лобби стеклянного офиса, строгая геометрия.",
-        "role": "corporate executive portrait",
-        "outfit_f": "tailored business suit",
-        "outfit": "tailored business suit",
-        "props": "tablet or folder",
-        "bg": "modern glass office lobby with depth",
-        "comp": "half", "tone": "daylight"
-    },
-    "Ночной неон": {
-        "desc": "Кибернуар, мокрый асфальт.",
-        "role": "urban night scene",
-        "outfit_f": "long coat, boots",
-        "outfit": "long coat, boots",
-        "props": "colored reflections on wet asphalt, light rain droplets",
-        "bg": "neon signs and steam from manholes",
-        "comp": "half", "tone": "neon"
-    },
-    # Профессии
-    "Врач у палаты": {
-        "desc": "Белый халат, стетоскоп, палата за спиной.",
-        "role": "medical doctor",
-        "outfit_f": "white lab coat, scrub cap, stethoscope",
-        "outfit": "white lab coat, scrub cap, stethoscope",
-        "props": "ID badge, clipboard",
-        "bg": "hospital ward interior with bed and monitors",
-        "comp": "half", "tone": "daylight"
-    },
-    "Хирург операционная": {
-        "desc": "Холодные приборы и блики.",
-        "role": "surgeon in the operating room",
-        "outfit": "surgical scrubs, mask, cap, gloves",
-        "props": "surgical lights and instruments",
-        "bg": "operating theatre with equipment",
-        "comp": "half", "tone": "cool"
-    },
-    "Шеф-повар кухня": {
-        "desc": "Огонь и пар, энергия ресторана.",
-        "role": "head chef",
-        "outfit": "white chef jacket and apron",
-        "props": "pan with flames, stainless steel counters, copper pans",
-        "bg": "professional restaurant kitchen",
-        "comp": "half", "tone": "warm"
-    },
-    "Учёный лаборатория": {
-        "desc": "Стекло, приборы, подсветки.",
-        "role": "scientist in a lab",
-        "outfit": "lab coat, safety glasses",
-        "props": "flasks, pipettes, LED indicators",
-        "bg": "modern laboratory benches and glassware",
-        "comp": "half", "tone": "cool"
-    },
-    "Боксер на ринге": {
-        "desc": "Жёсткий верхний свет, пот, канаты.",
-        "role": "boxer on the ring",
-        "outfit_f": "boxing sports bra and shorts, gloves",
-        "outfit": "boxing shorts and gloves, mouthguard visible",
-        "props": "ring ropes, sweat sheen, tape on wrists",
-        "bg": "boxing ring under harsh top lights",
-        "comp": "half", "tone": "cool"
-    },
-    "Фитнес зал": {
-        "desc": "Контровый свет между тренажёрами.",
-        "role": "fitness athlete training",
-        "outfit_f": "sports bra and leggings",
-        "outfit": "tank top and shorts",
-        "props": "chalk dust, dumbbells or cable machine",
-        "bg": "gym with machines and dramatic backlight",
-        "comp": "half", "tone": "cool"
-    },
-    # Приключения / Экшн
-    "Приключенец (руины)": {
-        "desc": "Пыльные лучи, древние камни.",
-        "role_f": "tomb raider explorer",
-        "role": "tomb raider explorer",
-        "outfit_f": "tactical outfit, fingerless gloves, utility belt",
-        "outfit": "tactical outfit, fingerless gloves, utility belt",
-        "props": "leather straps patina, map tube",
-        "bg": "ancient sandstone ruins with sun rays and dust motes",
-        "comp": "full", "tone": "warm"
-    },
-    "Пустынный исследователь": {
-        "desc": "Дюны, песок и жар.",
-        "role": "desert explorer",
-        "outfit": "scarf, cargo outfit, boots",
-        "props": "sand blowing in wind",
-        "bg": "sand dunes and canyon under harsh sun",
-        "comp": "full", "tone": "warm"
-    },
-    "Горы снег": {
-        "desc": "Суровая красота высокогорья.",
-        "role": "alpinist",
-        "outfit": "mountain jacket, harness, crampons",
-        "props": "ice axe in hand, spindrift",
-        "bg": "snow ridge and blue shadows, cloudy sky",
-        "comp": "full", "tone": "cool"
-    },
-    "Серфер": {
-        "desc": "Брызги, солнечные блики, доска.",
-        "role": "surfer athlete on a wave",
-        "outfit_f": "black wetsuit",
-        "outfit": "black wetsuit",
-        "props": "a visible surfboard under the subject's arm or feet, water spray, droplets",
-        "bg": "ocean wave breaking, golden backlight",
-        "comp": "full", "tone": "warm"
-    },
-    # Фэнтези / История
-    "Эльфийская знать": {
-        "desc": "Лесной храм и лучи в тумане.",
-        "role_f": "elven queen in a regal pose",
-        "role": "elven king in a regal pose",
-        "outfit_f": "flowing emerald gown with golden embroidery, delicate crown",
-        "outfit": "ornate armor with emerald cloak, elegant crown",
-        "props": "elven jewelry, filigree filigree patterns",
-        "bg": "ancient forest temple, god rays in mist",
-        "comp": "full", "tone": "candle"
-    },
-    "Самурай в храме": {
-        "desc": "Лакированные доспехи, фонари, листья.",
-        "role": "samurai warrior in a shrine courtyard",
-        "outfit": "lacquered samurai armor, kabuto helmet",
-        "props": "katana visible in hand",
-        "bg": "Shinto shrine with lanterns, falling leaves",
-        "comp": "full", "tone": "warm"
-    },
-    "Средневековый рыцарь": {
-        "desc": "Полированный латный доспех, штандарты.",
-        "role": "medieval knight",
-        "outfit": "full plate armor with cloak",
-        "props": "sword and shield",
-        "bg": "castle tournament yard with banners and dust",
-        "comp": "full", "tone": "daylight"
-    },
-    "Пират на палубе": {
-        "desc": "Треуголка, сабля, мокрая палуба, шторм.",
-        "role_f": "pirate captain",
-        "role": "pirate captain",
-        "outfit_f": "tricorn hat, leather corset, white shirt",
-        "outfit": "tricorn hat, leather vest, white shirt",
-        "props": "cutlass in hand, rope rigging, wet wood highlights",
-        "bg": "ship deck in storm, sails and rigging, sea spray, gulls",
-        "comp": "full", "tone": "cool"
-    },
-    "Древняя Греция": {
-        "desc": "Белый мрамор и лазурь.",
-        "role_f": "ancient Greek goddess",
-        "role": "ancient Greek hero",
-        "outfit_f": "white chiton with gold trim, diadem",
-        "outfit": "white chiton with gold trim, laurel wreath",
-        "props": "gold accessories",
-        "bg": "white marble colonnade, statues, olive trees, turquoise pool",
-        "comp": "half", "tone": "warm"
-    },
-    "Королева": {
-        "desc": "Коронованная особа в тронном зале.",
-        "role_f": "queen on a throne",
-        "role": "king on a throne",
-        "outfit_f": "royal gown with long train, jeweled crown, scepter",
-        "outfit": "royal robe with golden embroidery, jeweled crown, scepter",
-        "props": "ornate jewelry, velvet textures",
-        "bg": "grand castle throne room with chandeliers and marble columns",
-        "comp": "half", "tone": "warm"
-    },
-    # Sci-Fi
-    "Киберпанк улица": {
-        "desc": "Неон, мокрый асфальт, голограммы.",
-        "role": "cyberpunk character walking in the street",
-        "outfit_f": "leather jacket, high-waist pants, boots",
-        "outfit": "leather jacket, techwear pants, boots",
-        "props": "holographic billboards, overhead cables",
-        "bg": "neon signs, wet asphalt reflections, steam from manholes",
-        "comp": "full", "tone": "neon"
-    },
-    "Космический скафандр": {
-        "desc": "Хард sci-fi.",
-        "role": "astronaut",
-        "outfit": "realistic EVA spacesuit",
-        "props": "helmet reflections, suit details",
-        "bg": "starfield and spaceship hangar",
-        "comp": "full", "tone": "cool"
-    },
-    # --- Новые стили ---
-    "Арктика": {
-        "desc": "Холодное сияние, айсберги и белый медвежонок.",
-        "role_f": "arctic explorer holding a white polar bear cub",
-        "role":   "arctic explorer holding a white polar bear cub",
-        "outfit_f": "white thermal parka with fur hood, knit beanie and mittens",
-        "outfit":   "white thermal parka with fur hood, knit beanie and gloves",
-        "props": "polar bear cub cuddled safely in arms, drifting ice, snow crystals in air",
-        "bg": "icebergs and frozen sea, low sun halo, blowing snow",
-        "comp": "half", "tone": "cool"
-    },
-
-    "Альпы (гламур)": {
-        "desc": "Гламурный отдых в горах: лыжи/сноуборд, террасы, горное солнце.",
-        "role_f": "alpine fashion vacationer with skis",
-        "role":   "alpine fashion vacationer with snowboard",
-        "outfit_f": "sleek white ski suit, fur-trimmed hood, chic goggles",
-        "outfit":   "stylish ski jacket and pants, goggles on helmet",
-        "props": "skis or snowboard, steam from mulled wine cup",
-        "bg": "alpine chalet terrace with snowy peaks and cable cars",
-        "comp": "half", "tone": "warm"
-    },
-
-    "Франция (Париж)": {
-        "desc": "Берет, багет, круассан и башня на фоне.",
-        "role": "parisian street scene character",
-        "outfit_f": "striped shirt, red beret, trench, scarf",
-        "outfit":   "striped shirt, beret, trench, scarf",
-        "props": "baguette and croissant in paper bag, café tables",
-        "bg": "Eiffel Tower in the distance, Haussmann buildings, café awning",
-        "comp": "half", "tone": "daylight"
-    },
-
-    "Джунгли (Тарзан)": {
-        "desc": "Густые тропики и дикие звери рядом (безопасно).",
-        "role_f": "jungle adventurer",
-        "role":   "jungle adventurer",
-        "outfit_f": "leather jungle top and skirt, rope belt",
-        "outfit":   "leather jungle outfit, rope belt",
-        "props": "jungle vines, soft mist, a crocodile or a snake or a panther nearby, not attacking",
-        "bg": "dense tropical jungle, waterfalls and sunbeams through canopy",
-        "comp": "full", "tone": "warm"
-    },
-
-    "Детство": {
-        "desc": "Съёмка в детском образе: игрушки, флажки, шарики.",
-        "role": "child portrait in playful setting",
-        "outfit_f": "cute cardigan, skirt with suspenders, bow headband",
-        "outfit":   "cute sweater and suspenders",
-        "props": "teddy bear, balloons, crayons, building blocks",
-        "bg": "cozy kids room with garlands and soft daylight",
-        "comp": "closeup", "tone": "daylight",
-        "allow_age_change": True,         # снимаем возрастной лок только тут
-        "force_lockface": True            # если хочешь, можешь учитывать этот флаг в генерации
-    },
-
-    "Свадьба": {
-        "desc": "Классическая свадебная сцена.",
-        "role_f": "bride in elegant wedding dress",
-        "role":   "groom in classic tuxedo",
-        "outfit_f": "white lace wedding gown, veil, bouquet",
-        "outfit":   "black tuxedo with boutonnière",
-        "props": "flower petals in air, ring box visible",
-        "bg": "sunlit ceremony arch with flowers",
-        "comp": "half", "tone": "warm"
-    },
-
-    "Хаос": {
-        "desc": "Кинематографический бардак: всё рушится, но герой спокоен.",
-        "role": "hero in cinematic disaster scene",
-        "outfit_f": "modern streetwear with dust marks",
-        "outfit":   "modern streetwear with dust marks",
-        "props": "embers and sparks in the air, flying papers, cracked glass",
-        "bg": "burning house and collapsing structures in background, dramatic smoke",
-        "comp": "full", "tone": "noir"
-    },
-
-    "Инопланетяне": {
-        "desc": "Фантастика: НЛО, лучи, загадочная пыль.",
-        "role": "person confronted by hovering UFOs",
-        "outfit_f": "sleek sci-fi coat",
-        "outfit":   "sleek sci-fi coat",
-        "props": "tractor beams, dust motes, floating debris",
-        "bg": "night field with hovering saucers and moody clouds",
-        "comp": "full", "tone": "cool"
-    },
-
-    "Фридайвер под водой": {
-        "desc": "Подводная съёмка, пузыри, лучи сквозь толщу воды.",
-        "role_f": "freediver underwater",
-        "role":   "freediver underwater",
-        "outfit_f": "apnea wetsuit without tank, long fins, mask",
-        "outfit":   "apnea wetsuit without tank, long fins, mask",
-        "props": "air bubbles, sunbeams from surface, small fish around",
-        "bg": "deep blue water with rocky arch or reef",
-        "comp": "full", "tone": "cool"
-    },
-
-    "Деревня": {
-        "desc": "Теплая сельская сцена.",
-        "role": "villager in rustic setting",
-        "outfit_f": "linen dress, knitted cardigan, headscarf optional",
-        "outfit":   "linen shirt, vest",
-        "props": "basket with apples, wooden fence, hay",
-        "bg": "rural cottage yard with garden and chickens far in background",
-        "comp": "half", "tone": "warm"
-    },
-
-    "Россия (зимняя)": {
-        "desc": "Зимний пейзаж, берёзы, снежные сугробы.",
-        "role": "person in Russian winter scene",
-        "outfit_f": "down coat, ushanka hat, woolen scarf, felt boots",
-        "outfit":   "down parka, ushanka hat, woolen scarf, felt boots",
-        "props": "steam from breath, snowflakes in air, samovar on wooden table",
-        "bg": "traditional wooden house with ornate window frames and birch trees",
-        "comp": "half", "tone": "cool"
-    },
-
-    "Теннис": {
-        "desc": "Теннисный корт и динамика.",
-        "role": "tennis player on court",
-        "outfit_f": "white tennis dress and visor",
-        "outfit":   "white tennis kit and headband",
-        "props": "racket in hand, tennis balls mid-air motion blur",
-        "bg": "hard court with service lines and green windscreen",
-        "comp": "half", "tone": "daylight"
-    },
-
-    "Дельтаплан": {
-        "desc": "Свобода полёта над горами.",
-        "role": "hang glider pilot running a takeoff",
-        "outfit": "windbreaker, harness, helmet, gloves",
-        "props": "hang glider wings overhead, lines and A-frame visible",
-        "bg": "ridge launch with valley and clouds below",
-        "comp": "full", "tone": "daylight"
-    },
-
-    "Космопилот на мостике": {
-        "desc": "Пульт, индикаторы, готовность к гиперпрыжку.",
-        "role": "starship pilot on the bridge",
-        "outfit": "flight suit, helmet under arm",
-        "props": "control panels with glowing indicators",
-        "bg": "spaceship bridge interior",
-        "comp": "half", "tone": "cool"
-    },
-}
-
-STYLE_CATEGORIES: Dict[str, List[str]] = {
-    "Портреты": ["Портрет у окна", "Портрет 85мм", "Бьюти студия", "Кинопортрет", "Фильм-нуар (портрет)"],
-    "Современные": ["Стритвэр город", "Вечерний выход", "Бизнес", "Ночной неон"],
-    "Профессии": ["Врач у палаты", "Хирург операционная", "Шеф-повар кухня", "Учёный лаборатория", "Боксер на ринге", "Фитнес зал"],
-    "Приключения": ["Приключенец (руины)", "Пустынный исследователь", "Горы снег", "Серфер"],
-    "Фэнтези/История": ["Эльфийская знать", "Самурай в храме", "Средневековый рыцарь", "Пират на палубе", "Древняя Греция", "Королева"],
-    "Sci-Fi": ["Киберпанк улица", "Космический скафандр", "Космопилот на мостике"],
-}
-STYLE_CATEGORIES.update({
-    "Путешествия": ["Арктика", "Альпы (гламур)", "Франция (Париж)", "Россия (зимняя)", "Деревня"],
-    "Экшен/Адвенчур": ["Джунгли (Тарзан)", "Хаос", "Инопланетяне", "Дельтаплан"],
-    "Спорт/Вода": ["Теннис", "Фридайвер под водой", "Серфер"]
-})
-THEME_BOOST = {
-    "Пират на палубе": "rope rigging, storm clouds, wet highlights on wood, sea spray, gulls",
-    "Древняя Греция": "ionic capitals, olive trees, turquoise water reflections, gold trim accents",
-    "Ночной неон":     "rain droplets on lens, colored reflections on wet asphalt",
-    "Фильм-нуар (портрет)": "venetian blinds light pattern, cigarette smoke curling, deep black shadows",
-    "Приключенец (руины)": "floating dust motes in sunrays, chipped sandstone blocks, leather straps patina",
-    "Горы снег":      "spindrift blown by wind, crampon scratches on ice, distant ridge line",
-    "Киберпанк улица":"holographic billboards flicker, cable bundles overhead, neon kanji signs",
-    "Серфер":         "rimlight on water droplets, sun flare",
-    "Королева":       "subtle film grain, ceremonial ambience",
-}
-THEME_BOOST.update({
-    "Арктика": "diamond-dust glitter in cold air, low sun halo, frost crystals on clothing",
-    "Альпы (гламур)": "sunflare off snow, chalet wood textures, gondola cables in distance",
-    "Франция (Париж)": "café chalk menu board, wrought iron balcony rails, warm bakery glow",
-    "Джунгли (Тарзан)": "god rays through canopy, wet leaf speculars, mist near ground",
-    "Детство": "soft pastel garlands, shallow dof sparkles, gentle vignette",
-    "Свадьба": "bokeh from fairy lights, soft veil translucency",
-    "Хаос": "embers, flying paper scraps, dramatic smoke layers, slight camera shake feeling",
-    "Инопланетяне": "volumetric beams, dust motes, faint radio-glitch halation",
-    "Фридайвер под водой": "caustic light patterns, particulate backscatter, gentle blue gradient",
-    "Деревня": "warm wood patina, sun dust in air, linen texture details",
-    "Россия (зимняя)": "crisp breath vapor, snow sparkle, frosty window details",
-    "Теннис": "chalk dust from lines, motion blur of ball strings",
-    "Дельтаплан": "wind-rippled jacket, wing fabric texture, valley haze layers"
-})
-
-# Сцены, где чаще всего уводит лицо → понижаем CFG и принудительно включаем lockface
-SCENE_GUIDANCE = {
-    "Киберпанк улица": 3.2,
-    "Космический скафандр": 3.2,
-    "Самурай в храме": 3.2,
-    "Средневековый рыцарь": 3.2,
-}
-RISKY_PRESETS = set(SCENE_GUIDANCE.keys())
-SCENE_GUIDANCE.update({
-    "Джунгли (Тарзан)": 3.2,
-    "Инопланетяне": 3.2,
-    "Хаос": 3.2,
-    "Фридайвер под водой": 3.0,
-    "Дельтаплан": 3.2,
-    "Арктика": 3.2,
-    "Детство": 3.0,
-})
-# Если используешь автоматический lockface для рискованных:
-RISKY_PRESETS.update({"Джунгли (Тарзан)", "Инопланетяне", "Хаос", "Фридайвер под водой", "Дельтаплан", "Арктика", "Детство"})
-
 # ---------- logging ----------
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger("bot")
@@ -582,21 +133,84 @@ logger = logging.getLogger("bot")
 # ---------- storage ----------
 DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
 
+# === МУЛЬТИ-АВАТАРЫ: структура профиля ===
+# профайл верхнего уровня: {
+#   gender: "female" | "male" | None,
+#   current_avatar: "default",
+#   avatars: {
+#     "<name>": {
+#        images: [ "ref_xxx.jpg", ... ]  # лежат в profiles/<uid>/avatars/<name>/
+#        training_id: str | None
+#        finetuned_model: str | None
+#        finetuned_version: str | None
+#        status: str | None
+#        lockface: bool
+#     },
+#     ...
+#   }
+# }
+
+DEFAULT_AVATAR = {
+    "images": [],
+    "training_id": None,
+    "finetuned_model": None,
+    "finetuned_version": None,
+    "status": None,
+    "lockface": False
+}
+DEFAULT_PROFILE = {
+    "gender": None,
+    "current_avatar": "default",
+    "avatars": {
+        "default": DEFAULT_AVATAR.copy()
+    }
+}
+
 def user_dir(uid:int) -> Path:
     p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
-def list_ref_images(uid:int) -> List[Path]:
-    return sorted(user_dir(uid).glob("ref_*.jpg"))
+
+def avatars_root(uid:int) -> Path:
+    p = user_dir(uid) / "avatars"; p.mkdir(parents=True, exist_ok=True); return p
+
+def avatar_dir(uid:int, avatar:str) -> Path:
+    p = avatars_root(uid) / avatar; p.mkdir(parents=True, exist_ok=True); return p
+
+def list_ref_images(uid:int, avatar:str) -> List[Path]:
+    return sorted(avatar_dir(uid, avatar).glob("ref_*.jpg"))
+
 def profile_path(uid:int) -> Path:
     return user_dir(uid) / "profile.json"
 
-DEFAULT_PROFILE = {
-    "images": [], "training_id": None, "finetuned_model": None,
-    "finetuned_version": None, "status": None, "gender": None,
-    "lockface": False  # новый флаг
-}
+def _migrate_single_to_multi(uid:int, prof:Dict[str,Any]) -> Dict[str,Any]:
+    """Миграция старой схемы в новую (одна модель → avatars/default)."""
+    if "avatars" in prof:
+        return prof  # уже новая схема
+    migrated = DEFAULT_PROFILE.copy()
+    migrated["gender"] = prof.get("gender")
+    # перенести одиночные поля в default
+    default = DEFAULT_AVATAR.copy()
+    default["training_id"] = prof.get("training_id")
+    default["finetuned_model"] = prof.get("finetuned_model")
+    default["finetuned_version"] = prof.get("finetuned_version")
+    default["status"] = prof.get("status")
+    default["lockface"] = prof.get("lockface", False)
+    # перенос списка изображений (если был)
+    imgs = prof.get("images", [])
+    if imgs:
+        # переместить файлы в avatars/default
+        for name in imgs:
+            src = user_dir(uid) / name
+            if src.exists():
+                dst = avatar_dir(uid, "default") / name
+                if not dst.exists():
+                    with contextlib.suppress(Exception):
+                        shutil.move(str(src), str(dst))
+        default["images"] = [p.name for p in list_ref_images(uid, "default")]
+    migrated["avatars"]["default"] = default
+    return migrated
 
-REDIS_URL = os.getenv("REDIS_URL", "").strip()
 _redis = None
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
 if REDIS_URL:
     try:
         import redis  # redis==5.x
@@ -614,13 +228,17 @@ def load_profile(uid:int) -> Dict[str, Any]:
         try:
             raw = _redis.get(f"profile:{uid}")
             if raw:
-                return {**DEFAULT_PROFILE, **json.loads(raw)}
+                prof = {**DEFAULT_PROFILE, **json.loads(raw)}
+                prof = _migrate_single_to_multi(uid, prof)
+                return prof
         except Exception as e:
             logger.warning("Redis load_profile failed: %s", e)
     p = profile_path(uid)
     if p.exists():
         with contextlib.suppress(Exception):
-            return {**DEFAULT_PROFILE, **json.loads(p.read_text())}
+            prof = {**DEFAULT_PROFILE, **json.loads(p.read_text())}
+            prof = _migrate_single_to_multi(uid, prof)
+            return prof
     return DEFAULT_PROFILE.copy()
 
 def save_profile(uid:int, prof:Dict[str,Any]):
@@ -643,6 +261,51 @@ def delete_profile(uid:int):
 def save_ref_downscaled(path: Path, raw: bytes, max_side=1024, quality=92):
     im = Image.open(io.BytesIO(raw)).convert("RGB"); im.thumbnail((max_side, max_side)); im.save(path, "JPEG", quality=quality)
 
+# ---------- Аватарные утилиты ----------
+def get_current_avatar_name(prof:Dict[str,Any]) -> str:
+    name = prof.get("current_avatar") or "default"
+    if name not in prof["avatars"]:
+        name = "default"
+        prof["current_avatar"] = name
+    return name
+
+def get_avatar(prof:Dict[str,Any], name:Optional[str]=None) -> Dict[str,Any]:
+    if not name:
+        name = get_current_avatar_name(prof)
+    if name not in prof["avatars"]:
+        prof["avatars"][name] = DEFAULT_AVATAR.copy()
+    return prof["avatars"][name]
+
+def set_current_avatar(uid:int, name:str):
+    prof = load_profile(uid)
+    if name not in prof["avatars"]:
+        prof["avatars"][name] = DEFAULT_AVATAR.copy()
+    prof["current_avatar"] = name
+    save_profile(uid, prof)
+
+def ensure_avatar(uid:int, name:str):
+    prof = load_profile(uid)
+    if name not in prof["avatars"]:
+        prof["avatars"][name] = DEFAULT_AVATAR.copy()
+        save_profile(uid, prof)
+
+def del_avatar(uid:int, name:str):
+    prof = load_profile(uid)
+    if name == "default":
+        raise RuntimeError("Нельзя удалить аватар 'default'.")
+    if name not in prof["avatars"]:
+        return
+    # снести папку с фотками
+    adir = avatar_dir(uid, name)
+    with contextlib.suppress(Exception):
+        if adir.exists():
+            shutil.rmtree(adir)
+    # убрать из профиля
+    prof["avatars"].pop(name, None)
+    if prof["current_avatar"] == name:
+        prof["current_avatar"] = "default"
+    save_profile(uid, prof)
+
 # ---------- Replicate helpers ----------
 def resolve_model_version(slug: str) -> str:
     if ":" in slug: return slug
@@ -662,7 +325,7 @@ def extract_any_url(out: Any) -> Optional[str]:
             if u: return u
     return None
 
-# ---------- авто-пол ----------
+# ---------- авто-пол (общий для всех аватаров) ----------
 def _infer_gender_from_image(path: Path) -> Optional[str]:
     try:
         client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
@@ -683,22 +346,25 @@ def _infer_gender_from_image(path: Path) -> Optional[str]:
     return None
 
 def auto_detect_gender(uid:int) -> str:
-    refs = list_ref_images(uid)
+    prof = load_profile(uid)
+    av = get_avatar(prof)  # текущий
+    refs = list_ref_images(uid, get_current_avatar_name(prof))
     if not refs: return "female"
     g = _infer_gender_from_image(refs[0])
     return g or "female"
 
 # ---------- LoRA training ----------
-def _pack_refs_zip(uid:int) -> Path:
-    refs = list_ref_images(uid)
+def _pack_refs_zip(uid:int, avatar:str) -> Path:
+    refs = list_ref_images(uid, avatar)
     if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
-    zpath = user_dir(uid) / "train.zip"
+    zpath = avatar_dir(uid, avatar) / "train.zip"
     with ZipFile(zpath, "w") as z:
         for i, p in enumerate(refs, 1):
             z.write(p, arcname=f"img_{i:02d}.jpg")
     return zpath
 
-def _dest_model_slug() -> str:
+def _dest_model_slug(avatar:str) -> str:
+    # Для простоты — одна «база» модели с разными версиями. Можно добавить префикс по аватару в name, если хочешь разнести.
     if not DEST_OWNER: raise RuntimeError("REPLICATE_DEST_OWNER не задан.")
     return f"{DEST_OWNER}/{DEST_MODEL}"
 
@@ -708,10 +374,10 @@ def _ensure_destination_exists(slug: str):
         o, name = slug.split("/",1)
         raise RuntimeError(f"Целевая модель '{slug}' не найдена. Создай на https://replicate.com/create (owner={o}, name='{name}').")
 
-def start_lora_training(uid:int) -> str:
-    dest_model = _dest_model_slug(); _ensure_destination_exists(dest_model)
+def start_lora_training(uid:int, avatar:str) -> str:
+    dest_model = _dest_model_slug(avatar); _ensure_destination_exists(dest_model)
     trainer_version = resolve_model_version(LORA_TRAINER_SLUG)
-    zip_path = _pack_refs_zip(uid)
+    zip_path = _pack_refs_zip(uid, avatar)
     client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
     with open(zip_path, "rb") as f:
         training = client.trainings.create(
@@ -727,23 +393,26 @@ def start_lora_training(uid:int) -> str:
             destination=dest_model
         )
     prof = load_profile(uid)
-    prof["training_id"] = training.id
-    prof["status"] = "starting"
-    prof["finetuned_model"] = dest_model
+    av = get_avatar(prof, avatar)
+    av["training_id"] = training.id
+    av["status"] = "starting"
+    av["finetuned_model"] = dest_model
     save_profile(uid, prof)
     return training.id
 
-def check_training_status(uid:int) -> Tuple[str, Optional[str]]:
-    prof = load_profile(uid); tid = prof.get("training_id")
+def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str]]:
+    prof = load_profile(uid)
+    av = get_avatar(prof, avatar)
+    tid = av.get("training_id")
     if not tid: return ("not_started", None)
     client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
     tr = client.trainings.get(tid)
     status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
     if status != "succeeded":
-        prof["status"] = status; save_profile(uid, prof); return (status, None)
+        av["status"] = status; save_profile(uid, prof); return (status, None)
 
     destination = getattr(tr, "destination", None) or (isinstance(tr, dict) and tr.get("destination")) \
-                  or prof.get("finetuned_model") or _dest_model_slug()
+                  or av.get("finetuned_model") or _dest_model_slug(avatar)
     version_id = getattr(tr, "output", None) if not isinstance(tr, dict) else tr.get("output")
     if isinstance(version_id, dict): version_id = version_id.get("id") or version_id.get("version")
 
@@ -762,24 +431,19 @@ def check_training_status(uid:int) -> Tuple[str, Optional[str]]:
         except Exception:
             slug_with_version = destination
 
-    prof["status"] = status
-    prof["finetuned_model"] = destination
+    av["status"] = status
+    av["finetuned_model"] = destination
     if slug_with_version and ":" in slug_with_version:
-        prof["finetuned_version"] = slug_with_version.split(":",1)[1]
+        av["finetuned_version"] = slug_with_version.split(":",1)[1]
     save_profile(uid, prof)
     return (status, slug_with_version)
 
-def _pinned_slug(prof: Dict[str, Any]) -> str:
-    base = prof.get("finetuned_model") or ""
-    ver  = prof.get("finetuned_version")
+def _pinned_slug(av: Dict[str, Any]) -> str:
+    base = av.get("finetuned_model") or ""
+    ver  = av.get("finetuned_version")
     return f"{base}:{ver}" if (base and ver) else base
 
 # ---------- Генерация ----------
-def _prompt_for_gender(meta: Style, gender: str) -> str:
-    if gender == "female" and meta.get("p_f"): return meta["p_f"]
-    if gender == "male" and meta.get("p_m"): return meta["p_m"]
-    return meta.get("p", "")
-
 def _style_lock(role:str, outfit:str, props:str, background:str, comp_hint:str) -> str:
     bits = [
         f"{role}" if role else "",
@@ -792,46 +456,45 @@ def _style_lock(role:str, outfit:str, props:str, background:str, comp_hint:str) 
     return ", ".join([b for b in bits if b])
 
 def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_boost:str) -> Tuple[str, str]:
-        role = meta.get("role_f") if (gender=="female" and meta.get("role_f")) else meta.get("role","")
-        if not role and meta.get("role_m") and gender=="male":
-            role = meta.get("role_m","")
-        outfit = meta.get("outfit_f") if (gender=="female" and meta.get("outfit_f")) else meta.get("outfit","")
-        props = meta.get("props","")
-        bg = meta.get("bg","")
+    role = meta.get("role_f") if (gender=="female" and meta.get("role_f")) else meta.get("role","")
+    if not role and meta.get("role_m") and gender=="male":
+        role = meta.get("role_m","")
+    outfit = meta.get("outfit_f") if (gender=="female" and meta.get("outfit_f")) else meta.get("outfit","")
+    props = meta.get("props","")
+    bg = meta.get("bg","")
 
-        gpos, gneg = _gender_lock(gender)
-        anti = _anti_distort()
-        age_lock = "" if meta.get("allow_age_change") else "no age change, "
+    gpos, gneg = _gender_lock(gender)
+    anti = _anti_distort()
+    age_lock = "" if meta.get("allow_age_change") else "no age change, "
 
-        if role or outfit or props or bg:
-            core = ", ".join([
-                _style_lock(role, outfit, props, bg, comp_text),
-                tone_text,
-                gpos,
-                f"same person as the training photos, no ethnicity change, {age_lock}exact facial identity, identity preserved",
-                "photorealistic, realistic body proportions, natural skin texture, filmic look",
-                anti,
-                _beauty_guardrail(),
-                _face_lock(),
-                theme_boost
-            ])
-            core += ", the costume and background must clearly communicate the role; avoid plain portrait"
-            return core, gneg
-
-        base_prompt = meta.get("p", "")
+    if role or outfit or props or bg:
         core = ", ".join([
-            f"{base_prompt}, {comp_text}, {tone_text}",
+            _style_lock(role, outfit, props, bg, comp_text),
+            tone_text,
             gpos,
-            f"same person as the training photos, {age_lock}exact facial identity, identity preserved",
-            "cinematic key light and rim light, soft bounce fill, film grain subtle",
-            "skin tone faithful",
+            f"same person as the training photos, no ethnicity change, {age_lock}exact facial identity, identity preserved",
+            "photorealistic, realistic body proportions, natural skin texture, filmic look",
             anti,
             _beauty_guardrail(),
             _face_lock(),
             theme_boost
         ])
+        core += ", the costume and background must clearly communicate the role; avoid plain portrait"
         return core, gneg
 
+    base_prompt = meta.get("p", "")
+    core = ", ".join([
+        f"{base_prompt}, {comp_text}, {tone_text}",
+        gpos,
+        f"same person as the training photos, {age_lock}exact facial identity, identity preserved",
+        "cinematic key light and rim light, soft bounce fill, film grain subtle",
+        "skin tone faithful",
+        anti,
+        _beauty_guardrail(),
+        _face_lock(),
+        theme_boost
+    ])
+    return core, gneg
 
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
     mv = resolve_model_version(model_slug)
@@ -848,18 +511,16 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
     return url
 
 def generate_with_instantid(face_path: Path, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
-    """Fallback генерация с жёсткой фиксацией лица по референсу."""
     mv = resolve_model_version(INSTANTID_SLUG)
     with open(face_path, "rb") as fb:
         out = replicate.run(mv, input={
-            "face_image": fb,                # ключи типовые для InstantID-пайплайнов на Replicate
+            "face_image": fb,
             "prompt": prompt + AESTHETIC_SUFFIX,
             "negative_prompt": negative_prompt,
             "width": w, "height": h,
             "num_inference_steps": max(36, steps),
-            "guidance_scale": min(guidance, 3.5),  # ещё снижаем, чтобы не давило лицо
+            "guidance_scale": min(guidance, 3.5),
             "seed": seed,
-            # дополнительные поля у разных версий могут называться чуть иначе — оставлены по умолчанию
         })
     url = extract_any_url(out)
     if not url: raise RuntimeError("Empty output (InstantID)")
@@ -873,7 +534,8 @@ def main_menu_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton("🧪 Обучение", callback_data="nav:train")],
         [InlineKeyboardButton("ℹ️ Мой статус", callback_data="nav:status"),
          InlineKeyboardButton("⚙️ Пол", callback_data="nav:gender")],
-        [InlineKeyboardButton("🔒 LOCKFACE", callback_data="nav:lockface")]
+        [InlineKeyboardButton("🔒 LOCKFACE", callback_data="nav:lockface")],
+        [InlineKeyboardButton("🤖 Аватары", callback_data="nav:avatars")]
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -895,17 +557,33 @@ def styles_kb_for_category(cat: str) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("⬅️ Категории", callback_data="nav:styles")])
     return InlineKeyboardMarkup(rows)
 
+def avatars_kb(uid:int) -> InlineKeyboardMarkup:
+    prof = load_profile(uid)
+    cur = get_current_avatar_name(prof)
+    names = sorted(prof["avatars"].keys())
+    rows = []
+    for n in names:
+        label = f"{'✅ ' if n==cur else ''}{n}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"avatar:set:{n}")])
+    rows.append([
+        InlineKeyboardButton("➕ Новый", callback_data="avatar:new"),
+        InlineKeyboardButton("🗑 Удалить", callback_data="avatar:del")
+    ])
+    rows.append([InlineKeyboardButton("⬅️ Меню", callback_data="nav:menu")])
+    return InlineKeyboardMarkup(rows)
+
 # ---------- Handlers ----------
-ENROLL_FLAG: Dict[int,bool] = {}
+ENROLL_FLAG: Dict[Tuple[int,str],bool] = {}  # ключ: (uid, avatar)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя "
         "в узнаваемых кино-сценах — от королевы в тронном зале до серфера на волне.\n\n"
-        "1) «📸 Набор фото» — пришли до 10 снимков.\n"
-        "2) «🧪 Обучение» — тренировка LoRA.\n"
+        "1) «📸 Набор фото» — пришли до 10 снимков (в активный аватар).\n"
+        "2) «🧪 Обучение» — тренировка LoRA для активного аватара.\n"
         "3) «🧭 Выбрать стиль» — получи 3 варианта.\n"
-        "4) «🔒 LOCKFACE» — включить/выключить жёсткую фиксацию лица.",
+        "4) «🔒 LOCKFACE» — фиксация лица.\n"
+        "5) «🤖 Аватары» — несколько моделей в одном профиле.",
         reply_markup=main_menu_kb()
     )
 
@@ -926,6 +604,23 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await gender_cmd(update, context)
     elif key == "lockface":
         await lockface_cmd(update, context)
+    elif key == "avatars":
+        uid = update.effective_user.id
+        await q.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
+
+async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    uid = update.effective_user.id
+    parts = q.data.split(":")
+    action = parts[1]
+    if action == "set":
+        name = parts[2]
+        set_current_avatar(uid, name)
+        await q.message.reply_text(f"Активный аватар: {name}", reply_markup=avatars_kb(uid))
+    elif action == "new":
+        await q.message.reply_text("Создай аватар командой: /avatarnew <имя>\nНапример: /avatarnew travel")
+    elif action == "del":
+        await q.message.reply_text("Удаление: /avatardel <имя> --force")
 
 async def styles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
@@ -936,55 +631,66 @@ async def cb_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.message.reply_text(f"Стиль — {cat}.\nВыбери сцену:", reply_markup=styles_kb_for_category(cat))
 
 async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id; ENROLL_FLAG[uid] = True
+    uid = update.effective_user.id
+    prof = load_profile(uid)
+    av_name = get_current_avatar_name(prof)
+    ENROLL_FLAG[(uid, av_name)] = True
     await update.effective_message.reply_text(
-        "Набор включён. Пришли подряд до 10 фото (фронтально, без фильтров). "
+        f"Набор включён для аватара «{av_name}». Пришли подряд до 10 фото (фронтально, без фильтров). "
         "Когда закончишь — нажми /iddone."
     )
 
 async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id; ENROLL_FLAG[uid] = False
+    uid = update.effective_user.id
     prof = load_profile(uid)
-    prof["images"] = [p.name for p in list_ref_images(uid)]
+    av_name = get_current_avatar_name(prof)
+    ENROLL_FLAG[(uid, av_name)] = False
+    av = get_avatar(prof, av_name)
+    av["images"] = [p.name for p in list_ref_images(uid, av_name)]
     try:
-        prof["gender"] = auto_detect_gender(uid)
+        if not prof.get("gender"):
+            prof["gender"] = auto_detect_gender(uid)
     except Exception:
         prof["gender"] = prof.get("gender") or "female"
     save_profile(uid, prof)
     await update.message.reply_text(
-        f"Готово ✅ В профиле {len(prof['images'])} фото.\n"
-        f"Определённый пол: {prof['gender']}.\n"
+        f"Готово ✅ В аватаре «{av_name}» {len(av['images'])} фото.\n"
+        f"Определённый пол: {prof.get('gender') or '—'}.\n"
         "Далее — нажми «🧪 Обучение» или /trainid.",
         reply_markup=main_menu_kb()
     )
 
 async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id; prof = load_profile(uid)
+    av_name = get_current_avatar_name(prof)
+    av = get_avatar(prof, av_name)
     await update.effective_message.reply_text(
-        f"Фото: {len(list_ref_images(uid))}\n"
-        f"Статус обучения: {prof.get('status') or '—'}\n"
-        f"Модель: {prof.get('finetuned_model') or '—'}\n"
-        f"Версия: {prof.get('finetuned_version') or '—'}\n"
-        f"Пол: {prof.get('gender') or '—'}\n"
-        f"LOCKFACE: {'on' if prof.get('lockface') else 'off'}"
+        f"Активный аватар: {av_name}\n"
+        f"Фото: {len(list_ref_images(uid, av_name))}\n"
+        f"Статус обучения: {av.get('status') or '—'}\n"
+        f"Модель: {av.get('finetuned_model') or '—'}\n"
+        f"Версия: {av.get('finetuned_version') or '—'}\n"
+        f"Пол (общий): {prof.get('gender') or '—'}\n"
+        f"LOCKFACE (для аватара): {'on' if av.get('lockface') else 'off'}"
     )
 
 async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     delete_profile(uid)
-    ENROLL_FLAG[uid] = False
     await update.message.reply_text("Профиль очищен. Жми «📸 Набор фото» и загрузи снимки заново.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if ENROLL_FLAG.get(uid):
-        refs = list_ref_images(uid)
+    prof = load_profile(uid)
+    av_name = get_current_avatar_name(prof)
+    if ENROLL_FLAG.get((uid, av_name)):
+        refs = list_ref_images(uid, av_name)
         if len(refs) >= 10:
             await update.message.reply_text("Уже 10/10. Нажми /iddone."); return
         f = await update.message.photo[-1].get_file()
         data = await f.download_as_bytearray()
-        save_ref_downscaled(user_dir(uid) / f"ref_{int(time.time()*1000)}.jpg", bytes(data))
-        await update.message.reply_text(f"Сохранила ({len(refs)+1}/10). Ещё?")
+        save_ref_downscaled(avatar_dir(uid, av_name) / f"ref_{int(time.time()*1000)}.jpg", bytes(data))
+        await update.message.reply_text(f"Сохранила ({len(refs)+1}/10) для «{av_name}». Ещё?")
     else:
         await update.message.reply_text("Сначала включи набор: «📸 Набор фото» или /idenroll.")
 
@@ -998,50 +704,117 @@ async def setgender_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def gender_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id; prof = load_profile(uid)
     await update.effective_message.reply_text(
-        f"Определённый пол: {prof.get('gender') or '—'}\n"
+        f"Пол (общий для всех аватаров): {prof.get('gender') or '—'}\n"
         "Можно сменить командой: /setgender female | /setgender male"
     )
 
 async def lockface_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     prof = load_profile(uid)
-    prof["lockface"] = not prof.get("lockface", False)
+    av = get_avatar(prof)  # текущий
+    av["lockface"] = not av.get("lockface", False)
     save_profile(uid, prof)
-    state = "включён" if prof["lockface"] else "выключен"
-    await update.effective_message.reply_text(f"LOCKFACE {state}. В рисковых пресетах он всё равно включается автоматически.")
+    state = "включён" if av["lockface"] else "выключен"
+    await update.effective_message.reply_text(f"LOCKFACE {state} для активного аватара. В рискованных пресетах он всё равно включается автоматически.")
 
+# ---- Аватарные команды ----
+async def avatarnew_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Использование: /avatarnew <имя>\nПример: /avatarnew travel"); return
+    name = re.sub(r"[^\w\-\.\@]+", "_", " ".join(context.args)).strip()[:32] or "noname"
+    ensure_avatar(uid, name)
+    set_current_avatar(uid, name)
+    await update.message.reply_text(f"Создан и выбран аватар: {name}\nТеперь «📸 Набор фото» запишет снимки в этот аватар.", reply_markup=avatars_kb(uid))
+
+async def avatarset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Использование: /avatarset <имя>"); return
+    name = " ".join(context.args).strip()
+    prof = load_profile(uid)
+    if name not in prof["avatars"]:
+        await update.message.reply_text(f"Нет такого аватара: {name}. Посмотри /avatarlist или создай /avatarnew <имя>"); return
+    set_current_avatar(uid, name)
+    await update.message.reply_text(f"Ок, активный аватар: {name}", reply_markup=avatars_kb(uid))
+
+async def avatarlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    prof = load_profile(uid)
+    cur = get_current_avatar_name(prof)
+    lines = ["Твои аватары:"]
+    for n, av in prof["avatars"].items():
+        refs = len(list_ref_images(uid, n))
+        lines.append(f"{'▶️' if n==cur else '  '} {n}: фото {refs}, статус: {av.get('status') or '—'}, верс: {av.get('finetuned_version') or '—'}")
+    await update.message.reply_text("\n".join(lines), reply_markup=avatars_kb(uid))
+
+async def avatardel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Использование: /avatardel <имя> --force"); return
+    args = context.args[:]
+    force = False
+    if "--force" in args:
+        force = True
+        args.remove("--force")
+    name = " ".join(args).strip()
+    if name == "default":
+        await update.message.reply_text("«default» удалять нельзя — на нём дом держится 😅"); return
+    prof = load_profile(uid)
+    if name not in prof["avatars"]:
+        await update.message.reply_text(f"Аватар «{name}» не найден."); return
+    if not force:
+        await update.message.reply_text("Добавь флаг --force для подтверждения: /avatardel <имя> --force"); return
+    try:
+        del_avatar(uid, name)
+        await update.message.reply_text(f"Аватар «{name}» удалён.", reply_markup=avatars_kb(uid))
+    except Exception as e:
+        await update.message.reply_text(f"Не удалось удалить: {e}")
+
+# ---- Обучение / Генерация с учётом активного аватара ----
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if len(list_ref_images(uid)) < 10:
-        await update.effective_message.reply_text("Нужно 10 фото. Сначала «📸 Набор фото» и затем /iddone."); return
-    await update.effective_message.reply_text("Запускаю обучение LoRA на Replicate…")
+    prof = load_profile(uid)
+    av_name = get_current_avatar_name(prof)
+    if len(list_ref_images(uid, av_name)) < 10:
+        await update.effective_message.reply_text(f"Нужно 10 фото в аватаре «{av_name}». Сначала «📸 Набор фото» и затем /iddone."); return
+    await update.effective_message.reply_text(f"Запускаю обучение LoRA для «{av_name}» на Replicate…")
     try:
-        training_id = await asyncio.to_thread(start_lora_training, uid)
+        training_id = await asyncio.to_thread(start_lora_training, uid, av_name)
         await update.effective_message.reply_text(f"Стартанула. ID: `{training_id}`\nПроверяй /trainstatus время от времени.")
     except Exception as e:
-        logger.exception("trainid failed"); await update.effective_message.reply_text(f"Не удалось запустить обучение: {e}")
+        logging.exception("trainid failed")
+        await update.effective_message.reply_text(f"Не удалось запустить обучение: {e}")
 
 async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    status, slug_with_ver = await asyncio.to_thread(check_training_status, uid)
+    prof = load_profile(uid)
+    av_name = get_current_avatar_name(prof)
+    status, slug_with_ver = await asyncio.to_thread(check_training_status, uid, av_name)
     if slug_with_ver and status == "succeeded":
         await update.effective_message.reply_text(
-            f"Готово ✅\nСтатус: {status}\nМодель: `{slug_with_ver}`\nТеперь — «🧭 Выбрать стиль».",
+            f"Готово ✅\nАватар: {av_name}\nСтатус: {status}\nМодель: `{slug_with_ver}`\nТеперь — «🧭 Выбрать стиль».",
             reply_markup=categories_kb()
         )
     else:
-        await update.effective_message.reply_text(f"Статус: {status}. Ещё в процессе…")
+        await update.effective_message.reply_text(f"Статус «{av_name}»: {status}. Ещё в процессе…")
 
 async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     preset = q.data.split(":",1)[1]
     await start_generation_for_preset(update, context, preset)
 
+def _neg_with_gender(neg_base:str, gender_negative:str) -> str:
+    return neg_base + (", " + gender_negative if gender_negative else "")
+
 async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
     uid = update.effective_user.id
     prof = load_profile(uid)
-    if prof.get("status") != "succeeded":
-        await update.effective_message.reply_text("Модель ещё не готова. Сначала /trainid и дождись /trainstatus = succeeded.")
+    av_name = get_current_avatar_name(prof)
+    av = get_avatar(prof, av_name)
+
+    if av.get("status") != "succeeded":
+        await update.effective_message.reply_text(f"Модель аватара «{av_name}» ещё не готова. Сначала /trainid и дождись /trainstatus = succeeded.")
         return
 
     meta = STYLE_PRESETS[preset]
@@ -1051,23 +824,23 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     theme_boost = THEME_BOOST.get(preset, "")
 
     prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost)
-    model_slug = _pinned_slug(prof)
+    model_slug = _pinned_slug(av)
 
     # guidance: понижен для рискованных сцен
     guidance = max(3.0, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE))
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
-    await update.effective_message.reply_text(f"🎬 {preset}\n{desc}\n\nГенерирую ({gender}, {w}×{h}) …")
+    await update.effective_message.reply_text(f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nГенерирую ({gender}, {w}×{h}) …")
 
     try:
         seeds = [int(time.time()) & 0xFFFFFFFF, random.randrange(2**32), random.randrange(2**32)]
         urls = []
-        neg_base = NEGATIVE_PROMPT + (", " + gender_negative if gender_negative else "")
+        neg_base = _neg_with_gender(NEGATIVE_PROMPT, gender_negative)
 
-        # Включаем lockface, если он глобально включён или сцена рискованная
-        do_lock = bool(prof.get("lockface")) or (preset in RISKY_PRESETS)
-        face_refs = list_ref_images(uid)
+        # Включаем lockface, если включён у этого аватара или сцена рискованная
+        do_lock = bool(av.get("lockface")) or (preset in RISKY_PRESETS)
+        face_refs = list_ref_images(uid, av_name)
         face_ref = face_refs[0] if face_refs else None
 
         for s in seeds:
@@ -1094,10 +867,10 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
             urls.append(url)
 
         for i, u in enumerate(urls, 1):
-            await update.effective_message.reply_photo(photo=u, caption=f"{preset} • вариант {i}{' • 🔒' if do_lock else ''}")
+            await update.effective_message.reply_photo(photo=u, caption=f"{preset} • {av_name} • вариант {i}{' • 🔒' if do_lock else ''}")
 
         await update.effective_message.reply_text(
-            "Если хочешь принудительно фиксировать лицо во всех стилях — нажми «🔒 LOCKFACE». "
+            "Хочешь фиксировать лицо во всех стилях — переключай LOCKFACE для этого аватара. "
             "Для отдельных кадров напиши: «этот нрав — апскейл/вариации»."
         )
     except Exception as e:
@@ -1124,10 +897,17 @@ def main():
     app.add_handler(CommandHandler("trainstatus", trainstatus_cmd))
     app.add_handler(CommandHandler("styles", styles_cmd))
 
+    # Аватары
+    app.add_handler(CommandHandler("avatarnew", avatarnew_cmd))
+    app.add_handler(CommandHandler("avatarset", avatarset_cmd))
+    app.add_handler(CommandHandler("avatarlist", avatarlist_cmd))
+    app.add_handler(CommandHandler("avatardel", avatardel_cmd))
+
     # Кнопки
     app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav:"))
     app.add_handler(CallbackQueryHandler(cb_category, pattern=r"^cat:"))
     app.add_handler(CallbackQueryHandler(cb_style, pattern=r"^style:"))
+    app.add_handler(CallbackQueryHandler(avatar_cb, pattern=r"^avatar:"))
 
     # Фото
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
