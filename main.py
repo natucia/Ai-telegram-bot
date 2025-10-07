@@ -3,9 +3,9 @@
 # Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1
 
 from typing import Any, Dict, List, Optional, Tuple
-Style = Dict[str, Any]  # алиас типа для аннотаций
+Style = Dict[str, Any]
 
-from styles import (  # твои словари лежат в styles.py без изменений
+from styles import (  # все твои словари лежат в styles.py
     STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST,
     SCENE_GUIDANCE, RISKY_PRESETS
 )
@@ -38,15 +38,15 @@ if not os.getenv("REPLICATE_API_TOKEN"):
 DEST_OWNER  = os.getenv("REPLICATE_DEST_OWNER", "").strip()
 DEST_MODEL  = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()
 
-# Тренер LoRA (Flux LoRA trainer)
+# Тренер LoRA
 LORA_TRAINER_SLUG = os.getenv("LORA_TRAINER_SLUG", "replicate/flux-lora-trainer").strip()
 LORA_INPUT_KEY    = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 
-# Классификатор пола (опционально)
+# Классификатор пола (опц.)
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
 
-# --- LOCKFACE (InstantID / FaceID adapter) ---
-INSTANTID_SLUG = os.getenv("INSTANTID_SLUG", "cjwbw/flux-instantid").strip()  # можно поменять
+# LOCKFACE (InstantID / FaceID adapter)
+INSTANTID_SLUG = os.getenv("INSTANTID_SLUG", "").strip()  # можно пустым — тогда не используем
 
 # --- Твики обучения ---
 LORA_MAX_STEPS     = int(os.getenv("LORA_MAX_STEPS", "1400"))
@@ -59,13 +59,16 @@ LORA_CAPTION_PREF  = os.getenv(
     "balanced facial proportions, soft jawline, clear eyes"
 ).strip()
 
-# --- Генерация (глобальные дефолты; далее можем мягко править) ---
+# --- Генерация (дефолты) ---
 GEN_STEPS     = int(os.getenv("GEN_STEPS", "48"))
 GEN_GUIDANCE  = float(os.getenv("GEN_GUIDANCE", "4.2"))
 GEN_WIDTH     = int(os.getenv("GEN_WIDTH", "896"))
 GEN_HEIGHT    = int(os.getenv("GEN_HEIGHT", "1152"))
 
-# ---- Anti-drift negatives / aesthetics
+# --- Жёсткий верхний предел шагов у текущей версии модели (чтоб не ловить 422) ---
+MAX_STEPS = int(os.getenv("MAX_STEPS", "50"))
+
+# ---- Anti-drift / aesthetics
 NEGATIVE_PROMPT = (
     "cartoon, anime, 3d, cgi, plastic skin, overprocessed, oversharpen, "
     "lowres, blur, jpeg artifacts, text, watermark, logo, bad anatomy, extra fingers, short fingers, "
@@ -174,9 +177,7 @@ DEFAULT_AVATAR = {
 DEFAULT_PROFILE = {
     "gender": None,
     "current_avatar": "default",
-    "avatars": {
-        "default": DEFAULT_AVATAR.copy()
-    }
+    "avatars": {"default": DEFAULT_AVATAR.copy()}
 }
 
 def user_dir(uid:int) -> Path:
@@ -333,7 +334,7 @@ def _check_slug(slug: str, label: str):
     except Exception as e:
         logger.warning("%s BAD ('%s'): %s", label, slug, e)
 
-# ---------- авто-пол (общий для всех аватаров) ----------
+# ---------- авто-пол ----------
 def _infer_gender_from_image(path: Path) -> Optional[str]:
     try:
         client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
@@ -425,7 +426,7 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
         "prompt": prompt + AESTHETIC_SUFFIX,
         "negative_prompt": negative_prompt,
         "width": w, "height": h,
-        "num_inference_steps": steps,
+        "num_inference_steps": min(MAX_STEPS, steps),
         "guidance_scale": guidance,
         "seed": seed,
     })
@@ -441,7 +442,7 @@ def generate_with_instantid(face_path: Path, prompt:str, steps:int, guidance:flo
             "prompt": prompt + AESTHETIC_SUFFIX,
             "negative_prompt": negative_prompt,
             "width": w, "height": h,
-            "num_inference_steps": steps,
+            "num_inference_steps": min(MAX_STEPS, steps),
             "guidance_scale": guidance,
             "seed": seed,
         })
@@ -499,10 +500,10 @@ ENROLL_FLAG: Dict[Tuple[int,str],bool] = {}  # ключ: (uid, avatar)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя "
-        "в узнаваемых кино-сценах — от королевы в тронном зале до серфера на волне.\n\n"
-        "1) «📸 Набор фото» — пришли до 10 снимков (в активный аватар).\n"
+        "в узнаваемых кино-сценах.\n\n"
+        "1) «📸 Набор фото» — загрузка до 10 снимков в активный аватар.\n"
         "2) «🧪 Обучение» — тренировка LoRA для активного аватара.\n"
-        "3) «🧭 Выбрать стиль» — получи 3 варианта.\n"
+        "3) «🧭 Выбрать стиль» — получи варианты.\n"
         "4) «🔒 LOCKFACE» — фиксация лица.\n"
         "5) «🤖 Аватары» — несколько моделей в одном профиле.",
         reply_markup=main_menu_kb()
@@ -593,7 +594,8 @@ async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Версия: {av.get('finetuned_version') or '—'}\n"
         f"Пол (общий): {prof.get('gender') or '—'}\n"
         f"LOCKFACE (для аватара): {'on' if av.get('lockface') else 'off'}\n"
-        f"Pretty mode: {'ON' if PRETTY_MODE else 'OFF'}"
+        f"Pretty mode: {'ON' if PRETTY_MODE else 'OFF'}\n"
+        f"MAX_STEPS: {MAX_STEPS}"
     )
 
 async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -696,7 +698,6 @@ async def avatardel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Обучение / Генерация ----
 def _dest_model_slug(avatar:str) -> str:
     if not DEST_OWNER: raise RuntimeError("REPLICATE_DEST_OWNER не задан.")
-    # Один общий DEST_MODEL для всех аватаров (версии различаются). Можно разнести по желанию.
     return f"{DEST_OWNER}/{DEST_MODEL}"
 
 def _ensure_destination_exists(slug: str):
@@ -837,13 +838,10 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost)
     model_slug = _pinned_slug(av)
 
-    # guidance/steps с учётом pretty mode и рискованности сцены
+    # guidance/steps (pretty mode + лимит)
     guidance = max(3.0, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE))
-    if PRETTY_MODE:
-        guidance = max(2.8, min(guidance, 3.6))
-        steps = max(52, GEN_STEPS)
-    else:
-        steps = max(40, GEN_STEPS)
+    desired_steps = max(52, GEN_STEPS) if PRETTY_MODE else max(40, GEN_STEPS)
+    steps = min(MAX_STEPS, desired_steps)
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
@@ -854,26 +852,27 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
         urls = []
         neg_base = _neg_with_gender(NEGATIVE_PROMPT, gender_negative)
 
-        # Включаем lockface, если включён у этого аватара или сцена рискованная
-        do_lock = bool(av.get("lockface")) or (preset in RISKY_PRESETS)
+        # LOCKFACE для этого аватара или рискованной сцены
+        do_lock = (av.get("lockface") is True) or (preset in RISKY_PRESETS)
         face_refs = list_ref_images(uid, av_name)
         face_ref = face_refs[0] if face_refs else None
 
         for s in seeds:
-            if do_lock and face_ref:
+            if do_lock and face_ref and INSTANTID_SLUG:
                 try:
+                    inst_steps = min(MAX_STEPS, max(36, steps))
                     url = await asyncio.to_thread(
                         generate_with_instantid,
                         face_path=face_ref,
                         prompt=prompt_core,
-                        steps=max(36, steps),
+                        steps=inst_steps,
                         guidance=guidance,
                         seed=s, w=w, h=h,
                         negative_prompt=neg_base
                     )
                 except ReplicateError as e:
                     if "Model not found" in str(e) or "404" in str(e):
-                        logger.warning("InstantID slug '%s' не найден. Фолбэк на LoRA.", INSTANTID_SLUG)
+                        logger.warning("InstantID BAD ('%s'): %s", INSTANTID_SLUG, e)
                         url = await asyncio.to_thread(
                             generate_from_finetune,
                             model_slug=model_slug,
@@ -902,13 +901,13 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
 
         await update.effective_message.reply_text(
             "Хочешь фиксировать лицо во всех стилях — переключай LOCKFACE для этого аватара. "
-            "Нужно мягче/гламурнее — PRETTY_MODE уже включён; можно выключить командой /pretty."
+            "Нужно мягче/глянец — PRETTY_MODE уже включён; можно выключить командой /pretty."
         )
     except Exception as e:
         logging.exception("generation failed")
         await update.effective_message.reply_text(f"Ошибка генерации: {e}")
 
-# --- Pretty mode toggle (по желанию)
+# --- Pretty mode toggle
 async def pretty_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global PRETTY_MODE
     PRETTY_MODE = not PRETTY_MODE
@@ -950,13 +949,16 @@ def main():
     # Фото
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    # Быстрый пинг важный слагов в логах
+    # Пинг слагов (InstantID — только если задан)
     _check_slug(LORA_TRAINER_SLUG, "LoRA trainer")
-    _check_slug(INSTANTID_SLUG, "InstantID")
+    if INSTANTID_SLUG:
+        _check_slug(INSTANTID_SLUG, "InstantID")
+    else:
+        logger.info("InstantID disabled (no INSTANTID_SLUG).")
 
-    logger.info("Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s Pretty=%s",
+    logger.info("Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s Pretty=%s MAX_STEPS=%s",
                 LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}",
-                GEN_WIDTH, GEN_HEIGHT, GEN_STEPS, GEN_GUIDANCE, PRETTY_MODE)
+                GEN_WIDTH, GEN_HEIGHT, GEN_STEPS, GEN_GUIDANCE, PRETTY_MODE, MAX_STEPS)
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
