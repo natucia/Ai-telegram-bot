@@ -1,9 +1,11 @@
 # === Telegram LoRA Bot (Flux LoRA trainer + Redis persist
 # + Identity/Gender locks + InstantID LOCKFACE (1/2-step fallback)
-# + MULTI-AVATARS + NATURAL/Pretty per-user + CONSISTENT FACE SCALE) ===
-# Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1
+# + MULTI-AVATARS + NATURAL/Pretty per-user + CONSISTENT FACE SCALE
+# + S3 storage + concurrency limits + retries) ===
+# Требования:
+# python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1, boto3==1.34.0+
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Iterable
 Style = Dict[str, Any]
 
 from styles import (  # твой styles.py
@@ -11,14 +13,14 @@ from styles import (  # твой styles.py
     SCENE_GUIDANCE, RISKY_PRESETS
 )
 
-import os, re, io, json, time, asyncio, logging, shutil, random, contextlib
+import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, tempfile
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import ZipFile, ZIP_STORED
 
 import requests
 import replicate
 from replicate import Client
-from PIL import Image
+from PIL import Image, ImageOps
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
@@ -100,7 +102,7 @@ AESTHETIC_SUFFIX = (
     "micro-sharpen on eyes and lips only, anatomically plausible facial landmarks"
 )
 
-# ---------- NATURAL/PRETTY (пер-пользователь) ----------
+# ---------- NATURAL/PRETTY ----------
 NATURAL_POS = (
     "unretouched skin, realistic fine pores, subtle skin texture variations, "
     "natural micro-contrast, gentle film grain, true-to-life color, accurate skin undertones"
@@ -118,6 +120,356 @@ PRETTY_NEG = (
 )
 PRETTY_COMP_HINT = "camera slightly above eye level, flattering portrait angle"
 
+# ---------- logging ----------
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger("bot")
+
+# ---------- Concurrency & retries ----------
+# Лимиты на процесс: не спамим Replicate/S3, чтобы бот жил под нагрузкой
+GEN_SEMAPHORE = asyncio.Semaphore(int(os.getenv("GEN_CONCURRENCY", "6")))
+TRAIN_SEMAPHORE = asyncio.Semaphore(int(os.getenv("TRAIN_CONCURRENCY", "2")))
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "60"))
+
+def _retry(fn, *args, tries=3, backoff=1.8, label="op", **kwargs):
+    last = None
+    for i in range(tries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            last = e
+            if i < tries-1:
+                time.sleep(backoff**i)
+            else:
+                raise RuntimeError(f"{label} failed after {tries} tries: {e}") from e
+
+# ---------- storage (FS/S3) ----------
+DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
+
+USE_S3 = os.getenv("USE_S3", "0").lower() in ("1","true","yes","y")
+S3_BUCKET = os.getenv("S3_BUCKET", "").strip()
+S3_REGION = os.getenv("S3_REGION", "").strip()
+S3_ACCESS_KEY_ID = os.getenv("S3_ACCESS_KEY_ID", "").strip()
+S3_SECRET_ACCESS_KEY = os.getenv("S3_SECRET_ACCESS_KEY", "").strip()
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "").strip() or None
+S3_PREFIX = os.getenv("S3_PREFIX", "").strip().strip("/")
+
+s3_client = None
+if USE_S3:
+    import boto3
+    session = boto3.session.Session(
+        aws_access_key_id=S3_ACCESS_KEY_ID or None,
+        aws_secret_access_key=S3_SECRET_ACCESS_KEY or None,
+        region_name=S3_REGION or None
+    )
+    s3_client = session.client("s3", endpoint_url=S3_ENDPOINT_URL)  # endpoint_url поддерживает S3-совместимые хранилища
+
+def _s3_key(*parts: str) -> str:
+    p = "/".join(str(x).strip("/").replace("//","/") for x in parts if x is not None)
+    return f"{S3_PREFIX}/{p}".strip("/") if S3_PREFIX else p
+
+def tmp_path(suffix=".jpg") -> Path:
+    return Path(tempfile.mkstemp(prefix="bot_", suffix=suffix)[1])
+
+# --- FS utils (локальный fallback) ---
+def user_dir(uid:int) -> Path:
+    p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
+def avatars_root(uid:int) -> Path:
+    p = user_dir(uid) / "avatars"; p.mkdir(parents=True, exist_ok=True); return p
+def avatar_dir(uid:int, avatar:str) -> Path:
+    p = avatars_root(uid) / avatar; p.mkdir(parents=True, exist_ok=True); return p
+def profile_path(uid:int) -> Path:
+    return user_dir(uid) / "profile.json"
+
+# --- Storage Abstraction ---
+class Storage:
+    def save_ref_image(self, uid:int, avatar:str, raw:bytes) -> str: ...
+    def list_ref_images(self, uid:int, avatar:str) -> List[str]: ...
+    def delete_avatar(self, uid:int, avatar:str): ...
+    def get_local_copy(self, key:str) -> Path: ...
+    def pack_refs_zip(self, uid:int, avatar:str) -> Path: ...
+
+class FSStorage(Storage):
+    def save_ref_image(self, uid:int, avatar:str, raw:bytes) -> str:
+        path = avatar_dir(uid, avatar) / f"ref_{int(time.time()*1000)}.jpg"
+        _save_ref_downscaled_local(path, raw)
+        return str(path)
+
+    def list_ref_images(self, uid:int, avatar:str) -> List[str]:
+        return sorted(str(p) for p in avatar_dir(uid, avatar).glob("ref_*.jpg"))
+
+    def delete_avatar(self, uid:int, avatar:str):
+        adir = avatar_dir(uid, avatar)
+        with contextlib.suppress(Exception):
+            if adir.exists(): shutil.rmtree(adir)
+
+    def get_local_copy(self, key:str) -> Path:
+        # уже локальный путь
+        return Path(key)
+
+    def pack_refs_zip(self, uid:int, avatar:str) -> Path:
+        refs = self.list_ref_images(uid, avatar)
+        if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
+        zpath = avatar_dir(uid, avatar) / "train.zip"
+        with ZipFile(zpath, "w", compression=ZIP_STORED) as z:
+            for i, kp in enumerate(refs, 1):
+                z.write(Path(kp), arcname=f"img_{i:02d}.jpg")
+        return zpath
+
+class S3Storage(Storage):
+    def save_ref_image(self, uid:int, avatar:str, raw:bytes) -> str:
+        if not s3_client: raise RuntimeError("S3 не инициализирован.")
+        # даунскейл в памяти
+        buf = io.BytesIO()
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
+        im = _center_crop80(im)
+        im.thumbnail((1024,1024))
+        im.save(buf, "JPEG", quality=92); buf.seek(0)
+        key = _s3_key("profiles", str(uid), "avatars", avatar, f"ref_{int(time.time()*1000)}.jpg")
+        _retry(s3_client.put_object, Bucket=S3_BUCKET, Key=key, Body=buf.getvalue(), ContentType="image/jpeg", label="s3_put")
+        return f"s3://{S3_BUCKET}/{key}"
+
+    def list_ref_images(self, uid:int, avatar:str) -> List[str]:
+        if not s3_client: return []
+        prefix = _s3_key("profiles", str(uid), "avatars", avatar, "ref_")
+        keys: List[str] = []
+        cont = None
+        while True:
+            resp = _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, ContinuationToken=cont, label="s3_list") \
+                   if cont else _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, label="s3_list")
+            for it in resp.get("Contents", []):
+                keys.append(f"s3://{S3_BUCKET}/{it['Key']}")
+            if resp.get("IsTruncated"):
+                cont = resp.get("NextContinuationToken")
+            else:
+                break
+        return sorted(keys)
+
+    def delete_avatar(self, uid:int, avatar:str):
+        prefix = _s3_key("profiles", str(uid), "avatars", avatar)
+        # собираем и удаляем пачкой
+        to_del = []
+        cont = None
+        while True:
+            resp = _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, ContinuationToken=cont, label="s3_list") \
+                   if cont else _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, label="s3_list")
+            keys = [ {"Key": o["Key"]} for o in resp.get("Contents", []) ]
+            if keys:
+                _retry(s3_client.delete_objects, Bucket=S3_BUCKET, Delete={"Objects": keys}, label="s3_del")
+            if not resp.get("IsTruncated"): break
+            cont = resp.get("NextContinuationToken")
+
+    def get_local_copy(self, key:str) -> Path:
+        # key формата s3://bucket/key
+        if not key.startswith("s3://"): raise RuntimeError("Ожидался s3:// ключ")
+        _, _, bucket_and_key = key.partition("s3://")
+        bucket, _, obj_key = bucket_and_key.partition("/")
+        path = tmp_path(".jpg")
+        _retry(s3_client.download_file, bucket, obj_key, str(path), label="s3_download")
+        return path
+
+    def pack_refs_zip(self, uid:int, avatar:str) -> Path:
+        refs = self.list_ref_images(uid, avatar)
+        if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
+        zpath = Path(tempfile.mkstemp(prefix="train_", suffix=".zip")[1])
+        with ZipFile(zpath, "w", compression=ZIP_STORED) as z:
+            for i, key in enumerate(refs, 1):
+                lp = self.get_local_copy(key)
+                z.write(lp, arcname=f"img_{i:02d}.jpg")
+        # опционально можно залить ZIP в S3 (закомментировано):
+        # zip_key = _s3_key("profiles", str(uid), "avatars", avatar, "train.zip")
+        # _retry(s3_client.upload_file, str(zpath), S3_BUCKET, zip_key, label="s3_upload_zip")
+        return zpath
+
+# выбор стораджа
+STORAGE: Storage = S3Storage() if USE_S3 else FSStorage()
+logger.info("Storage backend: %s", "S3" if USE_S3 else "FS")
+
+# ---------- профили (Redis/FS) ----------
+DEFAULT_AVATAR = {
+    "images": [],  # список ключей (FS-путь или s3://…)
+    "training_id": None,
+    "finetuned_model": None,
+    "finetuned_version": None,
+    "status": None,
+    "lockface": True
+}
+DEFAULT_PROFILE = {
+    "gender": None,
+    "natural": True,
+    "pretty": False,
+    "current_avatar": "default",
+    "avatars": {"default": DEFAULT_AVATAR.copy()}
+}
+
+def _center_crop80(im: Image.Image) -> Image.Image:
+    w, h = im.size
+    side = int(min(w, h) * 0.8)
+    cx, cy = w // 2, h // 2
+    left = max(0, cx - side // 2)
+    top = max(0, cy - side // 2)
+    return im.crop((left, top, left + side, top + side))
+
+def _save_ref_downscaled_local(path: Path, raw: bytes, max_side=1024, quality=92):
+    im = Image.open(io.BytesIO(raw)).convert("RGB")
+    im = _center_crop80(im)
+    im.thumbnail((max_side, max_side))
+    im.save(path, "JPEG", quality=quality)
+
+def get_current_avatar_name(prof:Dict[str,Any]) -> str:
+    name = prof.get("current_avatar") or "default"
+    if name not in prof["avatars"]:
+        name = "default"; prof["current_avatar"] = name
+    return name
+
+def get_avatar(prof:Dict[str,Any], name:Optional[str]=None) -> Dict[str,Any]:
+    if not name: name = get_current_avatar_name(prof)
+    if name not in prof["avatars"]:
+        prof["avatars"][name] = DEFAULT_AVATAR.copy()
+    return prof["avatars"][name]
+
+def list_ref_images(uid:int, avatar:str) -> List[str]:
+    return STORAGE.list_ref_images(uid, avatar)
+
+def profile_path(uid:int) -> Path:
+    return user_dir(uid) / "profile.json"
+
+def _migrate_single_to_multi(uid:int, prof:Dict[str,Any]) -> Dict[str,Any]:
+    if "avatars" in prof: return prof
+    migrated = DEFAULT_PROFILE.copy()
+    migrated["gender"] = prof.get("gender")
+    default = DEFAULT_AVATAR.copy()
+    default["training_id"] = prof.get("training_id")
+    default["finetuned_model"] = prof.get("finetuned_model")
+    default["finetuned_version"] = prof.get("finetuned_version")
+    default["status"] = prof.get("status")
+    default["lockface"] = prof.get("lockface", True)
+    imgs = prof.get("images", [])
+    if imgs:
+        default["images"] = STORAGE.list_ref_images(uid, "default")
+    migrated["avatars"]["default"] = default
+    return migrated
+
+_redis = None
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+if REDIS_URL:
+    try:
+        import redis
+        _redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        _redis.ping()
+        logger.info("Storage: Redis OK (%s)", REDIS_URL.rsplit("@",1)[-1])
+    except Exception as e:
+        logger.warning("Storage: Redis init failed (%s). Falling back to FS. Error: %s", REDIS_URL, e)
+        _redis = None
+else:
+    logger.info("Storage: FS for profiles (no REDIS_URL)")
+
+def load_profile(uid:int) -> Dict[str, Any]:
+    if _redis:
+        try:
+            raw = _redis.get(f"profile:{uid}")
+            if raw:
+                prof = {**DEFAULT_PROFILE, **json.loads(raw)}
+                prof = _migrate_single_to_multi(uid, prof)
+                return prof
+        except Exception as e:
+            logger.warning("Redis load_profile failed: %s", e)
+    p = profile_path(uid)
+    if p.exists():
+        with contextlib.suppress(Exception):
+            prof = {**DEFAULT_PROFILE, **json.loads(p.read_text())}
+            prof = _migrate_single_to_multi(uid, prof)
+            return prof
+    return DEFAULT_PROFILE.copy()
+
+def save_profile(uid:int, prof:Dict[str,Any]):
+    if _redis:
+        try:
+            _redis.set(f"profile:{uid}", json.dumps(prof, ensure_ascii=False))
+        except Exception as e:
+            logger.warning("Redis save_profile failed: %s", e)
+    with contextlib.suppress(Exception):
+        user_dir(uid).mkdir(parents=True, exist_ok=True)
+        profile_path(uid).write_text(json.dumps(prof, ensure_ascii=False))
+
+def delete_profile(uid:int):
+    if _redis:
+        with contextlib.suppress(Exception):
+            _redis.delete(f"profile:{uid}")
+    # удаляем все аватары из хранилища
+    prof = load_profile(uid)
+    for name in list(prof.get("avatars", {}).keys()):
+        if name == "default": continue
+        STORAGE.delete_avatar(uid, name)
+    # default тоже чистим
+    STORAGE.delete_avatar(uid, "default")
+    # чистим локальную папку профиля
+    p = user_dir(uid)
+    if p.exists():
+        shutil.rmtree(p, ignore_errors=True)
+    p.mkdir(parents=True, exist_ok=True)
+
+# ---------- авто-пол ----------
+def resolve_model_version(slug: str) -> str:
+    if ":" in slug: return slug
+    model = replicate.models.get(slug)
+    versions = list(model.versions.list())
+    if not versions: raise RuntimeError(f"Нет версий модели {slug}")
+    return f"{slug}:{versions[0].id}"
+
+def extract_any_url(out: Any) -> Optional[str]:
+    if isinstance(out, str) and out.startswith(("http","https")): return out
+    if isinstance(out, list):
+        for v in out:
+            u = extract_any_url(v)
+            if u: return u
+    if isinstance(out, dict):
+        for v in out.values():
+            u = extract_any_url(v)
+            if u: return u
+    return None
+
+def _check_slug(slug: str, label: str):
+    try:
+        mv = resolve_model_version(slug)
+        logger.info("%s OK: %s", label, mv)
+    except Exception as e:
+        logger.warning("%s BAD ('%s'): %s", label, slug, e)
+
+def _infer_gender_from_image_local(local_path: Path) -> Optional[str]:
+    try:
+        client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+        version_slug = resolve_model_version(GENDER_MODEL_SLUG)
+        with open(local_path, "rb") as img_b:
+            pred = client.predictions.create(version=version_slug, input={"image": img_b})
+            pred.wait()
+            out = pred.output
+            g = (out.get("gender") if isinstance(out, dict) else str(out)).lower()
+            if "female" in g or "woman" in g: return "female"
+            if "male" in g or "man" in g: return "male"
+    except Exception as e:
+        logger.warning("Gender inference error: %s", e)
+    return None
+
+def auto_detect_gender(uid:int) -> str:
+    prof = load_profile(uid)
+    av_name = get_current_avatar_name(prof)
+    refs = list_ref_images(uid, av_name)
+    if not refs: return "female"
+    face_key = refs[0]
+    local = STORAGE.get_local_copy(face_key)
+    g = _infer_gender_from_image_local(local)
+    with contextlib.suppress(Exception):
+        if local.exists() and str(local).startswith(tempfile.gettempdir()):
+            local.unlink()
+    return g or "female"
+
+def _caption_for_gender(g: str) -> str:
+    env_override = os.getenv("LORA_CAPTION_PREFIX", "").strip()
+    if env_override:
+        return env_override
+    return DEFAULT_MALE_CAPTION if (g or "").lower() == "male" else DEFAULT_FEMALE_CAPTION
+
+# ---------- Композиция/линза/свет (без изменений значимых) ----------
 def _beauty_guardrail() -> str:
     return (
         "exact facial identity, identity preserved, "
@@ -144,7 +496,6 @@ def _gender_lock(gender:str) -> Tuple[str, str]:
         neg = "male, man, beard, stubble, mustache, adam's apple"
     return pos, neg
 
-# ---------- Композиция/линза/свет ----------
 def _safe_portrait_size(w:int, h:int) -> Tuple[int,int]:
     ar = w / max(1, h)
     if ar >= 0.75:
@@ -191,220 +542,6 @@ def _tone_text(tone: str) -> str:
         "candle": "warm candlelight, soft glow, volumetric rays",
     }.get(tone, "balanced soft lighting")
 
-# ---------- logging ----------
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
-logger = logging.getLogger("bot")
-
-# ---------- storage ----------
-DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
-
-DEFAULT_AVATAR = {
-    "images": [],
-    "training_id": None,
-    "finetuned_model": None,
-    "finetuned_version": None,
-    "status": None,
-    "lockface": True
-}
-DEFAULT_PROFILE = {
-    "gender": None,
-    "natural": True,
-    "pretty": False,
-    "current_avatar": "default",
-    "avatars": {"default": DEFAULT_AVATAR.copy()}
-}
-
-def user_dir(uid:int) -> Path:
-    p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
-def avatars_root(uid:int) -> Path:
-    p = user_dir(uid) / "avatars"; p.mkdir(parents=True, exist_ok=True); return p
-def avatar_dir(uid:int, avatar:str) -> Path:
-    p = avatars_root(uid) / avatar; p.mkdir(parents=True, exist_ok=True); return p
-def list_ref_images(uid:int, avatar:str) -> List[Path]:
-    return sorted(avatar_dir(uid, avatar).glob("ref_*.jpg"))
-def profile_path(uid:int) -> Path:
-    return user_dir(uid) / "profile.json"
-
-def _migrate_single_to_multi(uid:int, prof:Dict[str,Any]) -> Dict[str,Any]:
-    if "avatars" in prof: return prof
-    migrated = DEFAULT_PROFILE.copy()
-    migrated["gender"] = prof.get("gender")
-    default = DEFAULT_AVATAR.copy()
-    default["training_id"] = prof.get("training_id")
-    default["finetuned_model"] = prof.get("finetuned_model")
-    default["finetuned_version"] = prof.get("finetuned_version")
-    default["status"] = prof.get("status")
-    default["lockface"] = prof.get("lockface", True)
-    imgs = prof.get("images", [])
-    if imgs:
-        for name in imgs:
-            src = user_dir(uid) / name
-            if src.exists():
-                dst = avatar_dir(uid, "default") / name
-                if not dst.exists():
-                    with contextlib.suppress(Exception):
-                        shutil.move(str(src), str(dst))
-        default["images"] = [p.name for p in list_ref_images(uid, "default")]
-    migrated["avatars"]["default"] = default
-    return migrated
-
-_redis = None
-REDIS_URL = os.getenv("REDIS_URL", "").strip()
-if REDIS_URL:
-    try:
-        import redis
-        _redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-        _redis.ping()
-        logger.info("Storage: Redis OK (%s)", REDIS_URL.rsplit("@",1)[-1])
-    except Exception as e:
-        logger.warning("Storage: Redis init failed (%s). Falling back to FS. Error: %s", REDIS_URL, e)
-        _redis = None
-else:
-    logger.info("Storage: FS (no REDIS_URL)")
-
-def load_profile(uid:int) -> Dict[str, Any]:
-    if _redis:
-        try:
-            raw = _redis.get(f"profile:{uid}")
-            if raw:
-                prof = {**DEFAULT_PROFILE, **json.loads(raw)}
-                prof = _migrate_single_to_multi(uid, prof)
-                return prof
-        except Exception as e:
-            logger.warning("Redis load_profile failed: %s", e)
-    p = profile_path(uid)
-    if p.exists():
-        with contextlib.suppress(Exception):
-            prof = {**DEFAULT_PROFILE, **json.loads(p.read_text())}
-            prof = _migrate_single_to_multi(uid, prof)
-            return prof
-    return DEFAULT_PROFILE.copy()
-
-def save_profile(uid:int, prof:Dict[str,Any]):
-    if _redis:
-        try:
-            _redis.set(f"profile:{uid}", json.dumps(prof, ensure_ascii=False))
-        except Exception as e:
-            logger.warning("Redis save_profile failed: %s", e)
-    with contextlib.suppress(Exception):
-        profile_path(uid).write_text(json.dumps(prof, ensure_ascii=False))
-
-def delete_profile(uid:int):
-    if _redis:
-        with contextlib.suppress(Exception):
-            _redis.delete(f"profile:{uid}")
-    p = user_dir(uid)
-    if p.exists():
-        shutil.rmtree(p)
-    p.mkdir(parents=True, exist_ok=True)
-
-# ---------- Рефы ----------
-def save_ref_downscaled(path: Path, raw: bytes, max_side=1024, quality=92):
-    im = Image.open(io.BytesIO(raw)).convert("RGB")
-    w, h = im.size
-    side = int(min(w, h) * 0.8)  # центральные 80%
-    cx, cy = w // 2, h // 2
-    left = max(0, cx - side // 2)
-    top = max(0, cy - side // 2)
-    im = im.crop((left, top, left + side, top + side))
-    im.thumbnail((max_side, max_side))
-    im.save(path, "JPEG", quality=quality)
-
-# ---------- Аватарные утилиты ----------
-def get_current_avatar_name(prof:Dict[str,Any]) -> str:
-    name = prof.get("current_avatar") or "default"
-    if name not in prof["avatars"]:
-        name = "default"; prof["current_avatar"] = name
-    return name
-
-def get_avatar(prof:Dict[str,Any], name:Optional[str]=None) -> Dict[str,Any]:
-    if not name: name = get_current_avatar_name(prof)
-    if name not in prof["avatars"]:
-        prof["avatars"][name] = DEFAULT_AVATAR.copy()
-    return prof["avatars"][name]
-
-def set_current_avatar(uid:int, name:str):
-    prof = load_profile(uid)
-    if name not in prof["avatars"]:
-        prof["avatars"][name] = DEFAULT_AVATAR.copy()
-    prof["current_avatar"] = name
-    save_profile(uid, prof)
-
-def ensure_avatar(uid:int, name:str):
-    prof = load_profile(uid)
-    if name not in prof["avatars"]:
-        prof["avatars"][name] = DEFAULT_AVATAR.copy()
-    save_profile(uid, prof)
-
-def del_avatar(uid:int, name:str):
-    prof = load_profile(uid)
-    if name == "default": raise RuntimeError("Нельзя удалить аватар 'default'.")
-    if name not in prof["avatars"]: return
-    adir = avatar_dir(uid, name)
-    with contextlib.suppress(Exception):
-        if adir.exists(): shutil.rmtree(adir)
-    prof["avatars"].pop(name, None)
-    if prof["current_avatar"] == name: prof["current_avatar"] = "default"
-    save_profile(uid, prof)
-
-# ---------- Replicate helpers ----------
-def resolve_model_version(slug: str) -> str:
-    if ":" in slug: return slug
-    model = replicate.models.get(slug)
-    versions = list(model.versions.list())
-    if not versions: raise RuntimeError(f"Нет версий модели {slug}")
-    return f"{slug}:{versions[0].id}"
-
-def extract_any_url(out: Any) -> Optional[str]:
-    if isinstance(out, str) and out.startswith(("http","https")): return out
-    if isinstance(out, list):
-        for v in out:
-            u = extract_any_url(v)
-            if u: return u
-    if isinstance(out, dict):
-        for v in out.values():
-            u = extract_any_url(v)
-            if u: return u
-    return None
-
-def _check_slug(slug: str, label: str):
-    try:
-        mv = resolve_model_version(slug)
-        logger.info("%s OK: %s", label, mv)
-    except Exception as e:
-        logger.warning("%s BAD ('%s'): %s", label, slug, e)
-
-# ---------- авто-пол ----------
-def _infer_gender_from_image(path: Path) -> Optional[str]:
-    try:
-        client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-        version_slug = resolve_model_version(GENDER_MODEL_SLUG)
-        with open(path, "rb") as img_b:
-            pred = client.predictions.create(version=version_slug, input={"image": img_b})
-            pred.wait()
-            out = pred.output
-            g = (out.get("gender") if isinstance(out, dict) else str(out)).lower()
-            if "female" in g or "woman" in g: return "female"
-            if "male" in g or "man" in g: return "male"
-    except Exception as e:
-        logger.warning("Gender inference error: %s", e)
-    return None
-
-def auto_detect_gender(uid:int) -> str:
-    prof = load_profile(uid)
-    av_name = get_current_avatar_name(prof)
-    refs = list_ref_images(uid, av_name)
-    if not refs: return "female"
-    g = _infer_gender_from_image(refs[0])
-    return g or "female"
-
-def _caption_for_gender(g: str) -> str:
-    env_override = os.getenv("LORA_CAPTION_PREFIX", "").strip()
-    if env_override:
-        return env_override
-    return DEFAULT_MALE_CAPTION if (g or "").lower() == "male" else DEFAULT_FEMALE_CAPTION
-
-# ---------- Генерация промпта ----------
 def _style_lock(role:str, outfit:str, props:str, background:str, comp_hint:str) -> str:
     bits = [
         f"{role}" if role else "",
@@ -418,11 +555,10 @@ def _style_lock(role:str, outfit:str, props:str, background:str, comp_hint:str) 
 
 def _inject_beauty(core_prompt: str, comp_text: str, natural: bool, pretty: bool) -> str:
     parts = [core_prompt]
-    if natural:
-        parts.append(NATURAL_POS)
+    if natural: parts.append(NATURAL_POS)
     if pretty:
         parts.append(PRETTY_POS)
-        if PRETTY_COMP_HINT and ("eye level" in comp_text or "chest level" in comp_text):
+        if "eye level" in comp_text or "chest level" in comp_text:
             parts.append(PRETTY_COMP_HINT)
     return ", ".join(parts)
 
@@ -431,8 +567,7 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
     role = meta.get("role_f") if (gender=="female" and meta.get("role_f")) else meta.get("role","")
     if not role and meta.get("role_m") and gender=="male": role = meta.get("role_m","")
     outfit = meta.get("outfit_f") if (gender=="female" and meta.get("outfit_f")) else meta.get("outfit","")
-    props = meta.get("props","")
-    bg = meta.get("bg","")
+    props = meta.get("props",""); bg = meta.get("bg","")
 
     gpos, gneg = _gender_lock(gender)
     anti = _anti_distort()
@@ -462,50 +597,52 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
     if pretty:  neg = (neg + ", " + PRETTY_NEG) if neg else PRETTY_NEG
     return core, neg
 
-# ---------- Инференс ----------
+# ---------- Инференс/генерация с ретраями ----------
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
     mv = resolve_model_version(model_slug)
-    out = replicate.run(mv, input={
-        "prompt": prompt + AESTHETIC_SUFFIX,
-        "negative_prompt": negative_prompt,
-        "width": w, "height": h,
-        "num_inference_steps": min(MAX_STEPS, steps),
-        "guidance_scale": guidance,
-        "seed": seed,
-    })
+    def _run():
+        return replicate.run(mv, input={
+            "prompt": prompt + AESTHETIC_SUFFIX,
+            "negative_prompt": negative_prompt,
+            "width": w, "height": h,
+            "num_inference_steps": min(MAX_STEPS, steps),
+            "guidance_scale": guidance,
+            "seed": seed,
+        })
+    out = _retry(_run, label="replicate_gen")
     url = extract_any_url(out)
     if not url: raise RuntimeError("Empty output")
     return url
 
-def generate_with_instantid(face_path: Path, prompt: str, steps: int, guidance: float,
+def generate_with_instantid(face_local_path: Path, prompt: str, steps: int, guidance: float,
                             seed: int, w: int, h: int, negative_prompt: str,
                             natural: bool = True, content_image_bytes: Optional[bytes] = None) -> str:
     mv = resolve_model_version(INSTANTID_SLUG)
     strength = INSTANTID_STRENGTH * (0.9 if natural else 1.0)
     face_w   = INSTANTID_FACE_WEIGHT * (0.9 if natural else 1.0)
-
-    # читаем лицо в байты
-    with open(face_path, "rb") as fb:
+    with open(face_local_path, "rb") as fb:
         face_bytes = fb.read()
 
-    inputs: Dict[str, Any] = {
-        "prompt": prompt + AESTHETIC_SUFFIX,
-        "negative_prompt": negative_prompt,
-        "width": w, "height": h,
-        "num_inference_steps": min(MAX_STEPS, steps),
-        "guidance_scale": guidance,
-        "seed": seed,
-        "id_strength": strength,
-        "image_identity": strength,
-        "face_strength": face_w,
-        "adapter_strength": strength,
-        "face_image": face_bytes,
-    }
-    if content_image_bytes:
-        inputs["image"] = content_image_bytes
+    def _run():
+        inputs: Dict[str, Any] = {
+            "prompt": prompt + AESTHETIC_SUFFIX,
+            "negative_prompt": negative_prompt,
+            "width": w, "height": h,
+            "num_inference_steps": min(MAX_STEPS, steps),
+            "guidance_scale": guidance,
+            "seed": seed,
+            "id_strength": strength,
+            "image_identity": strength,
+            "face_strength": face_w,
+            "adapter_strength": strength,
+            "face_image": face_bytes,
+        }
+        if content_image_bytes:
+            inputs["image"] = content_image_bytes
+        return replicate.run(mv, input=inputs)
 
     try:
-        out = replicate.run(mv, input=inputs)
+        out = _retry(_run, label="replicate_instantid")
         url = extract_any_url(out)
         if not url: raise RuntimeError("Empty output (InstantID)")
         return url
@@ -515,7 +652,7 @@ def generate_with_instantid(face_path: Path, prompt: str, steps: int, guidance: 
             raise RuntimeError("INSTANTID_NEEDS_IMAGE")
         raise
 
-# ---------- UI ----------
+# ---------- UI/KB (как было) ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton("🧭 Выбрать стиль", callback_data="nav:styles")],
@@ -638,7 +775,7 @@ async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     av_name = get_current_avatar_name(prof)
     ENROLL_FLAG[(uid, av_name)] = False
     av = get_avatar(prof, av_name)
-    av["images"] = [p.name for p in list_ref_images(uid, av_name)]
+    av["images"] = list_ref_images(uid, av_name)
     try:
         if not prof.get("gender"):
             prof["gender"] = auto_detect_gender(uid)
@@ -681,7 +818,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Уже 10/10. Нажми /iddone."); return
         f = await update.message.photo[-1].get_file()
         data = await f.download_as_bytearray()
-        save_ref_downscaled(avatar_dir(uid, av_name) / f"ref_{int(time.time()*1000)}.jpg", bytes(data))
+        key = STORAGE.save_ref_image(uid, av_name, bytes(data))
+        # подхватим новый список в профиле
+        prof = load_profile(uid); av = get_avatar(prof, av_name)
+        av["images"] = list_ref_images(uid, av_name)
+        save_profile(uid, prof)
         await update.message.reply_text(f"Сохранила ({len(refs)+1}/10) для «{av_name}». Ещё?")
     else:
         await update.message.reply_text("Сначала включи набор: «📸 Набор фото» или /idenroll.")
@@ -710,6 +851,28 @@ async def lockface_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text(f"LOCKFACE {state} для активного аватара.")
 
 # ---- Аватарные команды ----
+def set_current_avatar(uid:int, name:str):
+    prof = load_profile(uid)
+    if name not in prof["avatars"]:
+        prof["avatars"][name] = DEFAULT_AVATAR.copy()
+    prof["current_avatar"] = name
+    save_profile(uid, prof)
+
+def ensure_avatar(uid:int, name:str):
+    prof = load_profile(uid)
+    if name not in prof["avatars"]:
+        prof["avatars"][name] = DEFAULT_AVATAR.copy()
+    save_profile(uid, prof)
+
+def del_avatar(uid:int, name:str):
+    prof = load_profile(uid)
+    if name == "default": raise RuntimeError("Нельзя удалить аватар 'default'.")
+    if name not in prof["avatars"]: return
+    STORAGE.delete_avatar(uid, name)
+    prof["avatars"].pop(name, None)
+    if prof["current_avatar"] == name: prof["current_avatar"] = "default"
+    save_profile(uid, prof)
+
 async def avatarnew_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not context.args:
@@ -771,13 +934,7 @@ def _ensure_destination_exists(slug: str):
         raise RuntimeError(f"Целевая модель '{slug}' не найдена. Создай на https://replicate.com/create (owner={o}, name='{name}').")
 
 def _pack_refs_zip(uid:int, avatar:str) -> Path:
-    refs = list_ref_images(uid, avatar)
-    if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
-    zpath = avatar_dir(uid, avatar) / "train.zip"
-    with ZipFile(zpath, "w") as z:
-        for i, p in enumerate(refs, 1):
-            z.write(p, arcname=f"img_{i:02d}.jpg")
-    return zpath
+    return STORAGE.pack_refs_zip(uid, avatar)
 
 def start_lora_training(uid:int, avatar:str) -> str:
     dest_model = _dest_model_slug(avatar); _ensure_destination_exists(dest_model)
@@ -790,7 +947,8 @@ def start_lora_training(uid:int, avatar:str) -> str:
     caption_prefix = _caption_for_gender(g)
 
     with open(zip_path, "rb") as f:
-        training = client.trainings.create(
+        training = _retry(
+            client.trainings.create,
             version=trainer_version,
             input={
                 LORA_INPUT_KEY: f,
@@ -800,7 +958,8 @@ def start_lora_training(uid:int, avatar:str) -> str:
                 "caption_prefix": caption_prefix,
                 "resolution": LORA_RESOLUTION,
             },
-            destination=dest_model
+            destination=dest_model,
+            label="replicate_train"
         )
     prof = load_profile(uid); av = get_avatar(prof, avatar)
     av["training_id"] = training.id; av["status"] = "starting"; av["finetuned_model"] = dest_model
@@ -863,7 +1022,8 @@ async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(f"Нужно 10 фото в «{av_name}». Сначала «📸 Набор фото» и затем /iddone."); return
     await update.effective_message.reply_text(f"Запускаю обучение LoRA для «{av_name}»…")
     try:
-        training_id = await asyncio.to_thread(start_lora_training, uid, av_name)
+        async with TRAIN_SEMAPHORE:
+            training_id = await asyncio.to_thread(start_lora_training, uid, av_name)
         await update.effective_message.reply_text(f"Стартанула. ID: {training_id}\nПроверяй /trainstatus.")
         if DEST_OWNER and DEST_MODEL and training_id:
             await update.effective_message.reply_text(
@@ -939,61 +1099,67 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     await update.effective_message.reply_text(f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nГенерирую ({gender}, {w}×{h}) …")
 
     try:
-        face_refs = list_ref_images(uid, av_name)
-        face_ref = face_refs[0] if face_refs else None
+        refs = list_ref_images(uid, av_name)
+        if not refs: raise RuntimeError("Нет рефов.")
+        face_key = refs[0]
+        face_local = STORAGE.get_local_copy(face_key)
 
-        variants = [("lock", random.randrange(2**32)), ("lock", random.randrange(2**32)), ("plain", random.randrange(2**32))]
         neg_base = _neg_with_gender(NEGATIVE_PROMPT_BASE, gender_negative)
+        variants = [("lock", random.randrange(2**32)), ("lock", random.randrange(2**32)), ("plain", random.randrange(2**32))]
 
-        for mode, s in variants:
-            use_lock = (mode == "lock") and (av.get("lockface") is not False) and INSTANTID_SLUG and face_ref
-            if use_lock:
-                inst_steps = min(MAX_STEPS, max(38, steps))
-                # если форс — сразу двухшаг
-                if INSTANTID_FORCE_TWOSTEP:
-                    base_url = await asyncio.to_thread(
-                        generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
-                        steps=steps, guidance=guidance, seed=random.randrange(2**32),
-                        w=w, h=h, negative_prompt=neg_base
-                    )
-                    base_bytes = requests.get(base_url, timeout=60).content
-                    url = await asyncio.to_thread(
-                        generate_with_instantid, face_path=face_ref, prompt=prompt_core,
-                        steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                        negative_prompt=neg_base, natural=natural,
-                        content_image_bytes=base_bytes
-                    )
-                else:
-                    try:
-                        # пробуем без image
-                        url = await asyncio.to_thread(
-                            generate_with_instantid, face_path=face_ref, prompt=prompt_core,
-                            steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                            negative_prompt=neg_base, natural=natural
+        async with GEN_SEMAPHORE:
+            for mode, s in variants:
+                use_lock = (mode == "lock") and (av.get("lockface") is not False) and INSTANTID_SLUG
+                if use_lock:
+                    inst_steps = min(MAX_STEPS, max(38, steps))
+                    if INSTANTID_FORCE_TWOSTEP:
+                        base_url = await asyncio.to_thread(
+                            generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
+                            steps=steps, guidance=guidance, seed=random.randrange(2**32),
+                            w=w, h=h, negative_prompt=neg_base
                         )
-                    except Exception as e:
-                        if "INSTANTID_NEEDS_IMAGE" in str(e):
-                            base_url = await asyncio.to_thread(
-                                generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
-                                steps=steps, guidance=guidance, seed=random.randrange(2**32),
-                                w=w, h=h, negative_prompt=neg_base
-                            )
-                            base_bytes = requests.get(base_url, timeout=60).content
+                        base_bytes = _retry(requests.get, base_url, timeout=HTTP_TIMEOUT, label="get_base").content
+                        url = await asyncio.to_thread(
+                            generate_with_instantid, face_local_path=face_local, prompt=prompt_core,
+                            steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
+                            negative_prompt=neg_base, natural=natural,
+                            content_image_bytes=base_bytes
+                        )
+                    else:
+                        try:
                             url = await asyncio.to_thread(
-                                generate_with_instantid, face_path=face_ref, prompt=prompt_core,
+                                generate_with_instantid, face_local_path=face_local, prompt=prompt_core,
                                 steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                                negative_prompt=neg_base, natural=natural,
-                                content_image_bytes=base_bytes
+                                negative_prompt=neg_base, natural=natural
                             )
-                        else:
-                            raise
-            else:
-                url = await asyncio.to_thread(
-                    generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
-                    steps=steps, guidance=guidance, seed=s, w=w, h=h, negative_prompt=neg_base
-                )
-            tag = "🔒" if use_lock else "◻️"
-            await update.effective_message.reply_photo(photo=url, caption=f"{preset} • {av_name} • {tag}")
+                        except Exception as e:
+                            if "INSTANTID_NEEDS_IMAGE" in str(e):
+                                base_url = await asyncio.to_thread(
+                                    generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
+                                    steps=steps, guidance=guidance, seed=random.randrange(2**32),
+                                    w=w, h=h, negative_prompt=neg_base
+                                )
+                                base_bytes = _retry(requests.get, base_url, timeout=HTTP_TIMEOUT, label="get_base").content
+                                url = await asyncio.to_thread(
+                                    generate_with_instantid, face_local_path=face_local, prompt=prompt_core,
+                                    steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
+                                    negative_prompt=neg_base, natural=natural,
+                                    content_image_bytes=base_bytes
+                                )
+                            else:
+                                raise
+                else:
+                    url = await asyncio.to_thread(
+                        generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
+                        steps=steps, guidance=guidance, seed=s, w=w, h=h, negative_prompt=neg_base
+                    )
+                tag = "🔒" if use_lock else "◻️"
+                await update.effective_message.reply_photo(photo=url, caption=f"{preset} • {av_name} • {tag}")
+
+        # чистим temp при S3
+        with contextlib.suppress(Exception):
+            if face_local.exists() and str(face_local).startswith(tempfile.gettempdir()):
+                face_local.unlink()
 
         await update.effective_message.reply_text("Готово. Если какой-то пресет «плывёт», скажи его имя — притяну гайки именно для него.")
 
@@ -1064,9 +1230,9 @@ def main():
         logger.info("InstantID disabled (no INSTANTID_SLUG).")
 
     logger.info(
-        "Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s ConsistentScale=%s",
+        "Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s ConsistentScale=%s Storage=%s",
         LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}", GEN_WIDTH, GEN_HEIGHT,
-        GEN_STEPS, GEN_GUIDANCE, CONSISTENT_SCALE
+        GEN_STEPS, GEN_GUIDANCE, CONSISTENT_SCALE, "S3" if USE_S3 else "FS"
     )
     app.run_polling(drop_pending_updates=True)
 
