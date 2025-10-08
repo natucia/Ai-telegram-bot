@@ -569,8 +569,6 @@ def generate_with_instantid(
             raise RuntimeError("Empty output (InstantID)")
         return url
 
-
-
 # ---------- UI ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
     rows = [
