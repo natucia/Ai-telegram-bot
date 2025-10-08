@@ -46,7 +46,7 @@ STYLE_PRESETS.update({
     },
 
     # ——— Жанры/Поп-культура ———
-    "Восточная сказка (Аладдин-лайк)": {
+    "Аладдин и восточная сказка": {
         "desc": "Восточный базар, дворец, лампа-джинн (вайб восточной сказки).",
         "role": "arabian nights adventurer",
         "outfit_f": "embroidered top and harem pants, veil optional",
@@ -55,7 +55,7 @@ STYLE_PRESETS.update({
         "bg": "sandstone palace domes and market stalls",
         "comp": "half", "tone": "warm"
     },
-    "Сказка студии (диснееподобно)": {
+    "Сказка Дисней": {
         "desc": "Светлая сказочная стилизация с крупными выразительными глазами.",
         "role": "fairy-tale protagonist",
         "outfit_f": "pastel dress with subtle sparkles",
@@ -64,7 +64,7 @@ STYLE_PRESETS.update({
         "bg": "storybook castle and garden",
         "comp": "half", "tone": "daylight"
     },
-    "Семейная CGI-анимация (пиксар-подобно)": {
+    "Пиксар анимация": {
         "desc": "Тёплая семейная CGI-эстетика, мягкие формы, кинематографичная подсветка.",
         "role": "family animation character",
         "outfit": "casual friendly clothes",
@@ -72,7 +72,7 @@ STYLE_PRESETS.update({
         "bg": "friendly suburban street or cozy room",
         "comp": "half", "tone": "warm"
     },
-    "Супергеройский комикс (AAA)": {
+    "Супергерой": {
         "desc": "Комиксовый супергерой: динамика, контровой свет, цветные неоны.",
         "role": "superhero in action pose",
         "outfit_f": "form-fitting suit with emblem (tasteful, non-revealing)",
@@ -283,10 +283,10 @@ THEME_BOOST.update({
     "Со змеёй": "soft speculars on scales, tropical leaf shadows",
     "С крокодилом": "sun glitter on ripples, wooden railing texture",
     "На драконе в небесах": "wind-torn cloak edges, cloud streaks, distant peaks",
-    "Восточная сказка (Аладдин-лайк)": "brass lamp glint, patterned textiles, warm dust haze",
-    "Сказка студии (диснееподобно)": "gentle bloom, pastel palette, friendly sparkles",
-    "Семейная CGI-анимация (пиксар-подобно)": "soft subsurface scattering, rim light, friendly palette",
-    "Супергеройский комикс (AAA)": "dramatic rim light, neon reflections, halftone micro-texture",
+    "Аладдин и восточная сказка": "brass lamp glint, patterned textiles, warm dust haze",
+    "Сказка Дисней": "gentle bloom, pastel palette, friendly sparkles",
+    "Пиксар анимация": "soft subsurface scattering, rim light, friendly palette",
+    "Супергерой": "dramatic rim light, neon reflections, halftone micro-texture",
     "Домработница": "sun dust in air, lemon-fresh cleanliness vibe",
     "Учитель": "chalk smudge on fingers, diagram edges on board",
     "Медсестра (игриво)": "clean reflections on tiles, soft corridor bokeh",
@@ -308,10 +308,10 @@ THEME_BOOST.update({
 SCENE_GUIDANCE = { "Киберпанк улица": 3.2, "Космический скафандр": 3.2, "Самурай в храме": 3.2, "Средневековый рыцарь": 3.2, }
 SCENE_GUIDANCE.update({ "Джунгли (Тарзан)": 3.2, "Инопланетяне": 3.2, "Хаос": 3.2, "Фридайвер под водой": 3.0, "Дельтаплан": 3.2, "Арктика": 3.2, "Детство": 3.0, })
 SCENE_GUIDANCE.update({
-    "Супергеройский комикс (AAA)": 3.2,
-    "Восточная сказка (Аладдин-лайк)": 3.4,
-    "Сказка студии (диснееподобно)": 3.4,
-    "Семейная CGI-анимация (пиксар-подобно)": 3.4,
+    "Супергерой": 3.2,
+    "Аладдин и восточная сказка": 3.4,
+    "Сказка Дисней": 3.4,
+    "Пиксар анимация": 3.4,
     "На драконе в небесах": 3.0,
     "Фея": 3.2,
     "Дискотека": 3.2,
@@ -329,8 +329,8 @@ SCENE_GUIDANCE.update({
 
 RISKY_PRESETS = set(SCENE_GUIDANCE.keys())
 RISKY_PRESETS.update(set([
-  "Супергеройский комикс (AAA)", "Восточная сказка (Аладдин-лайк)",
-  "Сказка студии (диснееподобно)", "Семейная CGI-анимация (пиксар-подобно)",
+  "Супергерой", "Восточная сказка (Аладдин-лайк)",
+  "Сказка Дисней", "Пиксар анимация",
   "На драконе в небесах", "Фея", "Дискотека", "Тюрьма",
   "Гранж уличный (сквот)", "Робот", "Взрослый медведь рядом",
   "Со змеёй", "С крокодилом", "Бразилия", "Индия",
