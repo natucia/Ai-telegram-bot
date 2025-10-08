@@ -614,43 +614,62 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
     if not url: raise RuntimeError("Empty output")
     return url
 
+import tempfile, os
+
+def _bytes_to_tempfile(data: bytes, suffix: str) -> str:
+            fd, path = tempfile.mkstemp(prefix="inst_", suffix=suffix)
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            return path
+
 def generate_with_instantid(face_local_path: Path, prompt: str, steps: int, guidance: float,
-                            seed: int, w: int, h: int, negative_prompt: str,
-                            natural: bool = True, content_image_bytes: Optional[bytes] = None) -> str:
-    mv = resolve_model_version(INSTANTID_SLUG)
-    strength = INSTANTID_STRENGTH * (0.9 if natural else 1.0)
-    face_w   = INSTANTID_FACE_WEIGHT * (0.9 if natural else 1.0)
-    with open(face_local_path, "rb") as fb:
-        face_bytes = fb.read()
+                                    seed: int, w: int, h: int, negative_prompt: str,
+                                    natural: bool = True, content_image_bytes: Optional[bytes] = None) -> str:
+            mv = resolve_model_version(INSTANTID_SLUG)
+            strength = INSTANTID_STRENGTH * (0.9 if natural else 1.0)
+            face_w   = INSTANTID_FACE_WEIGHT * (0.9 if natural else 1.0)
 
-    def _run():
-        inputs: Dict[str, Any] = {
-            "prompt": prompt + AESTHETIC_SUFFIX,
-            "negative_prompt": negative_prompt,
-            "width": w, "height": h,
-            "num_inference_steps": min(MAX_STEPS, steps),
-            "guidance_scale": guidance,
-            "seed": seed,
-            "id_strength": strength,
-            "image_identity": strength,
-            "face_strength": face_w,
-            "adapter_strength": strength,
-            "face_image": face_bytes,
-        }
-        if content_image_bytes:
-            inputs["image"] = content_image_bytes
-        return replicate.run(mv, input=inputs)
+            # готовим файлы
+            tmp_base = None
+            if content_image_bytes:
+                tmp_base = _bytes_to_tempfile(content_image_bytes, ".jpg")
 
-    try:
-        out = _retry(_run, label="replicate_instantid")
-        url = extract_any_url(out)
-        if not url: raise RuntimeError("Empty output (InstantID)")
-        return url
-    except Exception as e:
-        msg = str(e).lower()
-        if ("image is required" in msg or "input.image" in msg) and not content_image_bytes:
-            raise RuntimeError("INSTANTID_NEEDS_IMAGE")
-        raise
+            def _run():
+                inputs: Dict[str, Any] = {
+                    "prompt": prompt + AESTHETIC_SUFFIX,
+                    "negative_prompt": negative_prompt,
+                    "width": w, "height": h,
+                    "num_inference_steps": min(MAX_STEPS, steps),
+                    "guidance_scale": guidance,
+                    "seed": seed,
+                    "id_strength": strength,
+                    "image_identity": strength,
+                    "face_strength": face_w,
+                    "adapter_strength": strength,
+                    # ВАЖНО: file-like, не bytes
+                    "face_image": open(face_local_path, "rb"),
+                }
+                if tmp_base:
+                    inputs["image"] = open(tmp_base, "rb")
+                return replicate.run(mv, input=inputs)
+
+            try:
+                out = _retry(_run, label="replicate_instantid")
+                url = extract_any_url(out)
+                if not url:
+                    raise RuntimeError("Empty output (InstantID)")
+                return url
+            except Exception as e:
+                msg = str(e).lower()
+                if ("image is required" in msg or "input.image" in msg) and not content_image_bytes:
+                    raise RuntimeError("INSTANTID_NEEDS_IMAGE")
+                raise
+            finally:
+                # чистка временного файла
+                if tmp_base:
+                    with contextlib.suppress(Exception):
+                        os.remove(tmp_base)
+
 
 # ---------- UI/KB (как было) ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
