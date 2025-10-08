@@ -1146,7 +1146,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                         )
                         base_bytes = _retry(requests.get, base_url, timeout=HTTP_TIMEOUT, label="get_base").content
                         url = await asyncio.to_thread(
-                            generate_with_instantid, face_local_path=face_local, prompt=prompt_core,
+                            generate_with_instantid, face_path=face_local, prompt=prompt_core,
                             steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
                             negative_prompt=neg_base, natural=natural,
                             content_image_bytes=base_bytes
@@ -1154,7 +1154,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                     else:
                         try:
                             url = await asyncio.to_thread(
-                                generate_with_instantid, face_local_path=face_local, prompt=prompt_core,
+                                generate_with_instantid, face_path=face_local, prompt=prompt_core,
                                 steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
                                 negative_prompt=neg_base, natural=natural
                             )
@@ -1167,7 +1167,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                                 )
                                 base_bytes = _retry(requests.get, base_url, timeout=HTTP_TIMEOUT, label="get_base").content
                                 url = await asyncio.to_thread(
-                                    generate_with_instantid, face_local_path=face_local, prompt=prompt_core,
+                                    generate_with_instantid, face_path=face_local, prompt=prompt_core,
                                     steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
                                     negative_prompt=neg_base, natural=natural,
                                     content_image_bytes=base_bytes
