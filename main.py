@@ -16,7 +16,7 @@ from styles import (  # твой styles.py
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, tempfile
 from pathlib import Path
 from zipfile import ZipFile, ZIP_STORED
-
+import tempfile, os
 import requests
 import replicate
 from replicate import Client
@@ -614,61 +614,68 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
     if not url: raise RuntimeError("Empty output")
     return url
 
-import tempfile, os
-
 def _bytes_to_tempfile(data: bytes, suffix: str) -> str:
-            fd, path = tempfile.mkstemp(prefix="inst_", suffix=suffix)
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-            return path
+                            fd, path = tempfile.mkstemp(prefix="inst_", suffix=suffix)
+                            with os.fdopen(fd, "wb") as f:
+                                f.write(data)
+                            return path
 
-def generate_with_instantid(face_local_path: Path, prompt: str, steps: int, guidance: float,
-                                    seed: int, w: int, h: int, negative_prompt: str,
-                                    natural: bool = True, content_image_bytes: Optional[bytes] = None) -> str:
-            mv = resolve_model_version(INSTANTID_SLUG)
-            strength = INSTANTID_STRENGTH * (0.9 if natural else 1.0)
-            face_w   = INSTANTID_FACE_WEIGHT * (0.9 if natural else 1.0)
+def generate_with_instantid(face_path: Path, prompt: str, steps: int, guidance: float,
+                                                    seed: int, w: int, h: int, negative_prompt: str,
+                                                    natural: bool = True, content_image_bytes: Optional[bytes] = None) -> str:
+                            mv = resolve_model_version(INSTANTID_SLUG)
 
-            # готовим файлы
-            tmp_base = None
-            if content_image_bytes:
-                tmp_base = _bytes_to_tempfile(content_image_bytes, ".jpg")
+                            # не ослабляем на natural
+                            strength = INSTANTID_STRENGTH
+                            face_w   = INSTANTID_FACE_WEIGHT
 
-            def _run():
-                inputs: Dict[str, Any] = {
-                    "prompt": prompt + AESTHETIC_SUFFIX,
-                    "negative_prompt": negative_prompt,
-                    "width": w, "height": h,
-                    "num_inference_steps": min(MAX_STEPS, steps),
-                    "guidance_scale": guidance,
-                    "seed": seed,
-                    "id_strength": strength,
-                    "image_identity": strength,
-                    "face_strength": face_w,
-                    "adapter_strength": strength,
-                    # ВАЖНО: file-like, не bytes
-                    "face_image": open(face_local_path, "rb"),
-                }
-                if tmp_base:
-                    inputs["image"] = open(tmp_base, "rb")
-                return replicate.run(mv, input=inputs)
+                            tmp_base = None
+                            if content_image_bytes:
+                                tmp_base = _bytes_to_tempfile(content_image_bytes, ".jpg")
 
-            try:
-                out = _retry(_run, label="replicate_instantid")
-                url = extract_any_url(out)
-                if not url:
-                    raise RuntimeError("Empty output (InstantID)")
-                return url
-            except Exception as e:
-                msg = str(e).lower()
-                if ("image is required" in msg or "input.image" in msg) and not content_image_bytes:
-                    raise RuntimeError("INSTANTID_NEEDS_IMAGE")
-                raise
-            finally:
-                # чистка временного файла
-                if tmp_base:
-                    with contextlib.suppress(Exception):
-                        os.remove(tmp_base)
+                            # file-like дескрипторы — НЕ bytes
+                            face_f = open(face_path, "rb")
+                            image_f = open(tmp_base, "rb") if tmp_base else None
+
+                            # минимально совместимый набор полей
+                            inputs: Dict[str, Any] = {
+                                "prompt": prompt + AESTHETIC_SUFFIX,
+                                "negative_prompt": negative_prompt,
+                                "width": w, "height": h,
+                                "num_inference_steps": min(MAX_STEPS, steps),
+                                "guidance_scale": guidance,
+                                "seed": seed,
+
+                                # сила локфейса
+                                "id_strength": strength,
+                                "face_strength": face_w,
+                            }
+
+                            # разные форки ждут разные ключи — дублируем
+                            inputs["face_image"] = face_f
+                            inputs["reference_image"] = face_f
+                            inputs["id_image"] = face_f
+                            inputs["face"] = face_f
+
+                            if image_f:
+                                inputs["image"] = image_f      # 2-шаг: подмешиваем базовый кадр LoRA
+
+                            try:
+                                out = replicate.run(mv, input=inputs)
+                                url = extract_any_url(out)
+                                if not url:
+                                    raise RuntimeError("Empty output (InstantID)")
+                                return url
+                            finally:
+                                with contextlib.suppress(Exception):
+                                    face_f.close()
+                                if image_f:
+                                    with contextlib.suppress(Exception):
+                                        image_f.close()
+                                if tmp_base:
+                                    with contextlib.suppress(Exception):
+                                        os.remove(tmp_base)
+
 
 
 # ---------- UI/KB (как было) ----------
