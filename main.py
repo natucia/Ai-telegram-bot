@@ -1,9 +1,10 @@
 # === Telegram LoRA Bot (Flux LoRA trainer + Redis persist + S3 storage)
-# + InstantID LOCKFACE (2-step)
+# + InstantID LOCKFACE (single/2-step, switchable)
 # + MULTI-AVATARS
 # + NATURAL/Pretty per-user (cheese-like)
 # + CONSISTENT FACE SCALE + anti-wide-face
-# Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1, boto3==1.34.0+
+# Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0,
+#             redis==5.0.1, boto3==1.34.0+, requests>=2.31.0
 
 from typing import Any, Dict, List, Optional, Tuple
 Style = Dict[str, Any]
@@ -52,6 +53,7 @@ GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").str
 INSTANTID_SLUG = os.getenv("INSTANTID_SLUG", "").strip()
 INSTANTID_STRENGTH = float(os.getenv("INSTANTID_STRENGTH", "0.88"))
 INSTANTID_FACE_WEIGHT = float(os.getenv("INSTANTID_FACE_WEIGHT", "0.92"))
+INSTANTID_FORCE_TWOSTEP = os.getenv("INSTANTID_FORCE_TWOSTEP", "0").lower() in ("1","true","yes","y")  # NEW
 
 # --- Параметры обучения/генерации ---
 LORA_MAX_STEPS = int(os.getenv("LORA_MAX_STEPS", "1400"))
@@ -79,7 +81,8 @@ NEGATIVE_PROMPT_BASE = (
     "puffy face, swollen face, chubby cheeks, widened jaw, wide face, horizontally stretched face, "
     "tiny head, giant head, variable head scale, aspect distortion, fisheye, lens distortion, warping, "
     "plain selfie, tourist photo, plain studio backdrop, denoise artifacts, waxy highlight roll-off, "
-    "excessive frequency separation, face slimming or widening, retouched pores"
+    "excessive frequency separation, face slimming or widening, retouched pores, "
+    "face mismatch, identity mismatch, wrong person, different nose, different eye shape"
 )
 AESTHETIC_SUFFIX = (
     ", photorealistic, visible fine skin texture, natural color, soft filmic contrast, "
@@ -261,7 +264,6 @@ def delete_profile(uid:int):
     if _redis:
         with contextlib.suppress(Exception):
             _redis.delete(f"profile:{uid}")
-            # чистим кэш лица
             _redis.delete(_face_cache_key(uid, "default"))
     p = user_dir(uid)
     if p.exists():
@@ -517,57 +519,61 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
     if not url: raise RuntimeError("Empty output")
     return url
 
-    import io  # убедись, что импорт есть наверху файла
-
 def generate_with_instantid(
-        face_bytes: bytes,
-        prompt: str,
-        steps: int,
-        guidance: float,
-        seed: int,
-        w: int,
-        h: int,
-        negative_prompt: str,
-        natural: bool = True,
-        pretty: bool = False,
-        content_image_bytes: Optional[bytes] = None,
-    ) -> str:
-        mv = resolve_model_version(INSTANTID_SLUG)
+    face_bytes: bytes,
+    prompt: str,
+    steps: int,
+    guidance: float,
+    seed: int,
+    w: int,
+    h: int,
+    negative_prompt: str,
+    natural: bool = True,
+    pretty: bool = False,
+    content_image_bytes: Optional[bytes] = None,
+) -> str:
+    mv = resolve_model_version(INSTANTID_SLUG)
 
-        # --- настройки силы замка лица (ВОТ ЭТИ СТРОКИ ДОЛЖНЫ БЫТЬ!) ---
-        base = INSTANTID_STRENGTH
-        base_face = INSTANTID_FACE_WEIGHT
-        if natural and not pretty:
-            strength, face_w = base * 0.9, base_face * 0.9
-        elif pretty:
-            strength, face_w = min(0.98, base * 1.05), min(0.98, base_face * 1.05)
-        else:
-            strength, face_w = base, base_face
-        # ----------------------------------------------------------------
+    # --- сила «замка» лица ---
+    base = INSTANTID_STRENGTH
+    base_face = INSTANTID_FACE_WEIGHT
+    if natural and not pretty:
+        strength = base * 0.95
+        face_w   = base_face * 0.95
+    elif pretty:
+        strength = min(0.98, base * 1.02)
+        face_w   = min(0.98, base_face * 1.02)
+    else:
+        strength = base
+        face_w   = base_face
 
-        # Replicate ждёт file-like объекты, а не «сырые» bytes
-        inputs: Dict[str, Any] = {
-            "prompt": prompt + AESTHETIC_SUFFIX,
-            "negative_prompt": negative_prompt,
-            "width": w,
-            "height": h,
-            "num_inference_steps": min(MAX_STEPS, steps),
-            "guidance_scale": guidance,
-            "seed": seed,
-            "id_strength": strength,
-            "image_identity": strength,
-            "face_strength": face_w,
-            "adapter_strength": strength,
-            "face_image": io.BytesIO(face_bytes),
-        }
-        if content_image_bytes is not None:
-            inputs["image"] = io.BytesIO(content_image_bytes)
+    # single-step — жёсткий лок
+    if not INSTANTID_FORCE_TWOSTEP:
+        strength = max(strength, 0.96)
+        face_w   = max(face_w,   0.96)
 
-        out = replicate.run(mv, input=inputs)
-        url = extract_any_url(out)
-        if not url:
-            raise RuntimeError("Empty output (InstantID)")
-        return url
+    inputs: Dict[str, Any] = {
+        "prompt": prompt + AESTHETIC_SUFFIX,
+        "negative_prompt": negative_prompt,
+        "width": w, "height": h,
+        "num_inference_steps": min(MAX_STEPS, steps),
+        "guidance_scale": guidance,
+        "seed": seed,
+        "id_strength": strength,
+        "image_identity": strength,
+        "face_strength": face_w,
+        "adapter_strength": strength,
+        "face_image": io.BytesIO(face_bytes),  # file-like, не bytes
+    }
+    # подложку даём только в 2-step режиме
+    if INSTANTID_FORCE_TWOSTEP and content_image_bytes is not None:
+        inputs["image"] = io.BytesIO(content_image_bytes)
+
+    out = replicate.run(mv, input=inputs)
+    url = extract_any_url(out)
+    if not url:
+        raise RuntimeError("Empty output (InstantID)")
+    return url
 
 # ---------- UI ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -811,7 +817,6 @@ def _pack_refs_zip(uid:int, avatar:str) -> Path:
     with ZipFile(zpath, "w") as z:
         for i, p in enumerate(refs, 1):
             z.write(p, arcname=f"img_{i:02d}.jpg")
-    # зальём zip в S3 (необязательно для работы, но полезно)
     try:
         key = _trainzip_s3_key(uid, avatar)
         s3_put_bytes(key, Path(zpath).read_bytes(), "application/zip")
@@ -962,7 +967,9 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
 
     guidance = max(3.8, min(4.4, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE)))
     steps = min(MAX_STEPS, 46 if natural else max(48, GEN_STEPS))
-    if pretty: guidance, steps = min(4.8, guidance + 0.4), min(MAX_STEPS, max(50, steps))
+    if pretty:
+        guidance = min(4.8, guidance + 0.4)
+        steps = min(MAX_STEPS, max(50, steps))
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
@@ -988,6 +995,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
         inst_steps = min(MAX_STEPS, max(40, steps))
 
         for s in seeds:
+            # 1) базовая LoRA-сцена
             base_url = await asyncio.to_thread(
                 generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
                 steps=base_steps, guidance=guidance, seed=random.randrange(2**32),
@@ -995,11 +1003,13 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
             )
             base_bytes = requests.get(base_url, timeout=60).content
 
+            # 2) InstantID: подложка только в 2-step
+            content = base_bytes if INSTANTID_FORCE_TWOSTEP else None
             url = await asyncio.to_thread(
                 generate_with_instantid, face_bytes=face_bytes, prompt=prompt_core,
                 steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
                 negative_prompt=neg_base, natural=natural, pretty=pretty,
-                content_image_bytes=base_bytes
+                content_image_bytes=content
             )
 
             await update.effective_message.reply_photo(photo=url, caption=f"{preset} • {av_name} • 🔒")
@@ -1067,7 +1077,7 @@ def main():
     if INSTANTID_SLUG: _check_slug(INSTANTID_SLUG, "InstantID")
     else: logger.info("InstantID disabled (no INSTANTID_SLUG).")
 
-    logger.info("Bot up. DEST=%s/%s GEN=%dx%d", DEST_OWNER, DEST_MODEL, GEN_WIDTH, GEN_HEIGHT)
+    logger.info("Bot up. DEST=%s/%s GEN=%dx%d TwoStep=%s", DEST_OWNER, DEST_MODEL, GEN_WIDTH, GEN_HEIGHT, INSTANTID_FORCE_TWOSTEP)
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
