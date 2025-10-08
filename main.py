@@ -517,19 +517,40 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
     if not url: raise RuntimeError("Empty output")
     return url
 
-import io  # (если ещё не импортирован)
+    import io  # убедись, что импорт есть наверху файла
 
-def generate_with_instantid(face_bytes: bytes, prompt: str, steps: int, guidance: float,
-                                seed: int, w: int, h: int, negative_prompt: str,
-                                natural: bool = True, pretty: bool = False,
-                                content_image_bytes: Optional[bytes] = None) -> str:
+def generate_with_instantid(
+        face_bytes: bytes,
+        prompt: str,
+        steps: int,
+        guidance: float,
+        seed: int,
+        w: int,
+        h: int,
+        negative_prompt: str,
+        natural: bool = True,
+        pretty: bool = False,
+        content_image_bytes: Optional[bytes] = None,
+    ) -> str:
         mv = resolve_model_version(INSTANTID_SLUG)
-        # ... твои расчёты strength/face_w выше без изменений ...
 
+        # --- настройки силы замка лица (ВОТ ЭТИ СТРОКИ ДОЛЖНЫ БЫТЬ!) ---
+        base = INSTANTID_STRENGTH
+        base_face = INSTANTID_FACE_WEIGHT
+        if natural and not pretty:
+            strength, face_w = base * 0.9, base_face * 0.9
+        elif pretty:
+            strength, face_w = min(0.98, base * 1.05), min(0.98, base_face * 1.05)
+        else:
+            strength, face_w = base, base_face
+        # ----------------------------------------------------------------
+
+        # Replicate ждёт file-like объекты, а не «сырые» bytes
         inputs: Dict[str, Any] = {
             "prompt": prompt + AESTHETIC_SUFFIX,
             "negative_prompt": negative_prompt,
-            "width": w, "height": h,
+            "width": w,
+            "height": h,
             "num_inference_steps": min(MAX_STEPS, steps),
             "guidance_scale": guidance,
             "seed": seed,
@@ -537,10 +558,9 @@ def generate_with_instantid(face_bytes: bytes, prompt: str, steps: int, guidance
             "image_identity": strength,
             "face_strength": face_w,
             "adapter_strength": strength,
-            # главное — подать file-like, а не bytes:
             "face_image": io.BytesIO(face_bytes),
         }
-        if content_image_bytes:
+        if content_image_bytes is not None:
             inputs["image"] = io.BytesIO(content_image_bytes)
 
         out = replicate.run(mv, input=inputs)
@@ -548,6 +568,7 @@ def generate_with_instantid(face_bytes: bytes, prompt: str, steps: int, guidance
         if not url:
             raise RuntimeError("Empty output (InstantID)")
         return url
+
 
 
 # ---------- UI ----------
