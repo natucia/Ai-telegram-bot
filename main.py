@@ -1,5 +1,5 @@
 # === Telegram LoRA Bot (Flux LoRA trainer + Redis persist
-# + Identity/Gender locks + InstantID LOCKFACE (1/2-step fallback)
+# + Identity/Gender locks (cheese-like) — NO InstantID, pure LoRA
 # + MULTI-AVATARS + NATURAL/Pretty per-user + CONSISTENT FACE SCALE
 # + S3 storage + concurrency limits + retries) ===
 # Требования:
@@ -16,8 +16,7 @@ from styles import (  # твой styles.py
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, tempfile
 from pathlib import Path
 from zipfile import ZipFile, ZIP_STORED
-import tempfile, os
-import requests
+import requests  # можно удалить, если не используешь внешние загрузки
 import replicate
 from replicate import Client
 from PIL import Image, ImageOps
@@ -48,12 +47,6 @@ LORA_INPUT_KEY = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 # Пол (опц.)
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
 
-# LOCKFACE (InstantID / FaceID adapter)
-INSTANTID_SLUG = os.getenv("INSTANTID_SLUG", "").strip()
-INSTANTID_STRENGTH = float(os.getenv("INSTANTID_STRENGTH", "0.88"))
-INSTANTID_FACE_WEIGHT = float(os.getenv("INSTANTID_FACE_WEIGHT", "0.92"))
-INSTANTID_FORCE_TWOSTEP = os.getenv("INSTANTID_FORCE_TWOSTEP", "0").lower() in ("1","true","yes","y")
-
 # --- Параметры обучения ---
 LORA_MAX_STEPS = int(os.getenv("LORA_MAX_STEPS", "1400"))
 LORA_LR = float(os.getenv("LORA_LR", "0.0006"))
@@ -83,18 +76,18 @@ CONSISTENT_SCALE = os.getenv("CONSISTENT_SCALE", "1").lower() in ("1","true","ye
 HEAD_HEIGHT_FRAC = float(os.getenv("HEAD_HEIGHT_FRAC", "0.36"))
 HEAD_WIDTH_FRAC  = float(os.getenv("HEAD_WIDTH_FRAC", "0.28"))
 
-# ---- Anti-drift / anti-wide-face ----
+# ---- Anti-drift / anti-wide-face ---- (усилено для «cheese-like»)
 NEGATIVE_PROMPT_BASE = (
     "cartoon, anime, cgi, 3d, stylized, plastic skin, overprocessed, airbrushed, beauty-filter, "
     "lowres, blur, textureless skin, porcelain skin, waxy, gaussian blur, smoothing filter, "
-    "text, watermark, logo, bad anatomy, extra fingers, short fingers, "
-    "identity drift, different person, face swap, face morph, ethnicity change, age change, "
-    "hairline modification, beard reshaping, lip reshape, mouth corner lift, "
-    "puffy face, swollen face, chubby cheeks, bloated cheeks, widened jaw, broad zygomatic width, "
-    "wide face, horizontally stretched face, tiny head, giant head, variable head scale, "
+    "text, watermark, logo, bad anatomy, extra fingers, short fingers, identity drift, different person, "
+    "ethnicity change, age change, hairline modification, beard reshaping, lip reshape, mouth corner lift, "
+    "puffy face, swollen face, chubby cheeks, widened jaw, broad zygomatic width, wide face, "
+    "horizontally stretched face, tiny head, giant head, variable head scale, "
     "zoomed-in extreme close-up, distant tiny face, aspect distortion, fisheye, lens distortion, warping, "
-    "plain selfie, tourist photo, plain studio backdrop, denoise artifacts, waxy highlight roll-off, "
-    "excessive frequency separation, face slimming or widening, retouched pores"
+    "plain selfie, tourist photo, denoise artifacts, waxy highlight roll-off, excessive frequency separation, "
+    "face slimming or widening, retouched pores, profile view, three-quarter view, turned head, head tilt, "
+    "looking away from camera, closed eyes, heavy makeup glam look"
 )
 
 AESTHETIC_SUFFIX = (
@@ -125,7 +118,6 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 logger = logging.getLogger("bot")
 
 # ---------- Concurrency & retries ----------
-# Лимиты на процесс: не спамим Replicate/S3, чтобы бот жил под нагрузкой
 GEN_SEMAPHORE = asyncio.Semaphore(int(os.getenv("GEN_CONCURRENCY", "6")))
 TRAIN_SEMAPHORE = asyncio.Semaphore(int(os.getenv("TRAIN_CONCURRENCY", "2")))
 HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "60"))
@@ -161,7 +153,7 @@ if USE_S3:
         aws_secret_access_key=S3_SECRET_ACCESS_KEY or None,
         region_name=S3_REGION or None
     )
-    s3_client = session.client("s3", endpoint_url=S3_ENDPOINT_URL)  # endpoint_url поддерживает S3-совместимые хранилища
+    s3_client = session.client("s3", endpoint_url=S3_ENDPOINT_URL)
 
 def _s3_key(*parts: str) -> str:
     p = "/".join(str(x).strip("/").replace("//","/") for x in parts if x is not None)
@@ -203,7 +195,6 @@ class FSStorage(Storage):
             if adir.exists(): shutil.rmtree(adir)
 
     def get_local_copy(self, key:str) -> Path:
-        # уже локальный путь
         return Path(key)
 
     def pack_refs_zip(self, uid:int, avatar:str) -> Path:
@@ -218,7 +209,6 @@ class FSStorage(Storage):
 class S3Storage(Storage):
     def save_ref_image(self, uid:int, avatar:str, raw:bytes) -> str:
         if not s3_client: raise RuntimeError("S3 не инициализирован.")
-        # даунскейл в памяти
         buf = io.BytesIO()
         im = Image.open(io.BytesIO(raw)).convert("RGB")
         im = _center_crop80(im)
@@ -246,21 +236,16 @@ class S3Storage(Storage):
                     Bucket=S3_BUCKET, Prefix=prefix,
                     label="s3_list"
                 )
-
             for it in resp.get("Contents", []):
                 keys.append(f"s3://{S3_BUCKET}/{it['Key']}")
-
             if resp.get("IsTruncated"):
                 cont = resp.get("NextContinuationToken")
             else:
                 break
-
         return sorted(keys)
-
 
     def delete_avatar(self, uid:int, avatar:str):
         prefix = _s3_key("profiles", str(uid), "avatars", avatar)
-        # собираем и удаляем пачкой
         to_del = []
         cont = None
         while True:
@@ -273,7 +258,6 @@ class S3Storage(Storage):
             cont = resp.get("NextContinuationToken")
 
     def get_local_copy(self, key:str) -> Path:
-        # key формата s3://bucket/key
         if not key.startswith("s3://"): raise RuntimeError("Ожидался s3:// ключ")
         _, _, bucket_and_key = key.partition("s3://")
         bucket, _, obj_key = bucket_and_key.partition("/")
@@ -289,9 +273,6 @@ class S3Storage(Storage):
             for i, key in enumerate(refs, 1):
                 lp = self.get_local_copy(key)
                 z.write(lp, arcname=f"img_{i:02d}.jpg")
-        # опционально можно залить ZIP в S3 (закомментировано):
-        # zip_key = _s3_key("profiles", str(uid), "avatars", avatar, "train.zip")
-        # _retry(s3_client.upload_file, str(zpath), S3_BUCKET, zip_key, label="s3_upload_zip")
         return zpath
 
 # выбор стораджа
@@ -300,12 +281,12 @@ logger.info("Storage backend: %s", "S3" if USE_S3 else "FS")
 
 # ---------- профили (Redis/FS) ----------
 DEFAULT_AVATAR = {
-    "images": [],  # список ключей (FS-путь или s3://…)
+    "images": [],
     "training_id": None,
     "finetuned_model": None,
     "finetuned_version": None,
     "status": None,
-    "lockface": True
+    "lockface": True  # теперь это «seed clamp» для стабильности
 }
 DEFAULT_PROFILE = {
     "gender": None,
@@ -406,14 +387,11 @@ def delete_profile(uid:int):
     if _redis:
         with contextlib.suppress(Exception):
             _redis.delete(f"profile:{uid}")
-    # удаляем все аватары из хранилища
     prof = load_profile(uid)
     for name in list(prof.get("avatars", {}).keys()):
         if name == "default": continue
         STORAGE.delete_avatar(uid, name)
-    # default тоже чистим
     STORAGE.delete_avatar(uid, "default")
-    # чистим локальную папку профиля
     p = user_dir(uid)
     if p.exists():
         shutil.rmtree(p, ignore_errors=True)
@@ -480,13 +458,12 @@ def _caption_for_gender(g: str) -> str:
         return env_override
     return DEFAULT_MALE_CAPTION if (g or "").lower() == "male" else DEFAULT_FEMALE_CAPTION
 
-# ---------- Композиция/линза/свет (без изменений значимых) ----------
+# ---------- Промпт-замки (cheese-like) ----------
 def _beauty_guardrail() -> str:
     return (
-        "exact facial identity, identity preserved, "
-        "balanced facial proportions, symmetrical face, natural oval, soft jawline, "
-        "keep original zygomatic width and jaw width, do not widen face, "
-        "open expressive eyes with clean catchlights"
+        "exact facial identity, identity preserved, balanced facial proportions, symmetrical face, natural oval, soft jawline, "
+        "keep original cheekbone width and jaw width, do not widen face, "
+        "open expressive eyes with clean catchlights, natural eyelashes, realistic lips"
     )
 
 def _face_lock() -> str:
@@ -497,6 +474,21 @@ def _face_lock() -> str:
 
 def _anti_distort() -> str:
     return "no fisheye, no lens distortion, no warping, natural perspective, proportional head size"
+
+def _frontal_lock() -> str:
+    return (
+        "frontal face, facing camera, eyes looking into the lens, "
+        "head tilt under 3 degrees, no three-quarter, no profile, "
+        "ears symmetric, pupils aligned"
+    )
+
+def _head_scale_lock() -> str:
+    hh = int(HEAD_HEIGHT_FRAC * 100)
+    hw = int(HEAD_WIDTH_FRAC * 100)
+    return (
+        f"keep constant head scale, head height about {hh}% of frame and head width about {hw}% of frame, "
+        "do not zoom, do not crop the forehead or chin, stable camera distance"
+    )
 
 def _gender_lock(gender:str) -> Tuple[str, str]:
     if gender == "male":
@@ -525,22 +517,26 @@ def _face_scale_hint() -> str:
 
 def _comp_text_and_size(comp: str) -> Tuple[str, Tuple[int,int]]:
     scale_txt = _face_scale_hint()
+    base_lock = _frontal_lock() + ", " + _head_scale_lock()
     if comp == "closeup":
         w, h = _safe_portrait_size(896, 1152)
         return (
             f"portrait framing from chest up, 85mm lens look, camera at eye level, subject distance ~1.2m, "
-            f"no perspective distortion on face, head width proportional, natural perspective, {scale_txt}", (w, h)
+            f"no perspective distortion on face, {base_lock}, {scale_txt}",
+            (w, h)
         )
     if comp == "half":
         w, h = _safe_portrait_size(GEN_WIDTH, max(GEN_HEIGHT, 1344))
         return (
-            f"half body framing, 85mm lens look, camera at chest level, subject distance ~2.0m, "
-            f"no perspective distortion on face, head width proportional, natural perspective, {scale_txt}", (w, h)
+            f"half body framing, 85mm lens look, camera at eye level, subject distance ~1.8m, "
+            f"no perspective distortion on face, {base_lock}, {scale_txt}",
+            (w, h)
         )
     w, h = _safe_portrait_size(GEN_WIDTH, 1408)
     return (
-        f"full body framing, 85mm lens look, camera at mid-torso level, head size natural for frame, "
-        f"no perspective distortion on face, {scale_txt}", (w, h)
+        f"full body framing, 85mm lens look, camera at chest level, "
+        f"{base_lock}, head size natural for frame, no perspective distortion on face, {scale_txt}",
+        (w, h)
     )
 
 def _tone_text(tone: str) -> str:
@@ -582,14 +578,14 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
 
     gpos, gneg = _gender_lock(gender)
     anti = _anti_distort()
-    age_lock = "" if meta.get("allow_age_change") else "no age change, "
 
     common_bits = [
         tone_text, gpos,
-        "same person as the training photos, no ethnicity change, " + age_lock + "exact facial identity, identity preserved +++",
+        "same person as the training photos, no ethnicity change, exact facial identity +++",
         "photorealistic, realistic body proportions, natural fine skin texture, filmic look",
-        "do not widen face, keep original cheekbone width and jaw width, preserve lips shape",
         "85mm lens portrait look",
+        _frontal_lock(),
+        _head_scale_lock(),
         _face_scale_hint(),
         anti, _beauty_guardrail(), _face_lock(), theme_boost
     ]
@@ -608,7 +604,7 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
     if pretty:  neg = (neg + ", " + PRETTY_NEG) if neg else PRETTY_NEG
     return core, neg
 
-# ---------- Инференс/генерация с ретраями ----------
+# ---------- Инференс/генерация (pure LoRA) ----------
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
     mv = resolve_model_version(model_slug)
     def _run():
@@ -625,78 +621,7 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
     if not url: raise RuntimeError("Empty output")
     return url
 
-def _bytes_to_tempfile(data: bytes, suffix: str) -> str:
-                            fd, path = tempfile.mkstemp(prefix="inst_", suffix=suffix)
-                            with os.fdopen(fd, "wb") as f:
-                                f.write(data)
-                            return path
-
-def generate_with_instantid(face_path: Path, prompt: str, steps: int, guidance: float,
-                                                    seed: int, w: int, h: int, negative_prompt: str,
-                                                    natural: bool = True, content_image_bytes: Optional[bytes] = None) -> str:
-                            mv = resolve_model_version(INSTANTID_SLUG)
-
-                            # не ослабляем на natural
-                            strength = INSTANTID_STRENGTH
-                            face_w   = INSTANTID_FACE_WEIGHT
-
-                            tmp_base = None
-                            if content_image_bytes:
-                                tmp_base = _bytes_to_tempfile(content_image_bytes, ".jpg")
-
-                            # file-like дескрипторы — НЕ bytes
-                            face_f = open(face_path, "rb")
-                            image_f = open(tmp_base, "rb") if tmp_base else None
-
-                            # минимально совместимый набор полей
-                            inputs: Dict[str, Any] = {
-                                "prompt": prompt + AESTHETIC_SUFFIX,
-                                "negative_prompt": negative_prompt,
-                                "width": w, "height": h,
-                                "num_inference_steps": min(MAX_STEPS, steps),
-                                "guidance_scale": guidance,
-                                "seed": seed,
-
-                                # сила локфейса
-                                "id_strength": strength,
-                                "face_strength": face_w,
-                            }
-
-                            # разные форки ждут разные ключи — дублируем
-                            inputs["face_image"] = face_f
-                            inputs["reference_image"] = face_f
-                            inputs["id_image"] = face_f
-                            inputs["face"] = face_f
-
-                            if image_f:
-                                    # базовый кадр от LoRA — даём ВСЕ алиасы
-                                    inputs["image"] = image_f
-                                    inputs["base_image"] = image_f
-                                    inputs["input_image"] = image_f
-                                    inputs["background_image"] = image_f
-                                    inputs["content_image"] = image_f
-                                    inputs["img"] = image_f
-     # 2-шаг: подмешиваем базовый кадр LoRA
-
-                            try:
-                                out = replicate.run(mv, input=inputs)
-                                url = extract_any_url(out)
-                                if not url:
-                                    raise RuntimeError("Empty output (InstantID)")
-                                return url
-                            finally:
-                                with contextlib.suppress(Exception):
-                                    face_f.close()
-                                if image_f:
-                                    with contextlib.suppress(Exception):
-                                        image_f.close()
-                                if tmp_base:
-                                    with contextlib.suppress(Exception):
-                                        os.remove(tmp_base)
-
-
-
-# ---------- UI/KB (как было) ----------
+# ---------- UI/KB ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton("🧭 Выбрать стиль", callback_data="nav:styles")],
@@ -769,7 +694,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1) «📸 Набор фото» — загрузка до 10 снимков в активный аватар.\n"
         "2) «🧪 Обучение» — тренировка LoRA.\n"
         "3) «🧭 Выбрать стиль» — варианты.\n"
-        "4) «🔒 LOCKFACE» — фиксация лица.\n"
+        "4) «🔒 LOCKFACE» — стабильный образ (seed clamp).\n"
         "5) «✨ Natural/Pretty» — натуральность или лёгкая ретушь.\n"
         "6) «🤖 Аватары» — несколько моделей.",
         reply_markup=main_menu_kb()
@@ -863,7 +788,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f = await update.message.photo[-1].get_file()
         data = await f.download_as_bytearray()
         key = STORAGE.save_ref_image(uid, av_name, bytes(data))
-        # подхватим новый список в профиле
         prof = load_profile(uid); av = get_avatar(prof, av_name)
         av["images"] = list_ref_images(uid, av_name)
         save_profile(uid, prof)
@@ -892,7 +816,7 @@ async def lockface_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     av["lockface"] = not av.get("lockface", True)
     save_profile(uid, prof)
     state = "включён" if av["lockface"] else "выключен"
-    await update.effective_message.reply_text(f"LOCKFACE {state} для активного аватара.")
+    await update.effective_message.reply_text(f"LOCKFACE {state} (теперь это seed clamp для стабильности).")
 
 # ---- Аватарные команды ----
 def set_current_avatar(uid:int, name:str):
@@ -1135,75 +1059,31 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost, natural, pretty)
     model_slug = _pinned_slug(av)
 
-    guidance = max(3.8, min(4.4, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE)))
-    steps = min(MAX_STEPS, 46 if natural else max(48, GEN_STEPS))
+    guidance = max(4.0, min(5.0, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE)))
+    steps = min(MAX_STEPS, 48 if natural else max(50, GEN_STEPS))
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
-    await update.effective_message.reply_text(f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nГенерирую ({gender}, {w}×{h}) …")
+    await update.effective_message.reply_text(f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nГенерирую LoRA ({gender}, {w}×{h})…")
+
+    neg_base = _neg_with_gender(NEGATIVE_PROMPT_BASE, gender_negative)
+
+    # LOCKFACE теперь просто «узкий конус» сидов, даёт более стабильные черты
+    lockface_on = av.get("lockface", True)
+    base_seed = random.randrange(2**32)
+    seeds = [base_seed, base_seed + 1, base_seed + 2] if lockface_on else [
+        random.randrange(2**32), random.randrange(2**32), random.randrange(2**32)
+    ]
 
     try:
-        refs = list_ref_images(uid, av_name)
-        if not refs: raise RuntimeError("Нет рефов.")
-        face_key = refs[0]
-        face_local = STORAGE.get_local_copy(face_key)
-
-        neg_base = _neg_with_gender(NEGATIVE_PROMPT_BASE, gender_negative)
-        variants = [("lock", random.randrange(2**32)), ("lock", random.randrange(2**32)), ("plain", random.randrange(2**32))]
-
         async with GEN_SEMAPHORE:
-            for mode, s in variants:
-                use_lock = (mode == "lock") and (av.get("lockface") is not False) and INSTANTID_SLUG
-                if use_lock:
-                    inst_steps = min(MAX_STEPS, max(38, steps))
-                    if INSTANTID_FORCE_TWOSTEP:
-                        base_url = await asyncio.to_thread(
-                            generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
-                            steps=steps, guidance=guidance, seed=random.randrange(2**32),
-                            w=w, h=h, negative_prompt=neg_base
-                        )
-                        base_bytes = _retry(requests.get, base_url, timeout=HTTP_TIMEOUT, label="get_base").content
-                        url = await asyncio.to_thread(
-                            generate_with_instantid, face_path=face_local, prompt=prompt_core,
-                            steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                            negative_prompt=neg_base, natural=natural,
-                            content_image_bytes=base_bytes
-                        )
-                    else:
-                        try:
-                            url = await asyncio.to_thread(
-                                generate_with_instantid, face_path=face_local, prompt=prompt_core,
-                                steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                                negative_prompt=neg_base, natural=natural
-                            )
-                        except Exception as e:
-                            if "INSTANTID_NEEDS_IMAGE" in str(e):
-                                base_url = await asyncio.to_thread(
-                                    generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
-                                    steps=steps, guidance=guidance, seed=random.randrange(2**32),
-                                    w=w, h=h, negative_prompt=neg_base
-                                )
-                                base_bytes = _retry(requests.get, base_url, timeout=HTTP_TIMEOUT, label="get_base").content
-                                url = await asyncio.to_thread(
-                                    generate_with_instantid, face_path=face_local, prompt=prompt_core,
-                                    steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                                    negative_prompt=neg_base, natural=natural,
-                                    content_image_bytes=base_bytes
-                                )
-                            else:
-                                raise
-                else:
-                    url = await asyncio.to_thread(
-                        generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
-                        steps=steps, guidance=guidance, seed=s, w=w, h=h, negative_prompt=neg_base
-                    )
-                tag = "🔒" if use_lock else "◻️"
-                await update.effective_message.reply_photo(photo=url, caption=f"{preset} • {av_name} • {tag}")
-
-        # чистим temp при S3
-        with contextlib.suppress(Exception):
-            if face_local.exists() and str(face_local).startswith(tempfile.gettempdir()):
-                face_local.unlink()
+            for i, s in enumerate(seeds, 1):
+                url = await asyncio.to_thread(
+                    generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
+                    steps=steps, guidance=guidance, seed=s, w=w, h=h, negative_prompt=neg_base
+                )
+                tag = "🔒" if lockface_on else "◻️"
+                await update.effective_message.reply_photo(photo=url, caption=f"{preset} • {av_name} • {tag} • #{i}")
 
         await update.effective_message.reply_text("Готово. Если какой-то пресет «плывёт», скажи его имя — притяну гайки именно для него.")
 
@@ -1226,7 +1106,7 @@ async def natural_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prof = load_profile(uid)
     prof["natural"] = not prof.get("natural", True)
     save_profile(uid, prof)
-    await update.message.reply_text(f"Natural: {'ON' if prof['natural'] else 'OFF'} (Pretty: {'ON' if prof.get('pretty') else 'OFF'})")
+    await update.message.reply_text(f"Natural: {'ON' if prof['natural'] else 'OFF'} (Pretty: {'ON' if prof.get('pretty', False) else 'OFF'})")
 
 # ---------- System ----------
 async def _post_init(app):
@@ -1268,10 +1148,7 @@ def main():
 
     # Пинг слагов
     _check_slug(LORA_TRAINER_SLUG, "LoRA trainer")
-    if INSTANTID_SLUG:
-        _check_slug(INSTANTID_SLUG, "InstantID")
-    else:
-        logger.info("InstantID disabled (no INSTANTID_SLUG).")
+    logger.info("InstantID removed: pure LoRA mode (cheese-like).")
 
     logger.info(
         "Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s ConsistentScale=%s Storage=%s",
