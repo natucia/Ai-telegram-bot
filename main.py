@@ -1,8 +1,6 @@
-# === Telegram LoRA Bot (Flux LoRA trainer + Redis persist)
-# + InstantID LOCKFACE (1/2-step fallback)
-# + MULTI-AVATARS
-# + NATURAL/Pretty per-user (cheese-like)
-# + CONSISTENT FACE SCALE + anti-wide-face
+# === Telegram LoRA Bot (Flux LoRA trainer + Redis persist
+# + Identity/Gender locks + InstantID LOCKFACE (1/2-step fallback)
+# + MULTI-AVATARS + NATURAL/Pretty per-user + CONSISTENT FACE SCALE) ===
 # Требования: python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -112,14 +110,11 @@ NATURAL_NEG = (
     "overprocessed clarity, excessive de-noise, plastic texture, glam retouch"
 )
 
-# — «красиво, но тот же человек»
 PRETTY_POS = (
-    "subtle beauty retouch, even skin tone, faint under-eye cleanup, micro-dodge-and-burn on eyes and lips, "
-    "soft specular highlights in eyes (catchlights), gentle filmic bloom, refined cinematic color grading"
+    "subtle beauty retouch, even skin tone, faint under-eye smoothing, slight glow, tidy eyebrows"
 )
 PRETTY_NEG = (
-    "over-smoothing, poreless skin, plastic look, face slimming, jaw reshaping, nose reshaping, lip reshaping, "
-    "heavy makeup, glam filter, waxy highlights, harsh clarity, excessive sharpening"
+    "over-smoothing, harsh pores, deep nasolabial folds, oily hotspot shine, oversharpened skin, beauty filter"
 )
 PRETTY_COMP_HINT = "camera slightly above eye level, flattering portrait angle"
 
@@ -129,12 +124,6 @@ def _beauty_guardrail() -> str:
         "balanced facial proportions, symmetrical face, natural oval, soft jawline, "
         "keep original zygomatic width and jaw width, do not widen face, "
         "open expressive eyes with clean catchlights"
-    )
-
-def _beauty_lock() -> str:
-    return (
-        "preserve original bone structure and facial ratios, no face slimming or widening, "
-        "no jaw, cheekbone, nose or lip reshape, keep natural asymmetry"
     )
 
 def _face_lock() -> str:
@@ -194,13 +183,12 @@ def _comp_text_and_size(comp: str) -> Tuple[str, Tuple[int,int]]:
 
 def _tone_text(tone: str) -> str:
     return {
-        "daylight": "soft directional daylight from window at 45 degrees, large soft source, gentle fill, cinematic contrast",
-        "beauty":   "large softbox key at 45 degrees, subtle hair light, clean white balance, soft falloff",
-        "warm":     "golden hour warmth, gentle highlights, soft backlight rim",
-        "cool":     "cool cinematic key with neutral fill, clean color balance",
-        "noir":     "high contrast noir lighting, subtle rim light",
-        "neon":     "neon signs, wet reflections, cinematic backlight, vibrant saturation",
-        "candle":   "warm candlelight, soft glow, volumetric rays",
+        "daylight": "soft natural daylight, neutral colors",
+        "warm": "golden hour warmth, gentle highlights",
+        "cool": "cool cinematic light, clean color balance",
+        "noir": "high contrast noir lighting, subtle rim light",
+        "neon": "neon signs, wet reflections, cinematic backlight, vibrant saturation",
+        "candle": "warm candlelight, soft glow, volumetric rays",
     }.get(tone, "balanced soft lighting")
 
 # ---------- logging ----------
@@ -457,7 +445,7 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
         "do not widen face, keep original cheekbone width and jaw width, preserve lips shape",
         "85mm lens portrait look",
         _face_scale_hint(),
-        anti, _beauty_guardrail(), _beauty_lock(), _face_lock(), theme_boost
+        anti, _beauty_guardrail(), _face_lock(), theme_boost
     ]
 
     if role or outfit or props or bg:
@@ -491,22 +479,12 @@ def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float
 
 def generate_with_instantid(face_path: Path, prompt: str, steps: int, guidance: float,
                             seed: int, w: int, h: int, negative_prompt: str,
-                            natural: bool = True, pretty: bool = False,
-                            content_image_bytes: Optional[bytes] = None) -> str:
+                            natural: bool = True, content_image_bytes: Optional[bytes] = None) -> str:
     mv = resolve_model_version(INSTANTID_SLUG)
+    strength = INSTANTID_STRENGTH * (0.9 if natural else 1.0)
+    face_w   = INSTANTID_FACE_WEIGHT * (0.9 if natural else 1.0)
 
-    base = INSTANTID_STRENGTH
-    base_face = INSTANTID_FACE_WEIGHT
-    if natural and not pretty:
-        strength = base * 0.9
-        face_w = base_face * 0.9
-    elif pretty:
-        strength = min(0.98, base * 1.05)
-        face_w = min(0.98, base_face * 1.05)
-    else:
-        strength = base
-        face_w = base_face
-
+    # читаем лицо в байты
     with open(face_path, "rb") as fb:
         face_bytes = fb.read()
 
@@ -688,7 +666,7 @@ async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Natural: {'ON' if prof.get('natural', True) else 'OFF'} • Pretty: {'ON' if prof.get('pretty', False) else 'OFF'}"
     )
 
-async def id_reset(update: Update, Context):
+async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     delete_profile(uid)
     await update.message.reply_text("Профиль очищен. Жми «📸 Набор фото» и загрузи снимки заново.")
@@ -948,16 +926,13 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
         desired_comp = "half"
 
     comp_text, (w,h) = _comp_text_and_size(desired_comp)
-    tone_text = _tone_text(meta.get("tone","beauty" if "portrait" in preset.lower() else "daylight"))
+    tone_text = _tone_text(meta.get("tone","daylight"))
     theme_boost = THEME_BOOST.get(preset, "")
     prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost, natural, pretty)
     model_slug = _pinned_slug(av)
 
     guidance = max(3.8, min(4.4, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE)))
     steps = min(MAX_STEPS, 46 if natural else max(48, GEN_STEPS))
-    if pretty:
-        guidance = min(4.8, guidance + 0.4)
-        steps = min(MAX_STEPS, max(50, steps))
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
@@ -974,6 +949,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
             use_lock = (mode == "lock") and (av.get("lockface") is not False) and INSTANTID_SLUG and face_ref
             if use_lock:
                 inst_steps = min(MAX_STEPS, max(38, steps))
+                # если форс — сразу двухшаг
                 if INSTANTID_FORCE_TWOSTEP:
                     base_url = await asyncio.to_thread(
                         generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
@@ -984,15 +960,16 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                     url = await asyncio.to_thread(
                         generate_with_instantid, face_path=face_ref, prompt=prompt_core,
                         steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                        negative_prompt=neg_base, natural=natural, pretty=pretty,
+                        negative_prompt=neg_base, natural=natural,
                         content_image_bytes=base_bytes
                     )
                 else:
                     try:
+                        # пробуем без image
                         url = await asyncio.to_thread(
                             generate_with_instantid, face_path=face_ref, prompt=prompt_core,
                             steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                            negative_prompt=neg_base, natural=natural, pretty=pretty
+                            negative_prompt=neg_base, natural=natural
                         )
                     except Exception as e:
                         if "INSTANTID_NEEDS_IMAGE" in str(e):
@@ -1005,7 +982,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                             url = await asyncio.to_thread(
                                 generate_with_instantid, face_path=face_ref, prompt=prompt_core,
                                 steps=inst_steps, guidance=guidance, seed=s, w=w, h=h,
-                                negative_prompt=neg_base, natural=natural, pretty=pretty,
+                                negative_prompt=neg_base, natural=natural,
                                 content_image_bytes=base_bytes
                             )
                         else:
@@ -1018,7 +995,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
             tag = "🔒" if use_lock else "◻️"
             await update.effective_message.reply_photo(photo=url, caption=f"{preset} • {av_name} • {tag}")
 
-        await update.effective_message.reply_text("Готово. Если какой-то пресет «плывёт», скажи его имя — подтяну лок.")
+        await update.effective_message.reply_text("Готово. Если какой-то пресет «плывёт», скажи его имя — притяну гайки именно для него.")
 
     except Exception as e:
         logging.exception("generation failed")
