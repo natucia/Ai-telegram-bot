@@ -519,28 +519,33 @@ def _face_scale_hint() -> str:
     )
 
 def _comp_text_and_size(comp: str) -> Tuple[str, Tuple[int,int]]:
-    scale_txt = _face_scale_hint()
-    base_lock = _frontal_lock() + ", " + _head_scale_lock()
-    if comp == "closeup":
-        w, h = _safe_portrait_size(896, 1152)
+        scale_txt = _face_scale_hint()
+        if comp == "closeup":
+            w, h = _safe_portrait_size(896, 1152)
+            return (
+                f"portrait from chest up (no waist), shoulders fully in frame, head near top third, "
+                f"no hands visible, camera at eye level, 85mm look, {scale_txt}", (w, h)
+            )
+        if comp == "half":
+            w, h = _safe_portrait_size(GEN_WIDTH, max(GEN_HEIGHT, 1344))
+            return (
+                f"half body from waist up (include waist), hands may appear near frame edges, "
+                f"camera at chest level, slight downward angle, 85mm look, {scale_txt}", (w, h)
+            )
+        w, h = _safe_portrait_size(GEN_WIDTH, 1408)
         return (
-            f"portrait framing from chest up, 85mm lens look, camera at eye level, subject distance ~1.2m, "
-            f"no perspective distortion on face, {base_lock}, {scale_txt}",
-            (w, h)
+            f"full body head-to-toe, shoes visible, camera at mid-torso level, {scale_txt}", (w, h)
         )
-    if comp == "half":
-        w, h = _safe_portrait_size(GEN_WIDTH, max(GEN_HEIGHT, 1344))
-        return (
-            f"half body framing, 85mm lens look, camera at eye level, subject distance ~1.8m, "
-            f"no perspective distortion on face, {base_lock}, {scale_txt}",
-            (w, h)
-        )
-    w, h = _safe_portrait_size(GEN_WIDTH, 1408)
-    return (
-        f"full body framing, 85mm lens look, camera at chest level, "
-        f"{base_lock}, head size natural for frame, no perspective distortion on face, {scale_txt}",
-        (w, h)
-    )
+    
+def _comp_negatives(kind: str) -> str:
+    if kind == "half":
+        return "no chest-up tight crop, no head-only shot, avoid cropping above waist"
+    if kind == "closeup":
+        return "no waist-up framing, no full body, no hands in frame"
+    if kind == "full":
+        return "no chest-up crop, no waist-up crop"
+    return ""
+    
 def _variants_for_preset(meta: Style) -> List[str]:
     """
     Возвращает список композиции на один пресет, порядок = порядок генерации.
@@ -1102,7 +1107,10 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                         prompt_core, gender_negative = build_prompt(
                             meta, gender, comp_text, tone_text, theme_boost, natural, pretty
                         )
-                        neg_base = _neg_with_gender(NEGATIVE_PROMPT_BASE, gender_negative)
+                        neg_base = _neg_with_gender(
+                            NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind),
+                            gender_negative
+                        )
 
                         # генерация plain LoRA
                         url = await asyncio.to_thread(
