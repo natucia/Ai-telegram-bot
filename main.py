@@ -87,8 +87,10 @@ NEGATIVE_PROMPT_BASE = (
     "zoomed-in extreme close-up, distant tiny face, aspect distortion, fisheye, lens distortion, warping, "
     "plain selfie, tourist photo, denoise artifacts, waxy highlight roll-off, excessive frequency separation, "
     "face slimming or widening, retouched pores, profile view, three-quarter view, turned head, head tilt, "
-    "looking away from camera, closed eyes, heavy makeup glam look"
+    "looking away from camera, closed eyes, heavy makeup glam look, "
+    "pronounced nasolabial folds, deep smile lines, deep marionette lines, harsh shadow on nasolabial area"
 )
+
 
 AESTHETIC_SUFFIX = (
     ", photorealistic, visible fine skin texture, natural color, soft filmic contrast, "
@@ -106,7 +108,8 @@ NATURAL_NEG = (
 )
 
 PRETTY_POS = (
-    "subtle beauty retouch, even skin tone, faint under-eye smoothing, slight glow, tidy eyebrows"
+    "subtle beauty retouch, even skin tone, faint under-eye smoothing, "
+    "gentle softening around nasolabial area, slight glow, tidy eyebrows"
 )
 PRETTY_NEG = (
     "over-smoothing, harsh pores, deep nasolabial folds, oily hotspot shine, oversharpened skin, beauty filter"
