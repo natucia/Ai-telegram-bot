@@ -658,7 +658,14 @@ def generate_with_instantid(face_path: Path, prompt: str, steps: int, guidance: 
                             inputs["face"] = face_f
 
                             if image_f:
-                                inputs["image"] = image_f      # 2-шаг: подмешиваем базовый кадр LoRA
+                                    # базовый кадр от LoRA — даём ВСЕ алиасы
+                                    inputs["image"] = image_f
+                                    inputs["base_image"] = image_f
+                                    inputs["input_image"] = image_f
+                                    inputs["background_image"] = image_f
+                                    inputs["content_image"] = image_f
+                                    inputs["img"] = image_f
+     # 2-шаг: подмешиваем базовый кадр LoRA
 
                             try:
                                 out = replicate.run(mv, input=inputs)
