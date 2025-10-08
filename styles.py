@@ -243,12 +243,7 @@ STYLE_PRESETS.update({
     },
 })
 
-STYLE_CATEGORIES: Dict[str, List[str]] = { "Портреты": ["Портрет у окна", "Портрет 85мм", "Бьюти студия", "Кинопортрет", "Фильм-нуар (портрет)"], "Современные": ["Стритвэр город", "Вечерний выход", "Бизнес", "Ночной неон"], "Профессии": ["Врач у палаты", "Хирург операционная", "Шеф-повар кухня", "Учёный лаборатория", "Боксер на ринге", "Фитнес зал"], "Приключения": ["Приключенец (руины)", "Пустынный исследователь", "Горы снег", "Серфер"], "Фэнтези/История": ["Эльфийская знать", "Самурай в храме", "Средневековый рыцарь", "Пират на палубе", "Древняя Греция", "Королева"], "Sci-Fi": ["Киберпанк улица", "Космический скафандр", "Космопилот на мостике"], }
-STYLE_CATEGORIES.update({ "Путешествия": ["Арктика", "Альпы (гламур)", "Франция (Париж)", "Россия (зимняя)", "Деревня"], "Экшен/Адвенчур": ["Джунгли (Тарзан)", "Хаос", "Инопланетяне", "Дельтаплан"], "Спорт/Вода": ["Теннис", "Фридайвер под водой", "Серфер"] })
-# === ДОПОЛНИТЬ КАТЕГОРИИ ===
-STYLE_CATEGORIES.update({
-    # существующие не трогаем; добавляем новые группы
-    "Животные/Существа": [
+STYLE_CATEGORIES: Dict[str, List[str]] = { "Портреты": ["Портрет у окна", "Портрет 85мм", "Бьюти студия", "Кинопортрет", "Фильм-нуар (портрет)"], "Современные": ["Стритвэр город", "Вечерний выход", "Бизнес", "Ночной неон"], "Профессии": ["Врач у палаты", "Хирург операционная", "Шеф-повар кухня", "Учёный лаборатория", "Боксер на ринге", "Фитнес зал"], "Приключения": ["Приключенец (руины)", "Пустынный исследователь", "Горы снег", "Серфер"], "Фэнтези/История": ["Эльфийская знать", "Самурай в храме", "Средневековый рыцарь", "Пират на палубе", "Древняя Греция", "Королева"], "Sci-Fi": ["Киберпанк улица", "Космический скафандр", "Космопилот на мостике"], "Путешествия": ["Арктика", "Альпы (гламур)", "Франция (Париж)", "Россия (зимняя)", "Деревня"], "Экшен/Адвенчур": ["Джунгли (Тарзан)", "Хаос", "Инопланетяне", "Дельтаплан"], "Спорт/Вода": ["Теннис", "Фридайвер под водой", "Серфер"], "Животные/Существа": [
         "Взрослый медведь рядом", "Со змеёй", "С крокодилом", "На драконе в небесах"
     ],
     "Жанры/Поп-культура": [
@@ -285,7 +280,7 @@ STYLE_CATEGORIES.update({
     "События/Сцены": [
         "Детство", "Свадьба"
     ],
-})
+}
 
 THEME_BOOST = { "Пират на палубе": "rope rigging, storm clouds, wet highlights on wood, sea spray, gulls", "Древняя Греция": "ionic capitals, olive trees, turquoise water reflections, gold trim accents", "Ночной неон": "rain droplets on lens, colored reflections on wet asphalt", "Фильм-нуар (портрет)": "venetian blinds light pattern, cigarette smoke curling, deep black shadows", "Приключенец (руины)": "floating dust motes in sunrays, chipped sandstone blocks, leather straps patina", "Горы снег": "spindrift blown by wind, crampon scratches on ice, distant ridge line", "Киберпанк улица":"holographic billboards flicker, cable bundles overhead, neon kanji signs", "Серфер": "rimlight on water droplets, sun flare", "Королева": "subtle film grain, ceremonial ambience", }
 THEME_BOOST.update({ "Арктика": "diamond-dust glitter in cold air, low sun halo, frost crystals on clothing", "Альпы (гламур)": "sunflare off snow, chalet wood textures, gondola cables in distance", "Франция (Париж)": "café chalk menu board, wrought iron balcony rails, warm bakery glow", "Джунгли (Тарзан)": "god rays through canopy, wet leaf speculars, mist near ground", "Детство": "soft pastel garlands, shallow dof sparkles, gentle vignette", "Свадьба": "bokeh from fairy lights, soft veil translucency", "Хаос": "embers, flying paper scraps, dramatic smoke layers, slight camera shake feeling", "Инопланетяне": "volumetric beams, dust motes, faint radio-glitch halation", "Фридайвер под водой": "caustic light patterns, particulate backscatter, gentle blue gradient", "Деревня": "warm wood patina, sun dust in air, linen texture details", "Россия (зимняя)": "crisp breath vapor, snow sparkle, frosty window details", "Теннис": "chalk dust from lines, motion blur of ball strings", "Дельтаплан": "wind-rippled jacket, wing fabric texture, valley haze layers" }) # Сцены, где чаще всего уводит лицо → понижаем CFG и принудительно включаем lockface
