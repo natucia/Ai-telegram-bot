@@ -541,6 +541,16 @@ def _comp_text_and_size(comp: str) -> Tuple[str, Tuple[int,int]]:
         f"{base_lock}, head size natural for frame, no perspective distortion on face, {scale_txt}",
         (w, h)
     )
+def _variants_for_preset(meta: Style) -> List[str]:
+    """
+    Возвращает список композиции на один пресет, порядок = порядок генерации.
+    По умолчанию 2x half и 1x closeup. Можно переопределить в presets, указав meta['comps'] = [...]
+    Допустимые значения: 'closeup', 'half', 'full'
+    """
+    comps = meta.get("comps")
+    if isinstance(comps, list) and comps:
+        return [c for c in comps if c in ("closeup","half","full")]
+    return ["half", "half", "closeup"]
 
 def _tone_text(tone: str) -> str:
     return {
@@ -1038,61 +1048,90 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     preset = q.data.split(":",1)[1]
     await start_generation_for_preset(update, context, preset)
-
 async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
-    uid = update.effective_user.id
-    prof = load_profile(uid); av_name = get_current_avatar_name(prof)
-    av = get_avatar(prof, av_name)
-    if av.get("status") != "succeeded":
-        await update.effective_message.reply_text(f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded.")
-        return
-
-    meta = STYLE_PRESETS[preset]
-    gender = (prof.get("gender") or "female").lower()
-    natural = prof.get("natural", True)
-    pretty  = prof.get("pretty", False)
-
-    desired_comp = meta.get("comp","half")
-    if CONSISTENT_SCALE and desired_comp not in ("half","closeup"):
-        desired_comp = "half"
-
-    comp_text, (w,h) = _comp_text_and_size(desired_comp)
-    tone_text = _tone_text(meta.get("tone","daylight"))
-    theme_boost = THEME_BOOST.get(preset, "")
-    prompt_core, gender_negative = build_prompt(meta, gender, comp_text, tone_text, theme_boost, natural, pretty)
-    model_slug = _pinned_slug(av)
-
-    guidance = max(4.0, min(5.0, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE)))
-    steps = min(MAX_STEPS, 48 if natural else max(50, GEN_STEPS))
-
-    await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
-    desc = meta.get("desc", preset)
-    await update.effective_message.reply_text(f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nГенерирую LoRA ({gender}, {w}×{h})…")
-
-    neg_base = _neg_with_gender(NEGATIVE_PROMPT_BASE, gender_negative)
-
-    # LOCKFACE теперь просто «узкий конус» сидов, даёт более стабильные черты
-    lockface_on = av.get("lockface", True)
-    base_seed = random.randrange(2**32)
-    seeds = [base_seed, base_seed + 1, base_seed + 2] if lockface_on else [
-        random.randrange(2**32), random.randrange(2**32), random.randrange(2**32)
-    ]
-
-    try:
-        async with GEN_SEMAPHORE:
-            for i, s in enumerate(seeds, 1):
-                url = await asyncio.to_thread(
-                    generate_from_finetune, model_slug=model_slug, prompt=prompt_core,
-                    steps=steps, guidance=guidance, seed=s, w=w, h=h, negative_prompt=neg_base
+            uid = update.effective_user.id
+            prof = load_profile(uid)
+            av_name = get_current_avatar_name(prof)
+            av = get_avatar(prof, av_name)
+            if av.get("status") != "succeeded":
+                await update.effective_message.reply_text(
+                    f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
                 )
-                tag = "🔒" if lockface_on else "◻️"
-                await update.effective_message.reply_photo(photo=url, caption=f"{preset} • {av_name} • {tag} • #{i}")
+                return
 
-        await update.effective_message.reply_text("Готово. Если какой-то пресет «плывёт», скажи его имя — притяну гайки именно для него.")
+            meta = STYLE_PRESETS[preset]
+            gender = (prof.get("gender") or "female").lower()
+            natural = prof.get("natural", True)
+            pretty  = prof.get("pretty", False)
 
-    except Exception as e:
-        logging.exception("generation failed")
-        await update.effective_message.reply_text(f"Ошибка генерации: {e}")
+            tone_text   = _tone_text(meta.get("tone", "daylight"))
+            theme_boost = THEME_BOOST.get(preset, "")
+            model_slug  = _pinned_slug(av)
+
+            # CFG/steps под сцену (оставил твои рамки)
+            guidance = max(4.0, min(5.0, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE)))
+            steps    = min(MAX_STEPS, 48 if natural else max(50, GEN_STEPS))
+
+            # какие композиции рендерим (по умолчанию: half, half, closeup)
+            variant_comps = _variants_for_preset(meta)
+
+            # если включён CONSISTENT_SCALE — не даём «full» (держим лицо стабильнее)
+            if CONSISTENT_SCALE:
+                variant_comps = [c if c in ("half","closeup") else "half" for c in variant_comps]
+
+            await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
+            desc = meta.get("desc", preset)
+            await update.effective_message.reply_text(
+                f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nВарианты: {', '.join(variant_comps)}…"
+            )
+
+            # сиды: «узкий конус», если lockface включён
+            lockface_on = av.get("lockface", True)
+            base_seed = random.randrange(2**32)
+
+            try:
+                async with GEN_SEMAPHORE:
+                    for idx, comp_kind in enumerate(variant_comps, 1):
+                        # сид на вариант
+                        seed = (base_seed + idx) if lockface_on else random.randrange(2**32)
+
+                        # компо-текст и размер под конкретный вариант
+                        comp_text, (w, h) = _comp_text_and_size(comp_kind)
+
+                        # собираем промпт и негатив — тоже под вариант
+                        prompt_core, gender_negative = build_prompt(
+                            meta, gender, comp_text, tone_text, theme_boost, natural, pretty
+                        )
+                        neg_base = _neg_with_gender(NEGATIVE_PROMPT_BASE, gender_negative)
+
+                        # генерация plain LoRA
+                        url = await asyncio.to_thread(
+                            generate_from_finetune,
+                            model_slug=model_slug,
+                            prompt=prompt_core,
+                            steps=steps,
+                            guidance=guidance,
+                            seed=seed,
+                            w=w, h=h,
+                            negative_prompt=neg_base
+                        )
+
+                        # симпатичный маркер кадрирования
+                        tag = "👤" if comp_kind == "closeup" else ("🧍" if comp_kind == "half" else "🧍↔️")
+                        lock = "🔒" if lockface_on else "◻️"
+                        await update.effective_message.reply_photo(
+                            photo=url,
+                            caption=f"{preset} • {av_name} • {lock} {tag} {comp_kind} • {w}×{h}"
+                        )
+
+                await update.effective_message.reply_text(
+                    "Готово. Нужен другой набор (например, 3×closeup)? Скажи — настрою."
+                )
+
+            except Exception as e:
+                logging.exception("generation failed")
+                await update.effective_message.reply_text(f"Ошибка генерации: {e}")
+
 
 # --- Toggles (пер-юзер) ---
 async def pretty_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
