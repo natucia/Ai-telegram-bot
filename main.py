@@ -234,15 +234,29 @@ class S3Storage(Storage):
         keys: List[str] = []
         cont = None
         while True:
-            resp = _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, ContinuationToken=cont, label="s3_list") \
-                   if cont else _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, label="s3_list")
+            if cont:
+                resp = _retry(
+                    s3_client.list_objects_v2,
+                    Bucket=S3_BUCKET, Prefix=prefix,
+                    ContinuationToken=cont, label="s3_list"
+                )
+            else:
+                resp = _retry(
+                    s3_client.list_objects_v2,
+                    Bucket=S3_BUCKET, Prefix=prefix,
+                    label="s3_list"
+                )
+
             for it in resp.get("Contents", []):
                 keys.append(f"s3://{S3_BUCKET}/{it['Key']}")
+
             if resp.get("IsTruncated"):
                 cont = resp.get("NextContinuationToken")
             else:
                 break
+
         return sorted(keys)
+
 
     def delete_avatar(self, uid:int, avatar:str):
         prefix = _s3_key("profiles", str(uid), "avatars", avatar)
@@ -329,9 +343,6 @@ def get_avatar(prof:Dict[str,Any], name:Optional[str]=None) -> Dict[str,Any]:
 
 def list_ref_images(uid:int, avatar:str) -> List[str]:
     return STORAGE.list_ref_images(uid, avatar)
-
-def profile_path(uid:int) -> Path:
-    return user_dir(uid) / "profile.json"
 
 def _migrate_single_to_multi(uid:int, prof:Dict[str,Any]) -> Dict[str,Any]:
     if "avatars" in prof: return prof
