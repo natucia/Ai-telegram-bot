@@ -384,7 +384,7 @@ STYLE_PRESETS: Dict[str, Style] = {
                                        "role": "harley quinn character with full authentic appearance",
                                        "outfit_f": "red and black harlequin jumpsuit, fishnet stockings, combat boots",
                                        "outfit": "harley quinn inspired outfit with red and black colors",
-                                       "props": "baseball bat, giant mallet, playing cards, confetti explosion, "Daddy's Little Monster" shirt visible",
+                                       "props": "baseball bat, giant mallet, playing cards, confetti explosion, ""Daddy's Little Monster"" shirt visible",
                                        "bg": "graffiti-covered asylum or carnival alley",
                                        "comp": "half", "tone": "neon",
                                        "required_attributes": ["classic harley quinn makeup", "red and black color scheme", "harlequin pattern", "baseball bat or mallet"]
