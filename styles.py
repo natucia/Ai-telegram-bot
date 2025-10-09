@@ -10,7 +10,7 @@ Style = Dict[str, Any]
 # =========================
 STYLE_PRESETS: Dict[str, Style] = {
     # ===== ПОРТРЕТЫ / МОДА =====
-    "Портрет у окна — живой свет": {
+    "Портрет у окна": {
         "desc": "Киношный крупный портрет у большого окна; мягкая тень от рамы, живое боке.",
         "role": "cinematic window light portrait",
         "outfit": "neutral top",
@@ -18,7 +18,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "large window with daylight glow, interior blur",
         "comp": "closeup", "tone": "daylight"
     },
-    "85 мм — кремовое боке": {
+    "85 мм": {
         "desc": "Классика 85 мм: микроскопическая ГРИП, акцент на глаза.",
         "role": "85mm look beauty portrait",
         "outfit": "minimal elegant top",
@@ -26,7 +26,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "neutral cinematic backdrop",
         "comp": "closeup", "tone": "warm"
     },
-    "Бьюти-студия без пластика": {
+    "Бьюти-студия": {
         "desc": "Чистый студийный свет, текстура кожи сохранена (никакого «пластика»).",
         "role": "studio beauty portrait",
         "outfit": "clean minimal outfit",
@@ -42,7 +42,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "moody backdrop with soft falloff",
         "comp": "closeup", "tone": "cool"
     },
-    "Фильм-нуар — жалюзи и дым": {
+    "Фильм-нуар": {
         "desc": "Нуар: свет из жалюзи, дым, резкий контраст.",
         "role": "film noir portrait",
         "outfit": "vintage attire",
@@ -59,7 +59,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "daytime city street with graffiti and shop windows",
         "comp": "half", "tone": "daylight"
     },
-    "Вечерний выход — красная дорожка": {
+    "Вечерний выход": {
         "desc": "Глянцевый блеск, софиты, фотокорреспонденты.",
         "role": "celebrity on red carpet",
         "outfit_f": "elegant evening gown",
@@ -77,7 +77,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "modern glass office lobby with depth",
         "comp": "half", "tone": "daylight"
     },
-    "Ночной неон — мокрый асфальт": {
+    "Ночной неон": {
         "desc": "Кибернуар: мокрый асфальт, пар из люков, неоновые вывески.",
         "role": "urban night scene",
         "outfit_f": "long coat, boots",
@@ -577,7 +577,7 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     # ===== ТРАНСФОРМАЦИИ =====
-    "Возраст + — благородное старение": {
+    "Старость": {
         "desc": "Деликатное «состаривание» как стилизация.",
         "role": "same person aged up",
         "outfit": "same wardrobe vibe",
@@ -586,7 +586,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "closeup", "tone": "daylight",
         "allow_age_change": True
     },
-    "Возраст − — мягкое омоложение": {
+    "Молодость": {
         "desc": "Лёгкое «омоложение» как стилизация.",
         "role": "same person aged down",
         "outfit": "same wardrobe vibe",
@@ -799,11 +799,11 @@ RISKY_PRESETS = set(SCENE_GUIDANCE.keys())
 # =========================
 STYLE_CATEGORIES: Dict[str, List[str]] = {
     "Портреты и Мода": [
-        "Портрет у окна — живой свет", "85 мм — кремовое боке",
-        "Бьюти-студия без пластика", "Кинопортрет Рембрандта",
-        "Фильм-нуар — жалюзи и дым", "Стритвэр мегаполис",
-        "Вечерний выход — красная дорожка", "Бизнес-портрет C-suite",
-        "Ночной неон — мокрый асфальт"
+        "Портрет у окна", "85 мм",
+        "Бьюти-студия", "Кинопортрет Рембрандта",
+        "Фильм-нуар", "Стритвэр мегаполис",
+        "Вечерний выход", "Бизнес-портрет C-suite",
+        "Ночной неон"
     ],
     "Профессии и Спорт": [
         "Доктор у палаты", "Хирург в операционной",
@@ -816,8 +816,8 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
         "Высокие горы — снег и лёд", "Серфер — брызги и солнце",
         "Арктика — сияние и айсберги", "Альпы — гламурный отпуск",
         "Париж — кофе, берет и багет", "Россия — зимняя сказка",
-        "Деревня — тёплый уют", "Дикий Запад — шериф и ковбои",
-        "Конная прогулка — лошади и поле"
+        "Деревня — тёплый уют", "Дикий Запад",
+        "Конная прогулка"
     ],
     "Фэнтези и Сказки": [
         "Эльфы, гномы и тролли", "Самурай в храме",
@@ -855,7 +855,7 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
         "Медсестра", "Программист"
     ],
     "Трансформации": [
-        "Возраст + — благородное старение", "Возраст − — мягкое омоложение",
+        "Старость", "Молодость",
         "Пухлый герой"
     ]
 }
