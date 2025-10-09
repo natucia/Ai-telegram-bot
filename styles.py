@@ -369,7 +369,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "urban destruction or lab wreckage",
         "comp": "half", "tone": "cool",
         "allow_body_change": True,
-        "required_attributes": ["green skin", "massive muscular body", "hulk-like proportions", "green face"]
+        "required_attributes": ["green skin", "massive muscular body", "hulk-like proportions", "green face"]},
     "Женщина-Кошка — ночной хищник": {
         "desc": "Лаконичный кошачий силуэт, городское небо.",
         "role": "cat-burglar heroine",
@@ -435,7 +435,7 @@ STYLE_PRESETS: Dict[str, Style] = {
                                        "props": "goblet with red liquid, candelabra, rose thorns",
                                        "bg": "neo-gothic hall with stained glass",
                                        "comp": "half", "tone": "noir",
-                                       "required_attributes": ["visible fangs", "red eyes", "pale skin", "vampire aesthetic"],
+                                       "required_attributes": ["visible fangs", "red eyes", "pale skin", "vampire aesthetic"]},
     "Зомби-апокалипсис (кино)": {
         "desc": "Кинематографическая разруха, но без лишнего хоррора.",
         "role": "survivor hero",
@@ -604,7 +604,7 @@ STYLE_PRESETS: Dict[str, Style] = {
                                        "bg": "cozy kitchen or restaurant setting",
                                        "comp": "half", "tone": "warm",
                                        "allow_body_change": True,
-                                       "required_attributes": ["plus-size body", "eating at table", "realistic body folds", "natural weight distribution"],
+                                       "required_attributes": ["plus-size body", "eating at table", "realistic body folds", "natural weight distribution"]},
 
     # ===== ИНФО/РОЛИ =====
     "Домашний уют": {
