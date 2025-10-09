@@ -439,12 +439,13 @@ STYLE_PRESETS: Dict[str, Style] = {
                                        "required_attributes": ["visible fangs", "red eyes", "pale skin", "vampire aesthetic"]
                                    },
     "Зомби-апокалипсис (кино)": {
-        "desc": "Кинематографическая разруха, но без лишнего хоррора.",
-        "role": "survivor hero",
-        "outfit": "worn streetwear with dust",
-        "props": "flying papers, cracked glass, slight grime",
-        "bg": "abandoned street with smoke layers",
-        "comp": "full", "tone": "noir"
+        "desc": "Вы в роли зомби: бледная кожа, раны, кровоподтеки, стеклянный взгляд, потрепанная одежда.",
+        "role": "zombie in apocalypse setting",
+        "outfit": "tattered, dirty clothes with bloodstains",
+        "props": "wounds, bruises, maybe missing flesh, dragging leg",
+        "bg": "post-apocalyptic street with debris, smoke, abandoned cars",
+        "comp": "half", "tone": "noir",
+        "required_attributes": ["pale skin", "zombie eyes", "wounds", "undead appearance"]
     },
     "Ведьма — чары и луна": {
         "desc": "Травы, чары, ночная поляна и огромная луна.",
@@ -766,7 +767,8 @@ THEME_BOOST = {
     "Готика: Ведьма — чары и луна": "moon halo, drifting sparks",
     "Халк-эффект": "green skin texture, massive muscle definition, torn clothing fibers, destruction debris",
     "Пухлый герой": "appetizing food details, table setting, natural body language, comfortable seating",
-    "Харли-Квинн": "diamond pattern details, smudged makeup, weapon props, chaotic confetti bursts"
+    "Харли-Квинн": "diamond pattern details, smudged makeup, weapon props, chaotic confetti bursts",
+    "Зомби-апокалипсис (кино)": "decaying skin details, blood splatters, tattered clothing, post-apocalyptic debris"
 }
 
 # Настройки «сценовой» направляющей (чуть выше — меньше уводит лицо)
@@ -782,7 +784,7 @@ SCENE_GUIDANCE = {
     "Космический скафандр — EVA": 3.2,
     "Киборг": 3.2,
     "Вампирский бал": 3.2,
-    "Зомби-апокалипсис (кино)": 3.2,
+    "Зомби-апокалипсис (кино)": 3.3,
     "Монашка": 3.0,
     "Клоун — цирковой сюр": 3.0,
     "Кукла в коробке": 3.0,
