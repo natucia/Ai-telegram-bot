@@ -361,15 +361,15 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "gothic city skyline in rain",
         "comp": "half", "tone": "noir"
     },
-    "Халк-эффект (зелёная мощь)": {
-        "desc": "Стилизованная трансформация силы, зелёный оттенок кожи.",
-        "role": "gamma-style strong hero",
-        "outfit": "torn casual (tasteful)",
-        "props": "veins popping, cracked ground hint",
-        "bg": "urban rubble or lab bay",
+    "Халк-эффект (зеленая мощь)": {
+        "desc": "Мощная зеленая трансформация: огромное мускулистое тело, зеленная кожа, разорванная одежда.",
+        "role": "hulk-style transformed hero with green skin and massive body",
+        "outfit": "torn purple pants (classic Hulk reference)",
+        "props": "veins popping, cracked ground under feet, green skin texture",
+        "bg": "urban destruction or lab wreckage",
         "comp": "half", "tone": "cool",
-        "allow_body_change": True
-    },
+        "allow_body_change": True,
+        "required_attributes": ["green skin", "massive muscular body", "hulk-like proportions", "green face"]
     "Женщина-Кошка — ночной хищник": {
         "desc": "Лаконичный кошачий силуэт, городское небо.",
         "role": "cat-burglar heroine",
@@ -379,15 +379,16 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "neon skyline with moon",
         "comp": "half", "tone": "neon"
     },
-    "Харли-квинн — хаос и конфетти": {
-        "desc": "Панк-игривость, биты, цветные хвосты, конфетти.",
-        "role": "mischief jester heroine",
-        "outfit_f": "playful punk outfit (modest)",
-        "outfit": "punk jester style",
-        "props": "bat or mallet silhouette, confetti burst, spray paint hearts",
-        "bg": "graffiti alley with neon signs",
-        "comp": "half", "tone": "neon"
-    },
+    "Харли-Квинн — хаос и конфетти": {
+                                       "desc": "Аутентичный образ Харли Квинн: красно-черное комбинезон, грим арлекина, бейсбольная бита, хулиганский стиль.",
+                                       "role": "harley quinn character with full authentic appearance",
+                                       "outfit_f": "red and black harlequin jumpsuit, fishnet stockings, combat boots",
+                                       "outfit": "harley quinn inspired outfit with red and black colors",
+                                       "props": "baseball bat, giant mallet, playing cards, confetti explosion, "Daddy's Little Monster" shirt visible",
+                                       "bg": "graffiti-covered asylum or carnival alley",
+                                       "comp": "half", "tone": "neon",
+                                       "required_attributes": ["classic harley quinn makeup", "red and black color scheme", "harlequin pattern", "baseball bat or mallet"]
+                                   },
     "Супергерой — неон и экшен": {
         "desc": "Комиксовая динамика, контровой свет, гоночные неоны.",
         "role": "superhero in action pose",
@@ -426,15 +427,15 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     # ===== НОЧНЫЕ / УЖАСЫ / ГОТИКА =====
-    "Вампирский бал": {
-        "desc": "Готическая архитектура, свечи, бледный блеск и намёк на клыки.",
-        "role": "vampire aristocrat",
-        "outfit_f": "velvet gown with lace (modest)",
-        "outfit": "tailcoat with cravat",
-        "props": "goblet, candelabra, rose thorns",
-        "bg": "neo-gothic hall with stained glass",
-        "comp": "half", "tone": "noir"
-    },
+                                   "Вампирский бал": {
+                                       "desc": "Готическая элегантность с вампирскими атрибутами: острые клыки, красные глаза, бледная кожа.",
+                                       "role": "vampire aristocrat at gothic ball",
+                                       "outfit_f": "velvet gown with lace (modest)",
+                                       "outfit": "tailcoat with cravat",
+                                       "props": "goblet with red liquid, candelabra, rose thorns",
+                                       "bg": "neo-gothic hall with stained glass",
+                                       "comp": "half", "tone": "noir",
+                                       "required_attributes": ["visible fangs", "red eyes", "pale skin", "vampire aesthetic"],
     "Зомби-апокалипсис (кино)": {
         "desc": "Кинематографическая разруха, но без лишнего хоррора.",
         "role": "survivor hero",
@@ -596,14 +597,14 @@ STYLE_PRESETS: Dict[str, Style] = {
         "allow_age_change": True
     },
     "Пухлый герой": {
-        "desc": "Деликатная стилизация увеличения объёма тела (без стёба).",
-        "role": "same person stylized heavier",
-        "outfit": "everyday outfit adapted to size",
-        "props": "soft fabric folds, natural posture",
-        "bg": "neutral portrait or lifestyle backdrop",
-        "comp": "half", "tone": "daylight",
-        "allow_body_change": True
-    },
+                                       "desc": "Реалистичная стилизация полноты: человек за столом с едой, мягкие складки, естественные пропорции.",
+                                       "role": "heavier person enjoying meal at table",
+                                       "outfit": "comfortable casual clothes that fit larger body",
+                                       "props": "food on table (pizza, burger, or home meal), drink, napkins",
+                                       "bg": "cozy kitchen or restaurant setting",
+                                       "comp": "half", "tone": "warm",
+                                       "allow_body_change": True,
+                                       "required_attributes": ["plus-size body", "eating at table", "realistic body folds", "natural weight distribution"],
 
     # ===== ИНФО/РОЛИ =====
     "Домашний уют": {
@@ -752,14 +753,17 @@ THEME_BOOST = {
     "Конная прогулка": "mane motion highlights, dust sparkles in backlight",
     "Космический скафандр — EVA": "helmet micro-scratches, HUD reflections",
     "Киборг": "subsurface skin vs brushed metal micro-contrast",
-    "Вампирский бал": "candle halos, stained glass glows, fags",
+    "Вампирский бал": "sharp fangs detail, crimson eye glow, pale complexion, gothic architecture shadows",
     "Золотые 50-е": "checker floor reflections, chrome sparkle",
     "Кукла в коробке": "plastic gloss, cardboard print grain",
     "Зена-королева воинов": "wind-torn cloak edges, sun flare",
     "Гранж-сквот — рваные постеры": "torn poster edges, paint drips",
     "Мото-культура — байк и дым": "headlight bloom, tire smoke whirls",
     "Суперкары — хром и скорость": "light trails, glossy reflections",
-    "Готика: Ведьма — чары и луна": "moon halo, drifting sparks"
+    "Готика: Ведьма — чары и луна": "moon halo, drifting sparks",
+    "Халк-эффект (зеленая мощь)": "green skin texture, massive muscle definition, torn clothing fibers, destruction debris",
+    "Пухлый герой": "appetizing food details, table setting, natural body language, comfortable seating",
+    "Харли-Квинн — хаос и конфетти": "diamond pattern details, smudged makeup, weapon props, chaotic confetti bursts"
 }
 
 # Настройки «сценовой» направляющей (чуть выше — меньше уводит лицо)
@@ -780,15 +784,15 @@ SCENE_GUIDANCE = {
     "Клоун — цирковой сюр": 3.0,
     "Кукла в коробке": 3.0,
     "Готэм-ночь (Бэтмен-вайб)": 3.2,
-    "Халк-эффект (зелёная мощь)": 3.2,
+    "Халк-эффект (зелёная мощь)": 3.5,
     "Женщина-Кошка — ночной хищник": 3.2,
-    "Харли-квинн — хаос и конфетти": 3.2,
+    "Харли-квинн — хаос и конфетти": 3.4,
     "Магическая школа": 3.2,
     "Хоббит": 3.0,
     "Матерь драконов": 3.0,
     "Дикий Запад": 3.2,
     "Конная прогулка": 3.0,
-    "Пухлый герой": 2.8
+    "Пухлый герой": 3.0
 }
 
 # Сцены, где чаще уводит лицо / агрессивная стилизация — держим под контролем
