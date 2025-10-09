@@ -361,7 +361,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "gothic city skyline in rain",
         "comp": "half", "tone": "noir"
     },
-    "Халк-эффект (зеленая мощь)": {
+    "Халк-эффект": {
         "desc": "Мощная зеленая трансформация: огромное мускулистое тело, зеленная кожа, разорванная одежда.",
         "role": "hulk-style transformed hero with green skin and massive body",
         "outfit": "torn purple pants (classic Hulk reference)",
@@ -371,7 +371,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "allow_body_change": True,
         "required_attributes": ["green skin", "massive muscular body", "hulk-like proportions", "green face"]
     },
-    "Женщина-Кошка — ночной хищник": {
+    "Женщина-Кошка": {
         "desc": "Лаконичный кошачий силуэт, городское небо.",
         "role": "cat-burglar heroine",
         "outfit_f": "sleek catsuit (modest), goggles",
@@ -380,7 +380,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "neon skyline with moon",
         "comp": "half", "tone": "neon"
     },
-    "Харли-Квинн — хаос и конфетти": {
+    "Харли-Квинн": {
                                        "desc": "Аутентичный образ Харли Квинн: красно-черное комбинезон, грим арлекина, бейсбольная бита, хулиганский стиль.",
                                        "role": "harley quinn character with full authentic appearance",
                                        "outfit_f": "red and black harlequin jumpsuit, fishnet stockings, combat boots",
@@ -390,7 +390,7 @@ STYLE_PRESETS: Dict[str, Style] = {
                                        "comp": "half", "tone": "neon",
                                        "required_attributes": ["classic harley quinn makeup", "red and black color scheme", "harlequin pattern", "baseball bat or mallet"]
                                    },
-    "Супергерой — неон и экшен": {
+    "Супергерой": {
         "desc": "Комиксовая динамика, контровой свет, гоночные неоны.",
         "role": "superhero in action pose",
         "outfit_f": "form-fitting suit with emblem (non-revealing)",
@@ -764,9 +764,9 @@ THEME_BOOST = {
     "Мото-культура — байк и дым": "headlight bloom, tire smoke whirls",
     "Суперкары — хром и скорость": "light trails, glossy reflections",
     "Готика: Ведьма — чары и луна": "moon halo, drifting sparks",
-    "Халк-эффект (зеленая мощь)": "green skin texture, massive muscle definition, torn clothing fibers, destruction debris",
+    "Халк-эффект": "green skin texture, massive muscle definition, torn clothing fibers, destruction debris",
     "Пухлый герой": "appetizing food details, table setting, natural body language, comfortable seating",
-    "Харли-Квинн — хаос и конфетти": "diamond pattern details, smudged makeup, weapon props, chaotic confetti bursts"
+    "Харли-Квинн": "diamond pattern details, smudged makeup, weapon props, chaotic confetti bursts"
 }
 
 # Настройки «сценовой» направляющей (чуть выше — меньше уводит лицо)
@@ -787,9 +787,9 @@ SCENE_GUIDANCE = {
     "Клоун — цирковой сюр": 3.0,
     "Кукла в коробке": 3.0,
     "Готэм-ночь (Бэтмен-вайб)": 3.2,
-    "Халк-эффект (зелёная мощь)": 3.5,
-    "Женщина-Кошка — ночной хищник": 3.2,
-    "Харли-квинн — хаос и конфетти": 3.4,
+    "Халк-эффект": 3.5,
+    "Женщина-Кошка": 3.2,
+    "Харли-квинн": 3.4,
     "Магическая школа": 3.2,
     "Хоббит": 3.0,
     "Матерь драконов": 3.0,
@@ -835,9 +835,9 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
         "Спящая красавица"
     ],
     "Кино и Комиксы (вдохновение)": [
-        "Готэм-ночь (Бэтмен-вайб)", "Халк-эффект (зелёная мощь)",
-        "Женщина-Кошка — ночной хищник", "Харли-квинн — хаос и конфетти",
-        "Супергерой — неон и экшен"
+        "Готэм-ночь (Бэтмен-вайб)", "Халк-эффект",
+        "Женщина-Кошка", "Харли-Квинн",
+        "Супергерой"
     ],
     "Sci-Fi": [
         "Космический скафандр — EVA", "Космопилот на мостике",
