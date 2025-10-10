@@ -907,7 +907,17 @@ def start_lora_training(uid:int, avatar:str) -> str:
                 "network_rank": int(os.getenv("LORA_RANK","16")),
                 "network_alpha": int(os.getenv("LORA_ALPHA","16")),
                 "caption_prefix": caption_prefix,
-            },
+
+                # <<< НОВОЕ: отключить автокапшены / LLaVA >>>
+                "autocaption": False,          # если есть такой флаг — вырубит полностью
+                "captioner": "none",           # многие тренеры понимают "captioner"
+                "caption_model": "none",       # альтернативное имя параметра
+                "use_llava": False,            # явно запретить LLaVA
+                "use_blip": False,             # и BLIP на всякий случай (если не хочешь BLIP)
+                # или, если хочешь BLIP: поменяй на True и убери captioner/…=none
+                # "use_blip": True,
+            }
+,
             destination=dest_model,
             label="replicate_train"
         )
