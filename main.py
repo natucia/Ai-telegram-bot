@@ -1,9 +1,10 @@
 # === Telegram LoRA Bot (Flux LoRA trainer + Redis persist
 # + Identity/Gender locks — NO InstantID, pure LoRA
 # + MULTI-AVATARS + NATURAL/Pretty per-user + CONSISTENT FACE SCALE
-# + S3 storage + concurrency limits + retries) ===
+# + S3 storage + concurrency limits + retries
+# + STRICT WAIST-UP ONLY (no full body) ===
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Iterable
 Style = Dict[str, Any]
 
 from styles import (  # твой styles.py
@@ -14,6 +15,8 @@ from styles import (  # твой styles.py
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, tempfile
 from pathlib import Path
 from zipfile import ZipFile, ZIP_STORED
+
+import requests
 import replicate
 from replicate import Client
 from PIL import Image, ImageOps
@@ -73,6 +76,10 @@ CONSISTENT_SCALE = os.getenv("CONSISTENT_SCALE", "1").lower() in ("1","true","ye
 HEAD_HEIGHT_FRAC = float(os.getenv("HEAD_HEIGHT_FRAC", "0.36"))
 HEAD_WIDTH_FRAC  = float(os.getenv("HEAD_WIDTH_FRAC", "0.28"))
 
+# --- Composition policy (НОВОЕ) ---
+FORCE_WAIST_UP = os.getenv("FORCE_WAIST_UP", "1").lower() in ("1","true","yes","y")
+ALLOW_SEATED   = os.getenv("ALLOW_SEATED", "1").lower() in ("1","true","yes","y")
+
 # ---- Anti-drift / anti-wide-face ----
 NEGATIVE_PROMPT_BASE = (
     "cartoon, anime, cgi, 3d render, stylized, illustration, plastic skin, overprocessed, airbrushed, beauty-filter, "
@@ -84,6 +91,13 @@ NEGATIVE_PROMPT_BASE = (
     "plain selfie, flash photo, harsh shadows, denoise artifacts, over-sharpened, waxy highlight roll-off, "
     "skin smoothing, porcelain texture, HDR glamour, excessive clarity, "
     "eyes closed, heavy makeup, overdrawn lips, false eyelashes, thick eyeliner, glam retouch"
+)
+
+# НОВОЕ: жёсткий запрет фулл-боди
+NO_FULL_BODY_NEG = (
+    "no full body, no head-to-toe, no feet, no shoes in frame, "
+    "no legs below waist, no knees visible, avoid distant camera, "
+    "avoid tiny face, avoid wide background composition"
 )
 
 AESTHETIC_SUFFIX = (
@@ -130,6 +144,20 @@ def _retry(fn, *args, tries=3, backoff=1.8, label="op", **kwargs):
                 time.sleep(backoff**i)
             else:
                 raise RuntimeError(f"{label} failed after {tries} tries: {e}") from e
+
+# рядом с _retry / HTTP_TIMEOUT
+def _download_image_bytes(url: str, tries: int = 3, timeout: float = HTTP_TIMEOUT) -> bytes:
+    headers = {"User-Agent": "TelegramLoRABot/1.0"}
+    last_exc = None
+    for i in range(tries):
+        try:
+            r = requests.get(url, headers=headers, timeout=timeout, stream=True)
+            r.raise_for_status()
+            return r.content if r.content else r.raw.read()
+        except Exception as e:
+            last_exc = e
+            time.sleep(1.6 ** i)
+    raise RuntimeError(f"download failed for {url}: {last_exc}")
 
 # ---------- storage (FS/S3) ----------
 DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
@@ -502,30 +530,44 @@ def _face_scale_hint() -> str:
         f"head width ~{hw}% of frame width, subject centered, do not zoom in or out"
     )
 
+# === СЕКЦИЯ КОМПОЗИЦИЙ (жёстко без full-body) ===
+def _variants_for_preset(meta: Style) -> List[str]:
+    comps = meta.get("comps")
+    if isinstance(comps, list) and comps:
+        comps = [("half" if c == "full" else c) for c in comps]
+        comps = [c for c in comps if c in ("half","closeup")]
+        if comps:
+            return comps
+    return ["half", "half", "closeup"]
+
+def _maybe_seated_hint() -> str:
+    return "subject seated on a chair or sofa, relaxed posture" if ALLOW_SEATED and random.random() < 0.6 else ""
+
 def _comp_text_and_size(comp: str) -> Tuple[str, Tuple[int,int]]:
     scale_txt = _face_scale_hint()
     if comp == "closeup":
         w, h = _safe_portrait_size(896, 1152)
-        return (f"portrait from chest up (no waist), shoulders fully in frame, head near top third, "
-                f"no hands visible, camera at eye level, 85mm look, {scale_txt}", (w, h))
-    if comp == "half":
-        w, h = _safe_portrait_size(GEN_WIDTH, max(GEN_HEIGHT, 1344))
-        return (f"half body from waist up (include waist), hands may appear near frame edges, "
-                f"camera at chest level, slight downward angle, 85mm look, {scale_txt}", (w, h))
-    w, h = _safe_portrait_size(GEN_WIDTH, 1408)
-    return (f"full body head-to-toe, shoes visible, camera at mid-torso level, {scale_txt}", (w, h))
+        seated = _maybe_seated_hint()
+        return (
+            f"portrait from chest up (no waist), shoulders fully in frame, {seated} "
+            f"camera at eye level, 85mm look, {scale_txt}".strip(),
+            (w, h)
+        )
+    w, h = _safe_portrait_size(GEN_WIDTH, max(GEN_HEIGHT, 1344))
+    seated = _maybe_seated_hint()
+    return (
+        f"half body from waist up (include waist), hands may appear near frame edges, {seated} "
+        f"camera at chest level, slight downward angle, 85mm look, {scale_txt}".strip(),
+        (w, h)
+    )
 
 def _comp_negatives(kind: str) -> str:
-    if kind == "half": return "no chest-up tight crop, no head-only shot, avoid cropping above waist"
-    if kind == "closeup": return "no waist-up framing, no full body, no hands in frame"
-    if kind == "full": return "no chest-up crop, no waist-up crop"
-    return ""
-
-def _variants_for_preset(meta: Style) -> List[str]:
-    comps = meta.get("comps")
-    if isinstance(comps, list) and comps:
-        return [c for c in comps if c in ("closeup","half","full")]
-    return ["half", "half", "closeup"]
+    base = NO_FULL_BODY_NEG if FORCE_WAIST_UP else ""
+    if kind == "half":
+        return (base + ", no chest-up tight crop, avoid cropping above waist").strip(", ")
+    if kind == "closeup":
+        return (base + ", no waist-up framing, no hands in frame, avoid showing torso").strip(", ")
+    return (base + ", no chest-up crop, no waist-up crop").strip(", ")
 
 def _tone_text(tone: str) -> str:
     return {
@@ -917,16 +959,13 @@ def start_lora_training(uid:int, avatar:str) -> str:
                 "network_alpha": int(os.getenv("LORA_ALPHA","16")),
                 "caption_prefix": caption_prefix,
 
-                # <<< НОВОЕ: отключить автокапшены / LLaVA >>>
-                "autocaption": False,          # если есть такой флаг — вырубит полностью
-                "captioner": "none",           # многие тренеры понимают "captioner"
-                "caption_model": "none",       # альтернативное имя параметра
-                "use_llava": False,            # явно запретить LLaVA
-                "use_blip": False,             # и BLIP на всякий случай (если не хочешь BLIP)
-                # или, если хочешь BLIP: поменяй на True и убери captioner/…=none
-                # "use_blip": True,
-            }
-,
+                # отключить автокапшены полностью
+                "autocaption": False,
+                "captioner": "none",
+                "caption_model": "none",
+                "use_llava": False,
+                "use_blip": False,
+            },
             destination=dest_model,
             label="replicate_train"
         )
@@ -1049,6 +1088,14 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
         return
 
     meta = STYLE_PRESETS[preset]
+
+    # НОВОЕ: запретить full на уровне пресета
+    if FORCE_WAIST_UP:
+        meta = dict(meta)
+        meta["comps"] = [("half" if c == "full" else c) for c in meta.get("comps", []) if c in ("half","closeup")]
+        if not meta["comps"]:
+            meta["comps"] = ["half", "half", "closeup"]
+
     gender = (prof.get("gender") or "female").lower()
     natural = prof.get("natural", True)
     pretty  = prof.get("pretty", False)
@@ -1058,17 +1105,14 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     theme_boost = THEME_BOOST.get(preset_key, "")
     model_slug  = _pinned_slug(av)
 
-    # уважай ENV/пресет и мягко клипуй диапазон
     guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
     guidance     = float(max(4.5, min(6.5, float(guidance_val))))
-
-    # никаких «всегда 48»
     steps = int(min(int(MAX_STEPS), int(GEN_STEPS)))
 
-    # какие композиции рендерим (по умолчанию: half, half, closeup)
+    # какие композиции рендерим
     variant_comps = _variants_for_preset(meta)
-    if CONSISTENT_SCALE:
-        variant_comps = [c if c in ("half","closeup") else "half" for c in variant_comps]
+    # финальный кламп
+    variant_comps = [c if c in ("half","closeup") else "half" for c in variant_comps]
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
@@ -1091,6 +1135,8 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                     NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind),
                     gender_negative
                 )
+                if FORCE_WAIST_UP:
+                    neg_base = (neg_base + ", " + NO_FULL_BODY_NEG).strip(", ")
 
                 url = await asyncio.to_thread(
                     generate_from_finetune,
@@ -1103,15 +1149,22 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                     negative_prompt=neg_base
                 )
 
-                tag = "👤" if comp_kind == "closeup" else ("🧍" if comp_kind == "half" else "🧍↔️")
+                tag = "👤" if comp_kind == "closeup" else "🧍"
                 lock = "🔒" if lockface_on else "◻️"
-                await update.effective_message.reply_photo(
-                    photo=url,
-                    caption=f"{preset} • {av_name} • {lock} {tag} {comp_kind} • {w}×{h}"
-                )
+                caption = f"{preset} • {av_name} • {lock} {tag} {comp_kind} • {w}×{h}"
+
+                try:
+                    await update.effective_message.reply_photo(photo=url, caption=caption)
+                except Exception as e:
+                    if "http url content" in str(e).lower() or "http url specified" in str(e).lower():
+                        img_bytes = await asyncio.to_thread(_download_image_bytes, url)
+                        bio = io.BytesIO(img_bytes); bio.name = "image.jpg"
+                        await update.effective_message.reply_photo(photo=bio, caption=caption)
+                    else:
+                        raise
 
         await update.effective_message.reply_text(
-            "Готово. Нужен другой набор (например, 3×closeup)? Скажи — настрою."
+            "Готово. Надо 3×по пояс всегда? Могу зафиксировать «half, half, closeup»."
         )
 
     except Exception as e:
@@ -1178,9 +1231,9 @@ def main():
     logger.info("InstantID removed: pure LoRA mode.")
 
     logger.info(
-        "Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s ConsistentScale=%s Storage=%s",
+        "Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s ConsistentScale=%s WaistUp=%s Storage=%s",
         LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}", GEN_WIDTH, GEN_HEIGHT,
-        GEN_STEPS, GEN_GUIDANCE, CONSISTENT_SCALE, "S3" if USE_S3 else "FS"
+        GEN_STEPS, GEN_GUIDANCE, CONSISTENT_SCALE, FORCE_WAIST_UP, "S3" if USE_S3 else "FS"
     )
     app.run_polling(drop_pending_updates=True)
 
