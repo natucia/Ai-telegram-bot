@@ -1074,14 +1074,20 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
             gender = (prof.get("gender") or "female").lower()
             natural = prof.get("natural", True)
             pretty  = prof.get("pretty", False)
+            preset_key  = str(preset)
 
-            tone_text   = _tone_text(meta.get("tone", "daylight"))
-            theme_boost = THEME_BOOST.get(preset, "")
+            tone_text   =      _tone_text(meta.get("tone", "daylight"))
+            theme_boost = THEME_BOOST.get(preset_key, "")
             model_slug  = _pinned_slug(av)
 
-            # CFG/steps под сцену (оставил твои рамки)
-            guidance = max(4.0, min(5.0, SCENE_GUIDANCE.get(preset, GEN_GUIDANCE)))
-            steps    = min(MAX_STEPS, 48 if natural else max(50, GEN_STEPS))
+# уважай ENV/пресет и мягко клипуй диапазон
+            guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
+            guidance     = float(max(4.5, min(6.5, float(guidance_val))))
+
+# никаких «всегда 48»
+            steps = int(min(int(MAX_STEPS), int(GEN_STEPS)))
+
+
 
             # какие композиции рендерим (по умолчанию: half, half, closeup)
             variant_comps = _variants_for_preset(meta)
