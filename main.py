@@ -82,15 +82,13 @@ NEGATIVE_PROMPT_BASE = (
     "lowres, blurry, textureless skin, porcelain skin, waxy, gaussian blur, smoothing filter, "
     "text, watermark, logo, bad anatomy, extra fingers, short fingers, different person, identity drift, "
     "ethnicity change, age change, hairline change, beard removed, fake skin, "
-    "distorted proportions, exaggerated jaw, shrunk head, giant head, tiny head, "
+    "distorted proportions, vertical face elongation, face slimming, stretched chin, narrow jaw, "
     "lens distortion, fisheye, warping, stretched face, perspective distortion, "
-    "plain selfie, tourist photo, flash photo, harsh shadows, "
-    "denoise artifacts, over-sharpened, waxy highlight roll-off, excessive frequency separation, "
+    "plain selfie, flash photo, harsh shadows, denoise artifacts, over-sharpened, waxy highlight roll-off, "
     "skin smoothing, porcelain texture, HDR glamour, excessive clarity, "
-    "profile view, extreme head tilt, eyes closed, looking away, "
-    "heavy makeup, overdrawn lips, false eyelashes, thick eyeliner, glam retouch, "
-    "deep smile lines, deep marionette lines, harsh shadow under nose or nasolabial area"
+    "eyes closed, heavy makeup, overdrawn lips, false eyelashes, thick eyeliner, glam retouch"
 )
+
 
 
 
