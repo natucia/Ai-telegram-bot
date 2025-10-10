@@ -78,18 +78,20 @@ HEAD_WIDTH_FRAC  = float(os.getenv("HEAD_WIDTH_FRAC", "0.28"))
 
 # ---- Anti-drift / anti-wide-face ---- (усилено для «cheese-like»)
 NEGATIVE_PROMPT_BASE = (
-    "cartoon, anime, cgi, 3d, stylized, plastic skin, overprocessed, airbrushed, beauty-filter, "
-    "lowres, blur, textureless skin, porcelain skin, waxy, gaussian blur, smoothing filter, "
-    "text, watermark, logo, bad anatomy, extra fingers, short fingers, identity drift, different person, "
-    "ethnicity change, age change, hairline modification, beard reshaping, lip reshape, mouth corner lift, "
-    "puffy face, swollen face, chubby cheeks, widened jaw, broad zygomatic width, wide face, "
-    "horizontally stretched face, tiny head, giant head, variable head scale, "
-    "zoomed-in extreme close-up, distant tiny face, aspect distortion, fisheye, lens distortion, warping, "
-    "plain selfie, tourist photo, denoise artifacts, waxy highlight roll-off, excessive frequency separation, "
-    "face slimming or widening, retouched pores, profile view, three-quarter view, turned head, head tilt, "
-    "looking away from camera, closed eyes, heavy makeup glam look, "
-    "pronounced nasolabial folds, deep smile lines, deep marionette lines, harsh shadow on nasolabial area"
+    "cartoon, anime, cgi, 3d render, stylized, illustration, plastic skin, overprocessed, airbrushed, beauty-filter, "
+    "lowres, blurry, textureless skin, porcelain skin, waxy, gaussian blur, smoothing filter, "
+    "text, watermark, logo, bad anatomy, extra fingers, short fingers, different person, identity drift, "
+    "ethnicity change, age change, hairline change, beard removed, fake skin, "
+    "distorted proportions, exaggerated jaw, shrunk head, giant head, tiny head, "
+    "lens distortion, fisheye, warping, stretched face, perspective distortion, "
+    "plain selfie, tourist photo, flash photo, harsh shadows, "
+    "denoise artifacts, over-sharpened, waxy highlight roll-off, excessive frequency separation, "
+    "skin smoothing, porcelain texture, HDR glamour, excessive clarity, "
+    "profile view, extreme head tilt, eyes closed, looking away, "
+    "heavy makeup, overdrawn lips, false eyelashes, thick eyeliner, glam retouch, "
+    "deep smile lines, deep marionette lines, harsh shadow under nose or nasolabial area"
 )
+
 
 
 AESTHETIC_SUFFIX = (
@@ -601,6 +603,7 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
         tone_text, gpos,
         "same person as the training photos, no ethnicity change, exact facial identity +++",
         "photorealistic, realistic body proportions, natural fine skin texture, filmic look",
+        "keep original facial proportions, same interocular distance and cheekbone width, preserve lip shape and beard density",
         "85mm lens portrait look",
         _frontal_lock(),
         _head_scale_lock(),
@@ -941,9 +944,12 @@ def start_lora_training(uid:int, avatar:str) -> str:
                 "max_train_steps": LORA_MAX_STEPS,
                 "lora_lr": LORA_LR,
                 "use_face_detection_instead": LORA_USE_FACE_DET,
-                "caption_prefix": caption_prefix,
                 "resolution": LORA_RESOLUTION,
-            },
+                "network_rank": int(os.getenv("LORA_RANK","16")),     # safe if supported
+                "network_alpha": int(os.getenv("LORA_ALPHA","16")),   # safe if supported
+                "caption_prefix": caption_prefix,
+            }
+,
             destination=dest_model,
             label="replicate_train"
         )
