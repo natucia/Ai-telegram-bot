@@ -1,11 +1,9 @@
 # === Telegram LoRA Bot (Flux LoRA trainer + Redis persist
-# + Identity/Gender locks (cheese-like) — NO InstantID, pure LoRA
+# + Identity/Gender locks — NO InstantID, pure LoRA
 # + MULTI-AVATARS + NATURAL/Pretty per-user + CONSISTENT FACE SCALE
 # + S3 storage + concurrency limits + retries) ===
-# Требования:
-# python-telegram-bot==20.7, replicate==0.31.0, pillow==10.4.0, redis==5.0.1, boto3==1.34.0+
 
-from typing import Any, Dict, List, Optional, Tuple, Iterable
+from typing import Any, Dict, List, Optional, Tuple
 Style = Dict[str, Any]
 
 from styles import (  # твой styles.py
@@ -16,7 +14,6 @@ from styles import (  # твой styles.py
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, tempfile
 from pathlib import Path
 from zipfile import ZipFile, ZIP_STORED
-import requests  # можно удалить, если не используешь внешние загрузки
 import replicate
 from replicate import Client
 from PIL import Image, ImageOps
@@ -76,7 +73,7 @@ CONSISTENT_SCALE = os.getenv("CONSISTENT_SCALE", "1").lower() in ("1","true","ye
 HEAD_HEIGHT_FRAC = float(os.getenv("HEAD_HEIGHT_FRAC", "0.36"))
 HEAD_WIDTH_FRAC  = float(os.getenv("HEAD_WIDTH_FRAC", "0.28"))
 
-# ---- Anti-drift / anti-wide-face ---- (усилено для «cheese-like»)
+# ---- Anti-drift / anti-wide-face ----
 NEGATIVE_PROMPT_BASE = (
     "cartoon, anime, cgi, 3d render, stylized, illustration, plastic skin, overprocessed, airbrushed, beauty-filter, "
     "lowres, blurry, textureless skin, porcelain skin, waxy, gaussian blur, smoothing filter, "
@@ -88,9 +85,6 @@ NEGATIVE_PROMPT_BASE = (
     "skin smoothing, porcelain texture, HDR glamour, excessive clarity, "
     "eyes closed, heavy makeup, overdrawn lips, false eyelashes, thick eyeliner, glam retouch"
 )
-
-
-
 
 AESTHETIC_SUFFIX = (
     ", photorealistic, visible fine skin texture, natural color, soft filmic contrast, "
@@ -213,9 +207,9 @@ class S3Storage(Storage):
     def save_ref_image(self, uid:int, avatar:str, raw:bytes) -> str:
         if not s3_client: raise RuntimeError("S3 не инициализирован.")
         buf = io.BytesIO()
-        im = Image.open(io.BytesIO(raw)).convert("RGB")
-        im = _center_crop80(im)
-        im.thumbnail((1024,1024))
+        im = Image.open(io.BytesIO(raw))
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        im = ImageOps.contain(im, (1024,1024))  # без кропа, сохраняем аспект
         im.save(buf, "JPEG", quality=92); buf.seek(0)
         key = _s3_key("profiles", str(uid), "avatars", avatar, f"ref_{int(time.time()*1000)}.jpg")
         _retry(s3_client.put_object, Bucket=S3_BUCKET, Key=key, Body=buf.getvalue(), ContentType="image/jpeg", label="s3_put")
@@ -228,17 +222,9 @@ class S3Storage(Storage):
         cont = None
         while True:
             if cont:
-                resp = _retry(
-                    s3_client.list_objects_v2,
-                    Bucket=S3_BUCKET, Prefix=prefix,
-                    ContinuationToken=cont, label="s3_list"
-                )
+                resp = _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, ContinuationToken=cont, label="s3_list")
             else:
-                resp = _retry(
-                    s3_client.list_objects_v2,
-                    Bucket=S3_BUCKET, Prefix=prefix,
-                    label="s3_list"
-                )
+                resp = _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, label="s3_list")
             for it in resp.get("Contents", []):
                 keys.append(f"s3://{S3_BUCKET}/{it['Key']}")
             if resp.get("IsTruncated"):
@@ -249,7 +235,6 @@ class S3Storage(Storage):
 
     def delete_avatar(self, uid:int, avatar:str):
         prefix = _s3_key("profiles", str(uid), "avatars", avatar)
-        to_del = []
         cont = None
         while True:
             resp = _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, ContinuationToken=cont, label="s3_list") \
@@ -289,7 +274,7 @@ DEFAULT_AVATAR = {
     "finetuned_model": None,
     "finetuned_version": None,
     "status": None,
-    "lockface": True  # теперь это «seed clamp» для стабильности
+    "lockface": True
 }
 DEFAULT_PROFILE = {
     "gender": None,
@@ -299,18 +284,10 @@ DEFAULT_PROFILE = {
     "avatars": {"default": DEFAULT_AVATAR.copy()}
 }
 
-def _center_crop80(im: Image.Image) -> Image.Image:
-    w, h = im.size
-    side = int(min(w, h) * 0.8)
-    cx, cy = w // 2, h // 2
-    left = max(0, cx - side // 2)
-    top = max(0, cy - side // 2)
-    return im.crop((left, top, left + side, top + side))
-
 def _save_ref_downscaled_local(path: Path, raw: bytes, max_side=1024, quality=92):
-    im = Image.open(io.BytesIO(raw)).convert("RGB")
-    im = _center_crop80(im)
-    im.thumbnail((max_side, max_side))
+    im = Image.open(io.BytesIO(raw))
+    im = ImageOps.exif_transpose(im).convert("RGB")
+    im = ImageOps.contain(im, (max_side, max_side))  # БЕЗ КРОПА
     im.save(path, "JPEG", quality=quality)
 
 def get_current_avatar_name(prof:Dict[str,Any]) -> str:
@@ -461,7 +438,7 @@ def _caption_for_gender(g: str) -> str:
         return env_override
     return DEFAULT_MALE_CAPTION if (g or "").lower() == "male" else DEFAULT_FEMALE_CAPTION
 
-# ---------- Промпт-замки (cheese-like) ----------
+# ---------- Промпт-замки ----------
 def _beauty_guardrail() -> str:
     return (
         "exact facial identity, identity preserved, balanced facial proportions, symmetrical face, natural oval, soft jawline, "
@@ -519,39 +496,25 @@ def _face_scale_hint() -> str:
     )
 
 def _comp_text_and_size(comp: str) -> Tuple[str, Tuple[int,int]]:
-        scale_txt = _face_scale_hint()
-        if comp == "closeup":
-            w, h = _safe_portrait_size(896, 1152)
-            return (
-                f"portrait from chest up (no waist), shoulders fully in frame, head near top third, "
-                f"no hands visible, camera at eye level, 85mm look, {scale_txt}", (w, h)
-            )
-        if comp == "half":
-            w, h = _safe_portrait_size(GEN_WIDTH, max(GEN_HEIGHT, 1344))
-            return (
-                f"half body from waist up (include waist), hands may appear near frame edges, "
-                f"camera at chest level, slight downward angle, 85mm look, {scale_txt}", (w, h)
-            )
-        w, h = _safe_portrait_size(GEN_WIDTH, 1408)
-        return (
-            f"full body head-to-toe, shoes visible, camera at mid-torso level, {scale_txt}", (w, h)
-        )
-    
+    scale_txt = _face_scale_hint()
+    if comp == "closeup":
+        w, h = _safe_portrait_size(896, 1152)
+        return (f"portrait from chest up (no waist), shoulders fully in frame, head near top third, "
+                f"no hands visible, camera at eye level, 85mm look, {scale_txt}", (w, h))
+    if comp == "half":
+        w, h = _safe_portrait_size(GEN_WIDTH, max(GEN_HEIGHT, 1344))
+        return (f"half body from waist up (include waist), hands may appear near frame edges, "
+                f"camera at chest level, slight downward angle, 85mm look, {scale_txt}", (w, h))
+    w, h = _safe_portrait_size(GEN_WIDTH, 1408)
+    return (f"full body head-to-toe, shoes visible, camera at mid-torso level, {scale_txt}", (w, h))
+
 def _comp_negatives(kind: str) -> str:
-    if kind == "half":
-        return "no chest-up tight crop, no head-only shot, avoid cropping above waist"
-    if kind == "closeup":
-        return "no waist-up framing, no full body, no hands in frame"
-    if kind == "full":
-        return "no chest-up crop, no waist-up crop"
+    if kind == "half": return "no chest-up tight crop, no head-only shot, avoid cropping above waist"
+    if kind == "closeup": return "no waist-up framing, no full body, no hands in frame"
+    if kind == "full": return "no chest-up crop, no waist-up crop"
     return ""
-    
+
 def _variants_for_preset(meta: Style) -> List[str]:
-    """
-    Возвращает список композиции на один пресет, порядок = порядок генерации.
-    По умолчанию 2x half и 1x closeup. Можно переопределить в presets, указав meta['comps'] = [...]
-    Допустимые значения: 'closeup', 'half', 'full'
-    """
     comps = meta.get("comps")
     if isinstance(comps, list) and comps:
         return [c for c in comps if c in ("closeup","half","full")]
@@ -603,9 +566,7 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
         "photorealistic, realistic body proportions, natural fine skin texture, filmic look",
         "keep original facial proportions, same interocular distance and cheekbone width, preserve lip shape and beard density",
         "85mm lens portrait look",
-        _frontal_lock(),
-        _head_scale_lock(),
-        _face_scale_hint(),
+        _frontal_lock(), _head_scale_lock(), _face_scale_hint(),
         anti, _beauty_guardrail(), _face_lock(), theme_boost
     ]
 
@@ -623,7 +584,7 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
     if pretty:  neg = (neg + ", " + PRETTY_NEG) if neg else PRETTY_NEG
     return core, neg
 
-# ---------- Инференс/генерация (pure LoRA) ----------
+# ---------- Инференс/генерация ----------
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
     mv = resolve_model_version(model_slug)
     def _run():
@@ -943,11 +904,10 @@ def start_lora_training(uid:int, avatar:str) -> str:
                 "lora_lr": LORA_LR,
                 "use_face_detection_instead": LORA_USE_FACE_DET,
                 "resolution": LORA_RESOLUTION,
-                "network_rank": int(os.getenv("LORA_RANK","16")),     # safe if supported
-                "network_alpha": int(os.getenv("LORA_ALPHA","16")),   # safe if supported
+                "network_rank": int(os.getenv("LORA_RANK","16")),
+                "network_alpha": int(os.getenv("LORA_ALPHA","16")),
                 "caption_prefix": caption_prefix,
-            }
-,
+            },
             destination=dest_model,
             label="replicate_train"
         )
@@ -1057,99 +1017,87 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     preset = q.data.split(":",1)[1]
     await start_generation_for_preset(update, context, preset)
+
 async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
-            uid = update.effective_user.id
-            prof = load_profile(uid)
-            av_name = get_current_avatar_name(prof)
-            av = get_avatar(prof, av_name)
-            if av.get("status") != "succeeded":
-                await update.effective_message.reply_text(
-                    f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+    uid = update.effective_user.id
+    prof = load_profile(uid)
+    av_name = get_current_avatar_name(prof)
+    av = get_avatar(prof, av_name)
+    if av.get("status") != "succeeded":
+        await update.effective_message.reply_text(
+            f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+        )
+        return
+
+    meta = STYLE_PRESETS[preset]
+    gender = (prof.get("gender") or "female").lower()
+    natural = prof.get("natural", True)
+    pretty  = prof.get("pretty", False)
+    preset_key  = str(preset)
+
+    tone_text   = _tone_text(meta.get("tone", "daylight"))
+    theme_boost = THEME_BOOST.get(preset_key, "")
+    model_slug  = _pinned_slug(av)
+
+    # уважай ENV/пресет и мягко клипуй диапазон
+    guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
+    guidance     = float(max(4.5, min(6.5, float(guidance_val))))
+
+    # никаких «всегда 48»
+    steps = int(min(int(MAX_STEPS), int(GEN_STEPS)))
+
+    # какие композиции рендерим (по умолчанию: half, half, closeup)
+    variant_comps = _variants_for_preset(meta)
+    if CONSISTENT_SCALE:
+        variant_comps = [c if c in ("half","closeup") else "half" for c in variant_comps]
+
+    await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
+    desc = meta.get("desc", preset)
+    await update.effective_message.reply_text(
+        f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nВарианты: {', '.join(variant_comps)}…"
+    )
+
+    lockface_on = av.get("lockface", True)
+    base_seed = random.randrange(2**32)
+
+    try:
+        async with GEN_SEMAPHORE:
+            for idx, comp_kind in enumerate(variant_comps, 1):
+                seed = (base_seed + idx) if lockface_on else random.randrange(2**32)
+                comp_text, (w, h) = _comp_text_and_size(comp_kind)
+                prompt_core, gender_negative = build_prompt(
+                    meta, gender, comp_text, tone_text, theme_boost, natural, pretty
                 )
-                return
-
-            meta = STYLE_PRESETS[preset]
-            gender = (prof.get("gender") or "female").lower()
-            natural = prof.get("natural", True)
-            pretty  = prof.get("pretty", False)
-            preset_key  = str(preset)
-
-            tone_text   =      _tone_text(meta.get("tone", "daylight"))
-            theme_boost = THEME_BOOST.get(preset_key, "")
-            model_slug  = _pinned_slug(av)
-
-# уважай ENV/пресет и мягко клипуй диапазон
-            guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
-            guidance     = float(max(4.5, min(6.5, float(guidance_val))))
-
-# никаких «всегда 48»
-            steps = int(min(int(MAX_STEPS), int(GEN_STEPS)))
-
-
-
-            # какие композиции рендерим (по умолчанию: half, half, closeup)
-            variant_comps = _variants_for_preset(meta)
-
-            # если включён CONSISTENT_SCALE — не даём «full» (держим лицо стабильнее)
-            if CONSISTENT_SCALE:
-                variant_comps = [c if c in ("half","closeup") else "half" for c in variant_comps]
-
-            await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
-            desc = meta.get("desc", preset)
-            await update.effective_message.reply_text(
-                f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nВарианты: {', '.join(variant_comps)}…"
-            )
-
-            # сиды: «узкий конус», если lockface включён
-            lockface_on = av.get("lockface", True)
-            base_seed = random.randrange(2**32)
-
-            try:
-                async with GEN_SEMAPHORE:
-                    for idx, comp_kind in enumerate(variant_comps, 1):
-                        # сид на вариант
-                        seed = (base_seed + idx) if lockface_on else random.randrange(2**32)
-
-                        # компо-текст и размер под конкретный вариант
-                        comp_text, (w, h) = _comp_text_and_size(comp_kind)
-
-                        # собираем промпт и негатив — тоже под вариант
-                        prompt_core, gender_negative = build_prompt(
-                            meta, gender, comp_text, tone_text, theme_boost, natural, pretty
-                        )
-                        neg_base = _neg_with_gender(
-                            NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind),
-                            gender_negative
-                        )
-
-                        # генерация plain LoRA
-                        url = await asyncio.to_thread(
-                            generate_from_finetune,
-                            model_slug=model_slug,
-                            prompt=prompt_core,
-                            steps=steps,
-                            guidance=guidance,
-                            seed=seed,
-                            w=w, h=h,
-                            negative_prompt=neg_base
-                        )
-
-                        # симпатичный маркер кадрирования
-                        tag = "👤" if comp_kind == "closeup" else ("🧍" if comp_kind == "half" else "🧍↔️")
-                        lock = "🔒" if lockface_on else "◻️"
-                        await update.effective_message.reply_photo(
-                            photo=url,
-                            caption=f"{preset} • {av_name} • {lock} {tag} {comp_kind} • {w}×{h}"
-                        )
-
-                await update.effective_message.reply_text(
-                    "Готово. Нужен другой набор (например, 3×closeup)? Скажи — настрою."
+                neg_base = _neg_with_gender(
+                    NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind),
+                    gender_negative
                 )
 
-            except Exception as e:
-                logging.exception("generation failed")
-                await update.effective_message.reply_text(f"Ошибка генерации: {e}")
+                url = await asyncio.to_thread(
+                    generate_from_finetune,
+                    model_slug=model_slug,
+                    prompt=prompt_core,
+                    steps=steps,
+                    guidance=guidance,
+                    seed=seed,
+                    w=w, h=h,
+                    negative_prompt=neg_base
+                )
 
+                tag = "👤" if comp_kind == "closeup" else ("🧍" if comp_kind == "half" else "🧍↔️")
+                lock = "🔒" if lockface_on else "◻️"
+                await update.effective_message.reply_photo(
+                    photo=url,
+                    caption=f"{preset} • {av_name} • {lock} {tag} {comp_kind} • {w}×{h}"
+                )
+
+        await update.effective_message.reply_text(
+            "Готово. Нужен другой набор (например, 3×closeup)? Скажи — настрою."
+        )
+
+    except Exception as e:
+        logging.exception("generation failed")
+        await update.effective_message.reply_text(f"Ошибка генерации: {e}")
 
 # --- Toggles (пер-юзер) ---
 async def pretty_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1208,7 +1156,7 @@ def main():
 
     # Пинг слагов
     _check_slug(LORA_TRAINER_SLUG, "LoRA trainer")
-    logger.info("InstantID removed: pure LoRA mode (cheese-like).")
+    logger.info("InstantID removed: pure LoRA mode.")
 
     logger.info(
         "Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s ConsistentScale=%s Storage=%s",
