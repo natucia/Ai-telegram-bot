@@ -451,6 +451,13 @@ def _face_lock() -> str:
         "keep same bone structure, natural interocular distance, consistent eyelid shape, "
         "aligned pupils, preserve cheekbone width and lip fullness"
     )
+def _oval_lock() -> str:
+    return (
+        "keep the same facial oval as in the training photos, "
+        "no vertical face elongation, no face slimming, "
+        "no stretched or lengthened chin, no narrowed or widened jaw, "
+        "preserve original jawline curvature and cheekbone width"
+    )
 
 def _anti_distort() -> str:
     return "no fisheye, no lens distortion, no warping, natural perspective, proportional head size"
@@ -566,7 +573,9 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
         "photorealistic, realistic body proportions, natural fine skin texture, filmic look",
         "keep original facial proportions, same interocular distance and cheekbone width, preserve lip shape and beard density",
         "85mm lens portrait look",
-        _frontal_lock(), _head_scale_lock(), _face_scale_hint(),
+        _frontal_lock(),
+        _oval_lock(),
+        _head_scale_lock(), _face_scale_hint(),
         anti, _beauty_guardrail(), _face_lock(), theme_boost
     ]
 
