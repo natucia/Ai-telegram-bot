@@ -1166,12 +1166,38 @@ def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Op
 
         return (status, slug_with_version, None)
 
-
-
 def _pinned_slug(av: Dict[str, Any]) -> str:
-    base = av.get("finetuned_model") or ""
-    ver = av.get("finetuned_version")
-    return f"{base}:{ver}" if (base and ver) else base
+        base = av.get("finetuned_model") or ""
+        ver = av.get("finetuned_version")
+
+        # Если есть и модель и версия
+        if base and ver:
+            # Убедимся, что версия не содержит лишних символов
+            clean_ver = ver.strip()
+            if ":" in clean_ver:
+                clean_ver = clean_ver.split(":")[-1]
+            return f"{base}:{clean_ver}"
+
+        # Если есть только модель, попробуем получить последнюю версию
+        elif base:
+            try:
+                model_obj = replicate.models.get(base)
+                versions = list(model_obj.versions.list())
+                if versions:
+                    latest_ver = versions[0].id
+                    av["finetuned_version"] = latest_ver
+                    # Сохраняем обновленную версию в профиль
+                    uid = av.get("_uid_hint", 0)
+                    prof = load_profile(uid)
+                    current_av_name = get_current_avatar_name(prof)
+                    if current_av_name in prof["avatars"]:
+                        prof["avatars"][current_av_name]["finetuned_version"] = latest_ver
+                        save_profile(uid, prof)
+                    return f"{base}:{latest_ver}"
+            except Exception as e:
+                logger.error(f"Failed to get latest version for {base}: {e}")
+
+        return base or ""
 
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id; prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
@@ -1237,7 +1263,6 @@ async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         await update.effective_message.reply_text(f"Статус «{av_name}»: {display}.")
-
 
 def _neg_with_gender(neg_base:str, gender_negative:str) -> str:
     return (neg_base + (", " + gender_negative if gender_negative else "")).strip(", ")
