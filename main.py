@@ -896,20 +896,52 @@ async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-    av_name = get_current_avatar_name(prof); av = get_avatar(prof, av_name)
-    await update.effective_message.reply_text(
-        f"Активный аватар: {av_name}\n"
-        f"Фото: {len(list_ref_images(uid, av_name))}\n"
-        f"Статус: {av.get('status') or '—'}\n"
-        f"Модель: {av.get('finetuned_model') or '—'}\n"
-        f"Версия: {av.get('finetuned_version') or '—'}\n"
-        f"Токен: {av.get('token') or '—'}\n"
-        f"Пол (аватар): {av.get('gender') or '—'}\n"
-        f"LOCKFACE: {'on' if av.get('lockface') else 'off'}\n"
-        f"Natural: {'ON' if prof.get('natural', True) else 'OFF'} • Pretty: {'ON' if prof.get('pretty', False) else 'OFF'}"
-    )
+        uid = update.effective_user.id
+
+        # 1) читаем профиль и активный аватар
+        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+        av_name = get_current_avatar_name(prof); av = get_avatar(prof, av_name)
+
+        # 2) если есть активная тренировка — ОБНОВИ статус через Replicate
+        tid = av.get("training_id")
+        if tid:
+            # если ещё не конечный статус — проверим через API
+            if av.get("status") not in {"succeeded", "failed", "canceled"}:
+                try:
+                    status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
+                    # перечитываем профиль после обновления
+                    prof = load_profile(uid); av = get_avatar(prof, av_name)
+                except Exception as e:
+                    logging.warning("id_status: check failed: %s", e)
+
+        # 3) готовим вывод
+        model  = av.get("finetuned_model") or "—"
+        ver_id = av.get("finetuned_version") or "—"
+        st     = av.get("status") or "—"
+        token  = av.get("token") or "—"
+        g      = av.get("gender") or "—"
+
+        # универсальная ссылка на логи
+        log_btn = None
+        if tid:
+            log_btn = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Открыть логи Replicate", url=f"https://replicate.com/trainings/{tid}")]]
+            )
+
+        msg = (
+            f"Активный аватар: {av_name}\n"
+            f"Фото: {len(list_ref_images(uid, av_name))}\n"
+            f"Статус: {st}\n"
+            f"Модель: {model}\n"
+            f"Версия: {ver_id}\n"
+            f"Токен: {token}\n"
+            f"Пол (аватар): {g}\n"
+            f"LOCKFACE: {'on' if av.get('lockface') else 'off'}\n"
+            f"Natural: {'ON' if prof.get('natural', True) else 'OFF'} • Pretty: {'ON' if prof.get('pretty', False) else 'OFF'}"
+        )
+
+        await update.effective_message.reply_text(msg, reply_markup=log_btn)
+
 
 async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
