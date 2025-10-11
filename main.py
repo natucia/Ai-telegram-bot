@@ -1244,7 +1244,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
 
                 bio2 = io.BytesIO()
                 im.save(bio2, "JPEG", quality=92)
-                bio2.seek(0)p
+                bio2.seek(0)
                 bio2.name = "image.jpg"
                 await update.effective_message.reply_photo(photo=bio2, caption=caption)
 
