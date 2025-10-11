@@ -1116,7 +1116,7 @@ def start_lora_training(uid: int, avatar: str) -> str:
 def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Optional[str]]:
         """
         Возвращает (status, slug_with_version_if_ready, error_text_or_None).
-        Обновляет профиль ТОЛЬКО через один объект prof (без повторных load_profile()).
+        Обновляет профиль, даже если training завершён давно.
         """
         prof = load_profile(uid)
         av = get_avatar(prof, avatar)
@@ -1125,46 +1125,41 @@ def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Op
             return ("not_started", None, None)
 
         client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-        tr = client.trainings.get(tid)
 
-        # статус с сервера
+        try:
+            tr = client.trainings.get(tid)
+        except Exception as e:
+            return ("unknown", None, str(e))
+
+        # Универсально получаем поля (Replicate SDK может вернуть dict или объект)
         if isinstance(tr, dict):
             status = tr.get("status", "unknown")
             destination = tr.get("destination") or av.get("finetuned_model")
             err = tr.get("error") or tr.get("detail")
         else:
-            status = getattr(tr, "status", None) or "unknown"
+            status = getattr(tr, "status", "unknown")
             destination = getattr(tr, "destination", None) or av.get("finetuned_model")
             err = getattr(tr, "error", None) or getattr(tr, "detail", None)
 
-        # сразу записываем актуальный статус в ТОТ ЖЕ prof
         av["status"] = status
         if destination:
             av["finetuned_model"] = destination
+
+        # Если succeeded — закрепляем версию
+        slug_with_ver = None
+        if status == "succeeded" and destination:
+            try:
+                model_obj = replicate.models.get(destination)
+                versions = list(model_obj.versions.list())
+                if versions:
+                    slug_with_ver = f"{destination}:{versions[0].id}"
+                    av["finetuned_version"] = versions[0].id
+            except Exception as e:
+                logging.warning(f"Не удалось получить версию модели {destination}: {e}")
+                slug_with_ver = destination
+
         save_profile(uid, prof)
-
-        # ещё не готово — выходим
-        if status != "succeeded":
-            return (status, None, err)
-
-        # на succeeded аккуратно пинним версию через список версий модели
-        if not destination:
-            destination = _dest_model_slug(avatar)
-
-        slug_with_version = None
-        try:
-            model_obj = replicate.models.get(destination)
-            versions = list(model_obj.versions.list())
-            if versions:
-                slug_with_version = f"{destination}:{versions[0].id}"
-                # сохраняем ТОЛЬКО version-id в av["finetuned_version"]
-                av["finetuned_version"] = versions[0].id
-                save_profile(uid, prof)
-        except Exception as e:
-            logging.warning("resolve version failed for %s: %s", destination, e)
-            slug_with_version = destination
-
-        return (status, slug_with_version, None)
+        return (status, slug_with_ver, err)
 
 def _pinned_slug(av: Dict[str, Any]) -> str:
         base = av.get("finetuned_model") or ""
