@@ -28,6 +28,11 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes,
     CallbackQueryHandler, filters
 )
+import struct
+
+def _stable_seed(*parts:str) -> int:
+    h = hashlib.sha1(("::".join(parts)).encode("utf-8")).digest()
+    return struct.unpack(">Q", h[:8])[0] & 0xFFFFFFFF
 
 # ---------- ENV ----------
 TOKEN = os.getenv("BOT_TOKEN", "")
@@ -1172,8 +1177,12 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     )
 
     lockface_on = av.get("lockface", True)
-    base_seed = random.randrange(2**32)
     token = av.get("token")
+    base_seed = _stable_seed(token or "notoken", preset_key)
+
+    for idx, comp_kind in enumerate(variant_comps, 1):
+        seed = (_stable_seed(token or "notoken", preset_key, comp_kind)
+                if lockface_on else random.randrange(2**32))
 
     try:
         async with GEN_SEMAPHORE:
