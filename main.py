@@ -202,21 +202,20 @@ def _s3_key(*parts: str) -> str:
 
 def tmp_path(suffix=".jpg") -> Path:
     return Path(tempfile.mkstemp(prefix="bot_", suffix=suffix)[1])
-    
+
 def _downscale_like_camera(im: Image.Image, target_max=1152) -> Image.Image:
-        # мягкое даунскейление → менее «цифровой» вид
-        w, h = im.size
-        if max(w, h) <= target_max:
-            return im
-        scale = target_max / float(max(w, h))
-        nw, nh = int(w * scale), int(h * scale)
-        return im.resize((nw, nh), Image.Resampling.LANCZOS)
+    # мягкое даунскейление → менее «цифровой» вид
+    w, h = im.size
+    if max(w, h) <= target_max:
+        return im
+    scale = target_max / float(max(w, h))
+    nw, nh = int(w * scale), int(h * scale)
+    return im.resize((nw, nh), Image.Resampling.LANCZOS)
 
 def _photo_look(im: Image.Image) -> Image.Image:
     # лёгкая резкость + очень тонкое зерно
     im = _downscale_like_camera(im, 1152)
     im = im.filter(ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=6))
-    # микро-зерно (Pillow >= 10): эффект шума и лёгкое смешивание
     noise = Image.effect_noise(im.size, 3).convert("L").point(lambda p: int(p*0.08))
     im = Image.blend(im, Image.merge("RGB", (noise, noise, noise)), 0.08)
     return im
@@ -440,12 +439,19 @@ def delete_profile(uid:int):
         shutil.rmtree(p, ignore_errors=True)
     p.mkdir(parents=True, exist_ok=True)
 
-# ---------- авто-пол ----------
+# ---------- авто-пол + кэш версий ----------
+_MODEL_VER_CACHE: Dict[str, str] = {}
+
 def resolve_model_version(slug: str) -> str:
-    if ":" in slug: return slug
+    if ":" in slug:
+        return slug
+    if slug in _MODEL_VER_CACHE:
+        return f"{slug}:{_MODEL_VER_CACHE[slug]}"
     model = replicate.models.get(slug)
     versions = list(model.versions.list())
-    if not versions: raise RuntimeError(f"Нет версий модели {slug}")
+    if not versions:
+        raise RuntimeError(f"Нет версий модели {slug}")
+    _MODEL_VER_CACHE[slug] = versions[0].id
     return f"{slug}:{versions[0].id}"
 
 def extract_any_url(out: Any) -> Optional[str]:
@@ -889,7 +895,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Уже 10/10. Нажми /iddone."); return
         f = await update.message.photo[-1].get_file()
         data = await f.download_as_bytearray()
-        key = STORAGE.save_ref_image(uid, av_name, bytes(data))
+        _ = STORAGE.save_ref_image(uid, av_name, bytes(data))
         prof = load_profile(uid); av = get_avatar(prof, av_name)
         av["images"] = list_ref_images(uid, av_name)
         save_profile(uid, prof)
@@ -1180,8 +1186,8 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     model_slug  = _pinned_slug(av)
 
     guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
-    guidance = float(max(4.0, min(4.4, float(guidance_val))))  # было до 4.6 — оставь 4.2–4.4
-    steps = 40  # стабильно фоторалистично
+    guidance = float(max(4.0, min(4.4, float(guidance_val))))  # оставлено как в твоих настройках
+    steps = 40  # стабильно фотореалистично
 
     # какие композиции рендерим
     variant_comps = _variants_for_preset(meta)
@@ -1197,10 +1203,6 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     lockface_on = av.get("lockface", True)
     token = av.get("token")
     base_seed = _stable_seed(token or "notoken", preset_key)
-
-    for idx, comp_kind in enumerate(variant_comps, 1):
-        seed = (_stable_seed(token or "notoken", preset_key, comp_kind)
-                if lockface_on else random.randrange(2**32))
 
     try:
         async with GEN_SEMAPHORE:
@@ -1234,19 +1236,17 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                 lock = "🔒" if lockface_on else "◻️"
                 caption = f"{preset} • {av_name} • {lock} {tag} {comp_kind} • {w}×{h}"
 
-                        # Всегда скачиваем → прогоняем через photo-look → шлём
-# Всегда скачиваем → прогоняем через photo-look → шлё
+                # Всегда скачиваем → прогоняем через photo-look → шлём
                 img_bytes = await asyncio.to_thread(_download_image_bytes, url)
-
                 bio = io.BytesIO(img_bytes)
                 im = Image.open(bio).convert("RGB")
                 im = _photo_look(im)  # «как с камеры»
 
-                bio2 = io.BytesIO()
-                im.save(bio2, "JPEG", quality=92)
-                bio2.seek(0)
-                bio2.name = "image.jpg"
-                await update.effective_message.reply_photo(photo=bio2, caption=caption)
+                out_io = io.BytesIO()
+                im.save(out_io, "JPEG", quality=92)
+                out_io.seek(0)
+                out_io.name = "image.jpg"
+                await update.effective_message.reply_photo(photo=out_io, caption=caption)
 
         await update.effective_message.reply_text(
             "Готово. По умолчанию рендерим: half, half, closeup — строго без full body."
