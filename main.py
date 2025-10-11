@@ -1291,6 +1291,30 @@ async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.effective_message.reply_text(f"Статус «{av_name}»: {display}.")
 
+# === Принудительное обновление статуса с Replicate ===
+async def refreshstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+    av_name = get_current_avatar_name(prof)
+
+    try:
+        status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
+    except Exception as e:
+        await update.effective_message.reply_text(f"check_training_status error: {e}")
+        return
+
+    prof = load_profile(uid); av = get_avatar(prof, av_name)
+    msg = (
+        f"REFRESHED\n"
+        f"avatar={av_name}\n"
+        f"status={av.get('status')}\n"
+        f"model={av.get('finetuned_model')}\n"
+        f"version={av.get('finetuned_version')}\n"
+        f"err={err or '—'}\n"
+        f"slug_with_ver={slug_with_ver or '—'}"
+    )
+    await update.effective_message.reply_text(msg)
+
 def _neg_with_gender(neg_base:str, gender_negative:str) -> str:
     return (neg_base + (", " + gender_negative if gender_negative else "")).strip(", ")
 
@@ -1406,6 +1430,7 @@ def main():
     app.add_handler(CommandHandler("idstatus", id_status))
     app.add_handler(CommandHandler("trainid", trainid_cmd))
     app.add_handler(CommandHandler("trainstatus", trainstatus_cmd))
+    app.add_handler(CommandHandler("refreshstatus", refreshstatus_cmd))
 
     # Кнопки
     app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav:"))
