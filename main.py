@@ -1035,52 +1035,77 @@ def start_lora_training(uid:int, avatar:str) -> str:
     return training.id
 
 def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str], Optional[str]]:
-    prof = load_profile(uid); av = get_avatar(prof, avatar); tid = av.get("training_id")
-    if not tid: return ("not_started", None, None)
-    client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-    tr = client.trainings.get(tid)
-    status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
-    err = None
-    try:
-        if isinstance(tr, dict):
-            err = tr.get("error") or tr.get("detail")
-        else:
-            err = getattr(tr, "error", None) or getattr(tr, "detail", None)
-    except Exception:
-        pass
+        """
+        Возвращает (status, slug_with_version_if_ready, error_text_or_None).
+        Никогда не пишет training_id в finetuned_version.
+        """
+        prof = load_profile(uid)
+        av = get_avatar(prof, avatar)
+        tid = av.get("training_id")
+        if not tid:
+            return ("not_started", None, None)
 
-    if status != "succeeded":
-        av["status"] = status; save_profile(uid, prof)
-        return (status, None, err)
+        client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
 
-    destination = getattr(tr, "destination", None) or (isinstance(tr, dict) and tr.get("destination")) \
-        or av.get("finetuned_model") or _dest_model_slug(avatar)
-    version_id = getattr(tr, "output", None) if not isinstance(tr, dict) else tr.get("output")
-    if isinstance(version_id, dict): version_id = version_id.get("id") or version_id.get("version")
+        # 1) читаем объект тренировки
+        tr = client.trainings.get(tid)
+        # status может быть: "starting","queued","running","processing","succeeded","failed","canceled"
+        status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
 
-    slug_with_version = None
-    try:
-        if version_id:
-            replicate.models.get(f"{destination}:{version_id}")
-            slug_with_version = f"{destination}:{version_id}"
-    except Exception:
-        pass
-    if not slug_with_version:
+        # пробуем достать явную ошибку (когда есть)
+        err = None
+        try:
+            if isinstance(tr, dict):
+                err = tr.get("error") or tr.get("detail")
+            else:
+                err = getattr(tr, "error", None) or getattr(tr, "detail", None)
+        except Exception:
+            pass
+
+        # храним актуальный статус сразу (даже промежуточный)
+        av["status"] = status
+        save_profile(uid, prof)
+
+        if status != "succeeded":
+            # ещё не готово — версию не трогаем
+            return (status, None, err)
+
+        # 2) когда succeeded — аккуратно определяем slug с версией
+        # destination — это <owner>/<model>, версии берём из самой модели
+        destination = getattr(tr, "destination", None) or (isinstance(tr, dict) and tr.get("destination")) \
+                      or av.get("finetuned_model")
+        if not destination:
+            # как запасной вариант используем нашу целевую
+            destination = _dest_model_slug(avatar)
+
+        # получаем актуальную последнюю версию у destination
+        slug_with_version: Optional[str] = None
         try:
             model_obj = replicate.models.get(destination)
             versions = list(model_obj.versions.list())
-            if versions: slug_with_version = f"{destination}:{versions[0].id}"
-        except Exception:
+            if versions:
+                # берём первую (у Replicate это обычно свежая)
+                slug_with_version = f"{destination}:{versions[0].id}"
+        except Exception as e:
+            # даже если не смогли достать версию — оставим без неё, но статус уже succeeded
+            logging.warning("Could not resolve finetuned version for %s: %s", destination, e)
             slug_with_version = destination
 
-    av["status"] = status; av["finetuned_model"] = destination
-    if slug_with_version and ":" in slug_with_version:
-        av["finetuned_version"] = slug_with_version.split(":",1)[1]
-    save_profile(uid, prof)
-    return (status, slug_with_version, None)
+        # 3) Пишем в профиль только корректную версию (если есть)
+        av = get_avatar(load_profile(uid), avatar)
+        av["status"] = status
+        av["finetuned_model"] = destination
+        if slug_with_version and ":" in slug_with_version:
+            # сохраняем только часть после ':' — это и есть version id модели, а НЕ training_id
+            av["finetuned_version"] = slug_with_version.split(":", 1)[1]
+        save_profile(uid, load_profile(uid))
+
+        return (status, slug_with_version, None)
+
 
 def _pinned_slug(av: Dict[str, Any]) -> str:
-    base = av.get("finetuned_model") or ""; ver = av.get("finetuned_version")
+    base = av.get("finetuned_model") or ""
+    ver = av.get("finetuned_version")
     return f"{base}:{ver}" if (base and ver) else base
 
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1102,31 +1127,52 @@ async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(f"Не удалось запустить обучение: {e}")
 
 async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id; prof = load_profile(uid)
-    av_name = get_current_avatar_name(prof)
-    status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
-    av = get_avatar(prof, av_name); tid = av.get("training_id")
-    train_url = f"https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{tid}" if (DEST_OWNER and DEST_MODEL and tid) else None
+        uid = update.effective_user.id
+        prof = load_profile(uid)
+        av_name = get_current_avatar_name(prof)
 
-    if status == "succeeded" and slug_with_ver:
-        await update.effective_message.reply_text(
-            f"Готово ✅\nАватар: {av_name}\nМодель: {slug_with_ver}\nТеперь — «🧭 Выбрать стиль».",
-            reply_markup=categories_kb()
-        ); return
+        status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
+        prof = load_profile(uid)  # перечитаем после обновления
+        av = get_avatar(prof, av_name)
+        tid = av.get("training_id")
 
-    if status in ("starting","processing","running","queued","pending"):
-        await update.effective_message.reply_text(
-            f"Статус «{av_name}»: {status}… {('Логи: ' + train_url) if train_url else ''}"
-        ); return
+        # человекочитаемая строка статуса
+        display = {
+            "starting": "starting (готовится к запуску)",
+            "queued": "queued (в очереди)",
+            "running": "running (обучается)",
+            "processing": "processing (публикую версию)",
+            "succeeded": "succeeded",
+            "failed": "failed",
+            "canceled": "canceled",
+            "unknown": "unknown"
+        }.get(status, status)
 
-    if status in ("failed","canceled"):
-        msg = f"⚠️ Тренировка «{av_name}»: {status.upper()}."
-        if err: msg += f"\nПричина: {err}"
-        if train_url: msg += f"\nЛоги: {train_url}"
-        msg += ("\n\nПроверь: целевая модель существует; 10 фото без фильтров; кредиты Replicate; правильные LORA_* env.")
-        await update.effective_message.reply_text(msg); return
+        train_url = f"https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{tid}" if (DEST_OWNER and DEST_MODEL and tid) else None
 
-    await update.effective_message.reply_text(f"Статус «{av_name}»: {status}. {('Логи: ' + train_url) if train_url else ''}")
+        if status == "succeeded" and slug_with_ver:
+            await update.effective_message.reply_text(
+                f"Готово ✅\nАватар: {av_name}\nМодель: {slug_with_ver}\nТеперь — «🧭 Выбрать стиль».",
+                reply_markup=categories_kb()
+            )
+            return
+
+        if status in ("starting", "queued", "running", "processing"):
+            extra = f"\nЛоги: {train_url}" if train_url else ""
+            await update.effective_message.reply_text(f"Статус «{av_name}»: {display}{extra}")
+            return
+
+        if status in ("failed", "canceled"):
+            msg = f"⚠️ Тренировка «{av_name}»: {status.upper()}."
+            if err:
+                msg += f"\nПричина: {err}"
+            if train_url: 
+                msg += f"\nЛоги: {train_url}"
+            await update.effective_message.reply_text(msg)
+            return
+
+        await update.effective_message.reply_text(f"Статус «{av_name}»: {display}.")
+
 
 def _neg_with_gender(neg_base:str, gender_negative:str) -> str:
     return (neg_base + (", " + gender_negative if gender_negative else "")).strip(", ")
