@@ -521,6 +521,15 @@ def _oval_lock() -> str:
             "no vertical face elongation, no face slimming, "
             "no stretched or lengthened chin, no narrowed or widened jaw, "
             "preserve original jawline curvature and cheekbone width")
+    
+def _ethnicity_lock() -> str:
+    return (
+        "preserve the same ethnicity as in the training photos, "
+        "do not alter eye shape or eyelid crease presence, "
+        "preserve inner/outer canthus angle (no canthal tilt change), "
+        "preserve nasal bridge shape and width, "
+        "preserve lip thickness proportions and philtrum length"
+    )
 
 def _anti_distort() -> str:
     return "no fisheye, no lens distortion, no warping, natural perspective, proportional head size"
@@ -631,7 +640,8 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
         "keep original facial proportions, same interocular distance and cheekbone width, preserve lip shape and beard density",
         "85mm lens portrait look",
         hair_lock, _frontal_lock(), _oval_lock(), _head_scale_lock(), _face_scale_hint(),
-        anti, _beauty_guardrail(), _face_lock(), FACIAL_RELAX_POS, theme_boost
+        anti, _beauty_guardrail(), _face_lock(), _ethnicity_lock(),
+        FACIAL_RELAX_POS, theme_boost
     ]
 
     if role or outfit or props or bg:
@@ -1350,7 +1360,8 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     model_slug  = _pinned_slug(av)
 
     guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
-    guidance = float(max(4.0, min(4.4, float(guidance_val))))
+    guidance = float(max(3.8, min(4.2, float(guidance_val))))
+    # и убеждаемся, что preset в RISKY_PRESETS
     steps = 40
 
     variant_comps = _variants_for_preset(meta)
