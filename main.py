@@ -84,7 +84,7 @@ ALLOW_SEATED   = os.getenv("ALLOW_SEATED", "1").lower() in ("1","true","yes","y"
 NEGATIVE_PROMPT_BASE = (
     "cartoon, anime, cgi, 3d render, stylized, illustration, plastic skin, overprocessed, airbrushed, beauty-filter, "
     "lowres, blurry, textureless skin, porcelain skin, waxy, gaussian blur, smoothing filter, "
-    "text, watermark, logo, bad anatomy, extra fingers, short fingers, different person, identity drift, "
+    "text, watermark, logo, bad anatomy, extra fingers, different person, identity drift, face swap, "
     "ethnicity change, age change, hairline change, beard removed, fake skin, "
     "distorted proportions, vertical face elongation, face slimming, stretched chin, narrow jaw, "
     "lens distortion, fisheye, warping, stretched face, perspective distortion, "
@@ -119,10 +119,21 @@ PRETTY_POS = (
     "subtle beauty retouch, even skin tone, faint under-eye smoothing, "
     "gentle softening around nasolabial area, slight glow, tidy eyebrows"
 )
+
 PRETTY_NEG = (
     "over-smoothing, harsh pores, deep nasolabial folds, oily hotspot shine, oversharpened skin, beauty filter"
 )
 PRETTY_COMP_HINT = "camera slightly above eye level, flattering portrait angle"
+# ---------- FACIAL RELAX ----------
+FACIAL_RELAX_POS = (
+    "relaxed facial muscles, no jaw clenching, relaxed masseter, "
+    "subtle nasolabial area, softened smile lines, gentle mouth corners, "
+    "no frown lines between eyebrows"
+)
+FACIAL_RELAX_NEG = (
+    "jaw clenching, tensed masseter muscles, deep nasolabial folds, "
+    "marionette lines, harsh smile lines, emphasized wrinkles, grimace"
+)
 
 # ---------- logging ----------
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -468,11 +479,11 @@ def _caption_for_gender(g: str) -> str:
 
 # ---------- Промпт-замки ----------
 def _beauty_guardrail() -> str:
-    return (
-        "exact facial identity, identity preserved, balanced facial proportions, symmetrical face, natural oval, soft jawline, "
-        "keep original cheekbone width and jaw width, do not widen face, "
-        "open expressive eyes with clean catchlights, natural eyelashes, realistic lips"
-    )
+        return (
+            "exact facial identity, identity preserved, balanced facial proportions, symmetrical face, natural oval, soft jawline, "
+            "keep original cheekbone width and jaw width, do not widen face, "
+            "style must only affect clothing, background and lighting, not facial features"
+        )
 
 def _face_lock() -> str:
     return (
@@ -491,11 +502,12 @@ def _anti_distort() -> str:
     return "no fisheye, no lens distortion, no warping, natural perspective, proportional head size"
 
 def _frontal_lock() -> str:
-    return (
-        "frontal face, facing camera, eyes looking into the lens, "
-        "head tilt under 3 degrees, no three-quarter, no profile, "
-        "ears symmetric, pupils aligned"
-    )
+        return (
+            "frontal face, facing camera, eyes looking into the lens, "
+            "head tilt under 3 degrees, no three-quarter, no profile, "
+            "neutral relaxed expression, no exaggerated smile, "
+            "ears symmetric, pupils aligned"
+        )
 
 def _head_scale_lock() -> str:
     hh = int(HEAD_HEIGHT_FRAC * 100)
@@ -618,7 +630,7 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
         _frontal_lock(),
         _oval_lock(),
         _head_scale_lock(), _face_scale_hint(),
-        anti, _beauty_guardrail(), _face_lock(), theme_boost
+        anti, _beauty_guardrail(), _face_lock(), FACIAL_RELAX_POS, theme_boost
     ]
 
     if role or outfit or props or bg:
@@ -633,7 +645,9 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
     neg = gneg
     if natural: neg = (neg + ", " + NATURAL_NEG) if neg else NATURAL_NEG
     if pretty:  neg = (neg + ", " + PRETTY_NEG) if neg else PRETTY_NEG
+    neg = (neg + ", " + FACIAL_RELAX_NEG) if neg else FACIAL_RELAX_NEG  # ← добавили
     return core, neg
+
 
 # ---------- Инференс/генерация ----------
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
@@ -1106,8 +1120,10 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     model_slug  = _pinned_slug(av)
 
     guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
-    guidance     = float(max(4.5, min(6.5, float(guidance_val))))
+    guidance = float(max(4.2, min(5.4, float(guidance_val))))  # мягче стиль, больше верность лицу
     steps = int(min(int(MAX_STEPS), int(GEN_STEPS)))
+    steps = max(36, min(46, steps))  # тоже чуть мягче, меньше «перетягивания» стилем
+
 
     # какие композиции рендерим
     variant_comps = _variants_for_preset(meta)
