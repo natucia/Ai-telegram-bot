@@ -2,7 +2,8 @@
 # + Identity/Gender locks — NO InstantID, pure LoRA
 # + MULTI-AVATARS + NATURAL/Pretty per-user + CONSISTENT FACE SCALE
 # + S3 storage + concurrency limits + retries
-# + STRICT WAIST-UP ONLY (no full body) ===
+# + STRICT WAIST-UP ONLY (no full body)
+# + SUBJECT TOKEN + THEME BOOST SANITIZER + IDENTITY-SAFE MODE ) ===
 
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 Style = Dict[str, Any]
@@ -12,7 +13,7 @@ from styles import (  # твой styles.py
     SCENE_GUIDANCE, RISKY_PRESETS
 )
 
-import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, tempfile
+import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, tempfile, hashlib, base64
 from pathlib import Path
 from zipfile import ZipFile, ZIP_STORED
 
@@ -55,28 +56,28 @@ LORA_RESOLUTION = int(os.getenv("LORA_RESOLUTION", "1024"))
 
 DEFAULT_FEMALE_CAPTION = (
     "a high quality photo of the same woman, natural brows, medium-length hair with natural hairline, "
-    "brown eyes, neutral expression, balanced facial proportions, natural lip shape, "
+    "brown eyes, neutral relaxed expression, balanced facial proportions, natural lip shape, "
     "no retouch, true-to-life skin texture"
 )
 DEFAULT_MALE_CAPTION = (
     "a high quality photo of the same man, natural brows, short hair or neat hairstyle, "
-    "brown eyes, neutral expression, balanced facial proportions, natural lip shape, "
+    "brown eyes, neutral relaxed expression, balanced facial proportions, natural lip shape, "
     "no retouch, true-to-life skin texture"
 )
 
 # --- Генерация ---
-GEN_STEPS = int(os.getenv("GEN_STEPS", "48"))
-GEN_GUIDANCE = float(os.getenv("GEN_GUIDANCE", "4.2"))
+GEN_STEPS = int(os.getenv("GEN_STEPS", "44"))
+GEN_GUIDANCE = float(os.getenv("GEN_GUIDANCE", "4.6"))
 GEN_WIDTH = int(os.getenv("GEN_WIDTH", "896"))
 GEN_HEIGHT = int(os.getenv("GEN_HEIGHT", "1152"))
 MAX_STEPS = int(os.getenv("MAX_STEPS", "50"))
 
 # --- CONSISTENT FACE SCALE ---
 CONSISTENT_SCALE = os.getenv("CONSISTENT_SCALE", "1").lower() in ("1","true","yes","y")
-HEAD_HEIGHT_FRAC = float(os.getenv("HEAD_HEIGHT_FRAC", "0.36"))
-HEAD_WIDTH_FRAC  = float(os.getenv("HEAD_WIDTH_FRAC", "0.28"))
+HEAD_HEIGHT_FRAC = float(os.getenv("HEAD_HEIGHT_FRAC", "0.42"))  # ↑ больше лица
+HEAD_WIDTH_FRAC  = float(os.getenv("HEAD_WIDTH_FRAC", "0.32"))
 
-# --- Composition policy (НОВОЕ) ---
+# --- Composition policy ---
 FORCE_WAIST_UP = os.getenv("FORCE_WAIST_UP", "1").lower() in ("1","true","yes","y")
 ALLOW_SEATED   = os.getenv("ALLOW_SEATED", "1").lower() in ("1","true","yes","y")
 
@@ -93,7 +94,6 @@ NEGATIVE_PROMPT_BASE = (
     "eyes closed, heavy makeup, overdrawn lips, false eyelashes, thick eyeliner, glam retouch"
 )
 
-# НОВОЕ: жёсткий запрет фулл-боди
 NO_FULL_BODY_NEG = (
     "no full body, no head-to-toe, no feet, no shoes in frame, "
     "no legs below waist, no knees visible, avoid distant camera, "
@@ -119,11 +119,11 @@ PRETTY_POS = (
     "subtle beauty retouch, even skin tone, faint under-eye smoothing, "
     "gentle softening around nasolabial area, slight glow, tidy eyebrows"
 )
-
 PRETTY_NEG = (
     "over-smoothing, harsh pores, deep nasolabial folds, oily hotspot shine, oversharpened skin, beauty filter"
 )
 PRETTY_COMP_HINT = "camera slightly above eye level, flattering portrait angle"
+
 # ---------- FACIAL RELAX ----------
 FACIAL_RELAX_POS = (
     "relaxed facial muscles, no jaw clenching, relaxed masseter, "
@@ -156,7 +156,6 @@ def _retry(fn, *args, tries=3, backoff=1.8, label="op", **kwargs):
             else:
                 raise RuntimeError(f"{label} failed after {tries} tries: {e}") from e
 
-# рядом с _retry / HTTP_TIMEOUT
 def _download_image_bytes(url: str, tries: int = 3, timeout: float = HTTP_TIMEOUT) -> bytes:
     headers = {"User-Agent": "TelegramLoRABot/1.0"}
     last_exc = None
@@ -221,18 +220,14 @@ class FSStorage(Storage):
         path = avatar_dir(uid, avatar) / f"ref_{int(time.time()*1000)}.jpg"
         _save_ref_downscaled_local(path, raw)
         return str(path)
-
     def list_ref_images(self, uid:int, avatar:str) -> List[str]:
         return sorted(str(p) for p in avatar_dir(uid, avatar).glob("ref_*.jpg"))
-
     def delete_avatar(self, uid:int, avatar:str):
         adir = avatar_dir(uid, avatar)
         with contextlib.suppress(Exception):
             if adir.exists(): shutil.rmtree(adir)
-
     def get_local_copy(self, key:str) -> Path:
         return Path(key)
-
     def pack_refs_zip(self, uid:int, avatar:str) -> Path:
         refs = self.list_ref_images(uid, avatar)
         if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
@@ -248,12 +243,11 @@ class S3Storage(Storage):
         buf = io.BytesIO()
         im = Image.open(io.BytesIO(raw))
         im = ImageOps.exif_transpose(im).convert("RGB")
-        im = ImageOps.contain(im, (1024,1024))  # без кропа, сохраняем аспект
+        im = ImageOps.contain(im, (1024,1024))
         im.save(buf, "JPEG", quality=92); buf.seek(0)
         key = _s3_key("profiles", str(uid), "avatars", avatar, f"ref_{int(time.time()*1000)}.jpg")
         _retry(s3_client.put_object, Bucket=S3_BUCKET, Key=key, Body=buf.getvalue(), ContentType="image/jpeg", label="s3_put")
         return f"s3://{S3_BUCKET}/{key}"
-
     def list_ref_images(self, uid:int, avatar:str) -> List[str]:
         if not s3_client: return []
         prefix = _s3_key("profiles", str(uid), "avatars", avatar, "ref_")
@@ -271,7 +265,6 @@ class S3Storage(Storage):
             else:
                 break
         return sorted(keys)
-
     def delete_avatar(self, uid:int, avatar:str):
         prefix = _s3_key("profiles", str(uid), "avatars", avatar)
         cont = None
@@ -283,7 +276,6 @@ class S3Storage(Storage):
                 _retry(s3_client.delete_objects, Bucket=S3_BUCKET, Delete={"Objects": keys}, label="s3_del")
             if not resp.get("IsTruncated"): break
             cont = resp.get("NextContinuationToken")
-
     def get_local_copy(self, key:str) -> Path:
         if not key.startswith("s3://"): raise RuntimeError("Ожидался s3:// ключ")
         _, _, bucket_and_key = key.partition("s3://")
@@ -291,7 +283,6 @@ class S3Storage(Storage):
         path = tmp_path(".jpg")
         _retry(s3_client.download_file, bucket, obj_key, str(path), label="s3_download")
         return path
-
     def pack_refs_zip(self, uid:int, avatar:str) -> Path:
         refs = self.list_ref_images(uid, avatar)
         if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
@@ -302,7 +293,6 @@ class S3Storage(Storage):
                 z.write(lp, arcname=f"img_{i:02d}.jpg")
         return zpath
 
-# выбор стораджа
 STORAGE: Storage = S3Storage() if USE_S3 else FSStorage()
 logger.info("Storage backend: %s", "S3" if USE_S3 else "FS")
 
@@ -313,7 +303,8 @@ DEFAULT_AVATAR = {
     "finetuned_model": None,
     "finetuned_version": None,
     "status": None,
-    "lockface": True
+    "lockface": True,
+    "token": None
 }
 DEFAULT_PROFILE = {
     "gender": None,
@@ -326,8 +317,13 @@ DEFAULT_PROFILE = {
 def _save_ref_downscaled_local(path: Path, raw: bytes, max_side=1024, quality=92):
     im = Image.open(io.BytesIO(raw))
     im = ImageOps.exif_transpose(im).convert("RGB")
-    im = ImageOps.contain(im, (max_side, max_side))  # БЕЗ КРОПА
+    im = ImageOps.contain(im, (max_side, max_side))
     im.save(path, "JPEG", quality=quality)
+
+def _avatar_token(uid:int, avatar:str) -> str:
+    raw = f"{uid}:{avatar}".encode("utf-8")
+    h = hashlib.sha1(raw).digest()
+    return "yt_" + base64.b32encode(h)[:6].decode("ascii").lower()
 
 def get_current_avatar_name(prof:Dict[str,Any]) -> str:
     name = prof.get("current_avatar") or "default"
@@ -339,7 +335,11 @@ def get_avatar(prof:Dict[str,Any], name:Optional[str]=None) -> Dict[str,Any]:
     if not name: name = get_current_avatar_name(prof)
     if name not in prof["avatars"]:
         prof["avatars"][name] = DEFAULT_AVATAR.copy()
-    return prof["avatars"][name]
+    av = prof["avatars"][name]
+    if not av.get("token"):
+        uid_hint = prof.get("_uid_hint", 0)
+        av["token"] = _avatar_token(uid_hint, name)
+    return av
 
 def list_ref_images(uid:int, avatar:str) -> List[str]:
     return STORAGE.list_ref_images(uid, avatar)
@@ -479,11 +479,11 @@ def _caption_for_gender(g: str) -> str:
 
 # ---------- Промпт-замки ----------
 def _beauty_guardrail() -> str:
-        return (
-            "exact facial identity, identity preserved, balanced facial proportions, symmetrical face, natural oval, soft jawline, "
-            "keep original cheekbone width and jaw width, do not widen face, "
-            "style must only affect clothing, background and lighting, not facial features"
-        )
+    return (
+        "exact facial identity, identity preserved, balanced facial proportions, symmetrical face, natural oval, soft jawline, "
+        "keep original cheekbone width and jaw width, do not widen face, "
+        "style must only affect clothing, background and lighting, not facial features"
+    )
 
 def _face_lock() -> str:
     return (
@@ -502,12 +502,12 @@ def _anti_distort() -> str:
     return "no fisheye, no lens distortion, no warping, natural perspective, proportional head size"
 
 def _frontal_lock() -> str:
-        return (
-            "frontal face, facing camera, eyes looking into the lens, "
-            "head tilt under 3 degrees, no three-quarter, no profile, "
-            "neutral relaxed expression, no exaggerated smile, "
-            "ears symmetric, pupils aligned"
-        )
+    return (
+        "frontal face, facing camera, eyes looking into the lens, "
+        "head tilt under 3 degrees, no three-quarter, no profile, "
+        "neutral relaxed expression, no exaggerated smile, no pursed lips, "
+        "ears symmetric, pupils aligned"
+    )
 
 def _head_scale_lock() -> str:
     hh = int(HEAD_HEIGHT_FRAC * 100)
@@ -591,6 +591,13 @@ def _tone_text(tone: str) -> str:
         "candle": "warm candlelight, soft glow, volumetric rays",
     }.get(tone, "balanced soft lighting")
 
+_FACE_KEYS = ("face","skin","jaw","cheek","nose","lips","eyes","eyelid","eyelash","makeup","freckles")
+def _safe_theme_boost(txt:str) -> str:
+    t = (txt or "").lower()
+    if any(k in t for k in _FACE_KEYS):
+        return ""  # обрезаем любые правки лица
+    return txt
+
 def _style_lock(role:str, outfit:str, props:str, background:str, comp_hint:str) -> str:
     bits = [
         f"{role}" if role else "",
@@ -612,25 +619,30 @@ def _inject_beauty(core_prompt: str, comp_text: str, natural: bool, pretty: bool
     return ", ".join(parts)
 
 def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
-                 theme_boost:str, natural:bool, pretty:bool) -> Tuple[str, str]:
+                 theme_boost:str, natural:bool, pretty:bool, avatar_token:str="") -> Tuple[str, str]:
     role = meta.get("role_f") if (gender=="female" and meta.get("role_f")) else meta.get("role","")
     if not role and meta.get("role_m") and gender=="male": role = meta.get("role_m","")
     outfit = meta.get("outfit_f") if (gender=="female" and meta.get("outfit_f")) else meta.get("outfit","")
     props = meta.get("props",""); bg = meta.get("bg","")
+    subject_tag = (f"photo of person {avatar_token}" if avatar_token else "").strip()
 
     gpos, gneg = _gender_lock(gender)
     anti = _anti_distort()
+    hair_lock = "keep original hair color tone and hairstyle family"
 
     common_bits = [
-        tone_text, gpos,
+        subject_tag, tone_text, gpos,
         "same person as the training photos, no ethnicity change, exact facial identity +++",
         "photorealistic, realistic body proportions, natural fine skin texture, filmic look",
         "keep original facial proportions, same interocular distance and cheekbone width, preserve lip shape and beard density",
         "85mm lens portrait look",
+        hair_lock,
         _frontal_lock(),
         _oval_lock(),
         _head_scale_lock(), _face_scale_hint(),
-        anti, _beauty_guardrail(), _face_lock(), FACIAL_RELAX_POS, theme_boost
+        anti, _beauty_guardrail(), _face_lock(),
+        FACIAL_RELAX_POS,
+        theme_boost
     ]
 
     if role or outfit or props or bg:
@@ -645,9 +657,21 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
     neg = gneg
     if natural: neg = (neg + ", " + NATURAL_NEG) if neg else NATURAL_NEG
     if pretty:  neg = (neg + ", " + PRETTY_NEG) if neg else PRETTY_NEG
-    neg = (neg + ", " + FACIAL_RELAX_NEG) if neg else FACIAL_RELAX_NEG  # ← добавили
+    neg = (neg + ", " + FACIAL_RELAX_NEG) if neg else FACIAL_RELAX_NEG
     return core, neg
 
+IDENTITY_SAFE_NEG = (
+    "no makeup change, no lip reshaping, no nose reshaping, "
+    "no jawline reshaping, no cheekbone reshaping, no eyebrow reshaping"
+)
+
+def _identity_safe_tune(preset_key:str, guidance:float, comps:List[str]) -> Tuple[float, List[str], str]:
+    risky = preset_key in RISKY_PRESETS
+    if not risky:
+        return guidance, comps, ""
+    g = min(guidance, 4.6)
+    cc = ["closeup", "half", "closeup"]
+    return g, cc, IDENTITY_SAFE_NEG
 
 # ---------- Инференс/генерация ----------
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
@@ -712,6 +736,9 @@ async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     uid = update.effective_user.id
+    # проставляем uid-хинт для токена
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+
     parts = q.data.split(":")
     if len(parts) < 2:
         return
@@ -734,6 +761,9 @@ async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ENROLL_FLAG: Dict[Tuple[int,str],bool] = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+
     await update.message.reply_text(
         "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя в узнаваемых сценах.\n\n"
         "1) «📸 Набор фото» — загрузка до 10 снимков в активный аватар.\n"
@@ -747,6 +777,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
+    uid = update.effective_user.id
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+
     key = q.data.split(":",1)[1]
     if key == "styles": await q.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
     elif key == "menu": await q.message.reply_text("Главное меню:", reply_markup=main_menu_kb())
@@ -756,10 +789,8 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif key == "gender": await gender_cmd(update, context)
     elif key == "lockface": await lockface_cmd(update, context)
     elif key == "avatars":
-        uid = update.effective_user.id
         await q.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
     elif key == "beauty":
-        uid = update.effective_user.id
         prof = load_profile(uid)
         prof["natural"] = not prof.get("natural", True) if not prof.get("pretty", False) else prof["natural"]
         save_profile(uid, prof)
@@ -775,7 +806,8 @@ async def cb_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    prof = load_profile(uid)
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+
     av_name = get_current_avatar_name(prof)
     ENROLL_FLAG[(uid, av_name)] = True
     await update.effective_message.reply_text(
@@ -785,7 +817,7 @@ async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    prof = load_profile(uid)
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
     av_name = get_current_avatar_name(prof)
     ENROLL_FLAG[(uid, av_name)] = False
     av = get_avatar(prof, av_name)
@@ -804,7 +836,7 @@ async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id; prof = load_profile(uid)
+    uid = update.effective_user.id; prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
     av_name = get_current_avatar_name(prof); av = get_avatar(prof, av_name)
     await update.effective_message.reply_text(
         f"Активный аватар: {av_name}\n"
@@ -812,6 +844,7 @@ async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Статус: {av.get('status') or '—'}\n"
         f"Модель: {av.get('finetuned_model') or '—'}\n"
         f"Версия: {av.get('finetuned_version') or '—'}\n"
+        f"Токен: {av.get('token') or '—'}\n"
         f"Пол: {prof.get('gender') or '—'}\n"
         f"LOCKFACE: {'on' if av.get('lockface') else 'off'}\n"
         f"Natural: {'ON' if prof.get('natural', True) else 'OFF'} • Pretty: {'ON' if prof.get('pretty', False) else 'OFF'}"
@@ -824,7 +857,7 @@ async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    prof = load_profile(uid)
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
     av_name = get_current_avatar_name(prof)
     if ENROLL_FLAG.get((uid, av_name)):
         refs = list_ref_images(uid, av_name)
@@ -844,7 +877,7 @@ async def setgender_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not context.args or context.args[0].lower() not in ["male","female"]:
         await update.message.reply_text("Используй: /setgender female | /setgender male"); return
-    prof = load_profile(uid); prof["gender"] = context.args[0].lower(); save_profile(uid, prof)
+    prof = load_profile(uid); prof["_uid_hint"] = uid; prof["gender"] = context.args[0].lower(); save_profile(uid, prof)
     await update.message.reply_text(f"Ок! Пол установлен: {prof['gender']}")
 
 async def gender_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -869,12 +902,17 @@ def set_current_avatar(uid:int, name:str):
     if name not in prof["avatars"]:
         prof["avatars"][name] = DEFAULT_AVATAR.copy()
     prof["current_avatar"] = name
+    prof["_uid_hint"] = uid
+    # гарантируем токен
+    _ = get_avatar(prof, name)
     save_profile(uid, prof)
 
 def ensure_avatar(uid:int, name:str):
     prof = load_profile(uid)
     if name not in prof["avatars"]:
         prof["avatars"][name] = DEFAULT_AVATAR.copy()
+    prof["_uid_hint"] = uid
+    _ = get_avatar(prof, name)
     save_profile(uid, prof)
 
 def del_avatar(uid:int, name:str):
@@ -911,7 +949,7 @@ async def avatarlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["Твои аватары:"]
     for n, av in prof["avatars"].items():
         refs = len(list_ref_images(uid, n))
-        lines.append(f"{'▶️' if n==cur else ' '} {n}: фото {refs}, статус: {av.get('status') or '—'}, верс: {av.get('finetuned_version') or '—'}")
+        lines.append(f"{'▶️' if n==cur else ' '} {n}: фото {refs}, статус: {av.get('status') or '—'}, верс: {av.get('finetuned_version') or '—'}, токен: {av.get('token') or '—'}")
     await update.message.reply_text("\n".join(lines), reply_markup=avatars_kb(uid))
 
 async def avatardel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -944,7 +982,7 @@ def _ensure_destination_exists(slug: str):
         replicate.models.get(slug)
     except Exception:
         o, name = slug.split("/",1)
-        raise RuntimeError(f"Целевая модель '{slug}' не найдена. Создай на https://replicate.com/create (owner={o}, name='{name}').")
+        raise RuntimeError(f"Целевая модель '{slug}' не найдена. Создай на replicate.com/create (owner={o}, name='{name}').")
 
 def _pack_refs_zip(uid:int, avatar:str) -> Path:
     return STORAGE.pack_refs_zip(uid, avatar)
@@ -957,7 +995,10 @@ def start_lora_training(uid:int, avatar:str) -> str:
 
     prof = load_profile(uid)
     g = (prof.get("gender") or auto_detect_gender(uid) or "female").lower()
-    caption_prefix = _caption_for_gender(g)
+    av = get_avatar(prof, avatar)
+    token = av.get("token") or _avatar_token(uid, avatar)
+
+    caption_prefix = f"photo of person {token}. " + _caption_for_gender(g) + ", frontal face, neutral relaxed expression, natural light"
 
     with open(zip_path, "rb") as f:
         training = _retry(
@@ -972,13 +1013,8 @@ def start_lora_training(uid:int, avatar:str) -> str:
                 "network_rank": int(os.getenv("LORA_RANK","16")),
                 "network_alpha": int(os.getenv("LORA_ALPHA","16")),
                 "caption_prefix": caption_prefix,
-
-                # отключить автокапшены полностью
-                "autocaption": False,
-                "captioner": "none",
-                "caption_model": "none",
-                "use_llava": False,
-                "use_blip": False,
+                "autocaption": False, "captioner": "none", "caption_model": "none",
+                "use_llava": False, "use_blip": False,
             },
             destination=dest_model,
             label="replicate_train"
@@ -1038,7 +1074,7 @@ def _pinned_slug(av: Dict[str, Any]) -> str:
     return f"{base}:{ver}" if (base and ver) else base
 
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id; prof = load_profile(uid)
+    uid = update.effective_user.id; prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
     av_name = get_current_avatar_name(prof)
     if len(list_ref_images(uid, av_name)) < 10:
         await update.effective_message.reply_text(f"Нужно 10 фото в «{av_name}». Сначала «📸 Набор фото» и затем /iddone."); return
@@ -1092,7 +1128,7 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
     uid = update.effective_user.id
-    prof = load_profile(uid)
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
     av_name = get_current_avatar_name(prof)
     av = get_avatar(prof, av_name)
     if av.get("status") != "succeeded":
@@ -1103,7 +1139,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
 
     meta = STYLE_PRESETS[preset]
 
-    # НОВОЕ: запретить full на уровне пресета
+    # Запретить full на уровне пресета
     if FORCE_WAIST_UP:
         meta = dict(meta)
         meta["comps"] = [("half" if c == "full" else c) for c in meta.get("comps", []) if c in ("half","closeup")]
@@ -1116,19 +1152,18 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     preset_key  = str(preset)
 
     tone_text   = _tone_text(meta.get("tone", "daylight"))
-    theme_boost = THEME_BOOST.get(preset_key, "")
+    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset_key, ""))
     model_slug  = _pinned_slug(av)
 
     guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
-    guidance = float(max(4.2, min(5.4, float(guidance_val))))  # мягче стиль, больше верность лицу
+    guidance     = float(max(4.0, min(5.2, float(guidance_val))))
     steps = int(min(int(MAX_STEPS), int(GEN_STEPS)))
-    steps = max(36, min(46, steps))  # тоже чуть мягче, меньше «перетягивания» стилем
-
+    steps = max(36, min(44, steps))
 
     # какие композиции рендерим
     variant_comps = _variants_for_preset(meta)
-    # финальный кламп
-    variant_comps = [c if c in ("half","closeup") else "half" for c in variant_comps]
+    # identity-safe режим для рискованных пресетов
+    guidance, variant_comps, extra_neg = _identity_safe_tune(preset_key, guidance, variant_comps)
 
     await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
     desc = meta.get("desc", preset)
@@ -1138,6 +1173,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
 
     lockface_on = av.get("lockface", True)
     base_seed = random.randrange(2**32)
+    token = av.get("token")
 
     try:
         async with GEN_SEMAPHORE:
@@ -1145,7 +1181,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                 seed = (base_seed + idx) if lockface_on else random.randrange(2**32)
                 comp_text, (w, h) = _comp_text_and_size(comp_kind)
                 prompt_core, gender_negative = build_prompt(
-                    meta, gender, comp_text, tone_text, theme_boost, natural, pretty
+                    meta, gender, comp_text, tone_text, theme_boost, natural, pretty, avatar_token=token
                 )
                 neg_base = _neg_with_gender(
                     NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind),
@@ -1153,6 +1189,8 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                 )
                 if FORCE_WAIST_UP:
                     neg_base = (neg_base + ", " + NO_FULL_BODY_NEG).strip(", ")
+                if extra_neg:
+                    neg_base = (neg_base + ", " + extra_neg).strip(", ")
 
                 url = await asyncio.to_thread(
                     generate_from_finetune,
@@ -1180,7 +1218,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                         raise
 
         await update.effective_message.reply_text(
-            "Готово. Надо 3×по пояс всегда? Могу зафиксировать «half, half, closeup»."
+            "Готово. По умолчанию рендерим: half, half, closeup — строго без full body."
         )
 
     except Exception as e:
