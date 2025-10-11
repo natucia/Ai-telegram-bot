@@ -999,90 +999,120 @@ def _pack_refs_zip(uid:int, avatar:str) -> Path:
 
 def start_lora_training(uid: int, avatar: str) -> str:
         """
-        Стартует обучение LoRA на Replicate для конкретного аватара.
-        ВАЖНО: для trainings передаем URL на ZIP (presigned S3), а не локальный файл.
-        Возвращает training_id.
+        Стартует обучение LoRA на Replicate.
+        Работает с:
+          - replicate/fast-flux-trainer  (обязательно trigger_word + lora_type=subject)
+          - replicate/flux-lora-trainer  (caption_prefix и гиперпараметры)
+        Делает:
+          1) pack_refs_zip → S3 → presigned HTTPS URL
+          2) sanity-check ZIP по URL (HTTP 200 и сигнатура PK)
+          3) trainings.create(...) с правильными полями под выбранный тренер
+          4) сохраняет training_id и статус в профиль
         """
-        # 1) Проверяем целевую модель и версию тренера
-        dest_model = _dest_model_slug(avatar)          # f"{DEST_OWNER}/{DEST_MODEL}"
-        _ensure_destination_exists(dest_model)         # бросит исключение, если модели нет
-        trainer_version = resolve_model_version(LORA_TRAINER_SLUG)
+        # --- целевая модель и тренер
+        dest_model = _dest_model_slug(avatar)
+        _ensure_destination_exists(dest_model)
+        trainer_slug = os.getenv("LORA_TRAINER_SLUG", "replicate/fast-flux-trainer").strip()
+        trainer_version = resolve_model_version(trainer_slug)
 
-        # 2) Упаковываем референтные фото пользователя в ZIP
-        zip_path = _pack_refs_zip(uid, avatar)         # STORAGE.pack_refs_zip(...)
+        # --- упаковка фото
+        zip_path = _pack_refs_zip(uid, avatar)
 
-        # 3) Без S3 дальше не поедем: нужен публично-доступный по URL архив
-        if not s3_client or not S3_BUCKET:
-            raise RuntimeError(
-                "Для обучения через API нужен S3. Включите USE_S3=1 и задайте S3_BUCKET/S3_REGION/"
-                "S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY (+S3_ENDPOINT_URL при кастомном S3)."
+        # --- presigned URL (или явный URL из ENV для диагностики)
+        direct_override = os.getenv("TRAIN_ZIP_DIRECT_URL", "").strip()
+        if direct_override:
+            presigned_url = direct_override
+        else:
+            if not s3_client or not S3_BUCKET:
+                raise RuntimeError("Нужен S3: установи USE_S3=1 и S3_* переменные окружения.")
+            key = _s3_key("profiles", str(uid), "avatars", avatar, "train.zip")
+            with open(zip_path, "rb") as fz:
+                _retry(
+                    s3_client.put_object,
+                    Bucket=S3_BUCKET, Key=key, Body=fz,
+                    ContentType="application/zip",
+                    label="s3_put_trainzip"
+                )
+            presigned_url = s3_client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": S3_BUCKET, "Key": key},
+                ExpiresIn=int(os.getenv("TRAIN_ZIP_URL_TTL", "21600"))  # 6 часов
             )
 
-        # 4) Заливаем ZIP в S3 и генерим presigned URL
-        key = _s3_key("profiles", str(uid), "avatars", avatar, "train.zip")
-        with open(zip_path, "rb") as fz:
-            _retry(
-                s3_client.put_object,
-                Bucket=S3_BUCKET,
-                Key=key,
-                Body=fz,
-                ContentType="application/zip",
-                label="s3_put_trainzip"
-            )
+        # --- проверка доступности ZIP
+        if not presigned_url.lower().startswith("https://"):
+            raise RuntimeError("Presigned URL должен быть HTTPS.")
+        try:
+            r = requests.get(presigned_url, timeout=25, stream=True)
+            r.raise_for_status()
+            sig = r.raw.read(4) if hasattr(r, "raw") else r.content[:4]
+            if sig[:2] != b"PK":
+                raise RuntimeError("Presigned URL не отдаёт валидный ZIP (нет сигнатуры PK).")
+        except Exception as e:
+            raise RuntimeError(f"ZIP недоступен по presigned URL: {e}")
 
-        presigned_url = s3_client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": S3_BUCKET, "Key": key},
-            ExpiresIn=int(os.getenv("TRAIN_ZIP_URL_TTL", "21600"))  # 6 часов по умолчанию
-        )
-
-        # 5) Готовим caption_prefix (теги пола, токен и т.п.)
+        # --- токен/пол/подпись
         prof = load_profile(uid)
         av = get_avatar(prof, avatar)
-        g = (av.get("gender") or prof.get("gender") or auto_detect_gender(uid, avatar) or "female").lower()
+        gender = (av.get("gender") or prof.get("gender") or auto_detect_gender(uid, avatar) or "female").lower()
         token = av.get("token") or _avatar_token(uid, avatar)
-
         caption_prefix = (
             f"photo of person {token}. "
-            + _caption_for_gender(g)
+            + _caption_for_gender(gender)
             + ", frontal face, neutral relaxed expression, natural light"
         )
 
-        # 6) Вызываем Replicate Trainings API — ПЕРЕДАЁМ URL, НЕ ФАЙЛ
+        # --- поля под конкретный тренер
+        payload: Dict[str, Any] = {
+            "input_images": presigned_url,                 # ZIP-URL обязательно
+            "resolution": LORA_RESOLUTION,
+            "use_face_detection_instead": LORA_USE_FACE_DET,
+            "max_train_steps": LORA_MAX_STEPS,
+        }
+        lower_slug = trainer_slug.lower()
+        if "fast-flux-trainer" in lower_slug:
+            payload.update({
+                "trigger_word": token,
+                "lora_type": "subject",
+                "caption_prefix": caption_prefix,          # понимается тренером, не критично
+            })
+        else:
+            # replicate/flux-lora-trainer
+            payload.update({
+                "caption_prefix": caption_prefix,
+                "autocaption": False, "captioner": "none", "caption_model": "none",
+                "use_llava": False, "use_blip": False,
+                "network_rank": int(os.getenv("LORA_RANK", "16")),
+                "network_alpha": int(os.getenv("LORA_ALPHA", "16")),
+                "lora_lr": LORA_LR,
+            })
+
+        # --- запуск тренировки
         client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
         training = _retry(
             client.trainings.create,
             version=trainer_version,
-            input={
-                LORA_INPUT_KEY: presigned_url,           # <= ключ тренера (обычно "input_images") с PRESIGNED URL
-                "max_train_steps": LORA_MAX_STEPS,
-                "lora_lr": LORA_LR,
-                "use_face_detection_instead": LORA_USE_FACE_DET,
-                "resolution": LORA_RESOLUTION,
-                "network_rank": int(os.getenv("LORA_RANK", "16")),
-                "network_alpha": int(os.getenv("LORA_ALPHA", "16")),
-                "caption_prefix": caption_prefix,
-                "autocaption": False,
-                "captioner": "none",
-                "caption_model": "none",
-                "use_llava": False,
-                "use_blip": False,
-            },
-            destination=dest_model,
-            label="replicate_train"
+            input=payload,
+            destination=dest_model
         )
 
-        # 7) Сохраняем статус и идентификаторы в профиль
+        # --- безопасно достаём id (SDK может вернуть dict)
+        tid = getattr(training, "id", None)
+        if tid is None and isinstance(training, dict):
+            tid = training.get("id")
+        if not tid:
+            raise RuntimeError(f"Replicate не вернул training id: {training!r}")
+
+        # --- записываем профиль
         prof = load_profile(uid)
         av = get_avatar(prof, avatar)
-        av["training_id"] = training.id
+        av["training_id"] = tid
         av["status"] = "starting"
         av["finetuned_model"] = dest_model
         save_profile(uid, prof)
 
-        return training.id
-
-
+        return tid
+    
 def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Optional[str]]:
         """
         Возвращает (status, slug_with_version_if_ready, error_text_or_None).
