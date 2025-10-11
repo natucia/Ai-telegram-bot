@@ -997,42 +997,91 @@ def _ensure_destination_exists(slug: str):
 def _pack_refs_zip(uid:int, avatar:str) -> Path:
     return STORAGE.pack_refs_zip(uid, avatar)
 
-def start_lora_training(uid:int, avatar:str) -> str:
-    dest_model = _dest_model_slug(avatar); _ensure_destination_exists(dest_model)
-    trainer_version = resolve_model_version(LORA_TRAINER_SLUG)
-    zip_path = _pack_refs_zip(uid, avatar)
-    client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+def start_lora_training(uid: int, avatar: str) -> str:
+        """
+        Стартует обучение LoRA на Replicate для конкретного аватара.
+        ВАЖНО: для trainings передаем URL на ZIP (presigned S3), а не локальный файл.
+        Возвращает training_id.
+        """
+        # 1) Проверяем целевую модель и версию тренера
+        dest_model = _dest_model_slug(avatar)          # f"{DEST_OWNER}/{DEST_MODEL}"
+        _ensure_destination_exists(dest_model)         # бросит исключение, если модели нет
+        trainer_version = resolve_model_version(LORA_TRAINER_SLUG)
 
-    prof = load_profile(uid)
-    av = get_avatar(prof, avatar)
-    g = (av.get("gender") or prof.get("gender") or auto_detect_gender(uid, avatar) or "female").lower()
-    token = av.get("token") or _avatar_token(uid, avatar)
+        # 2) Упаковываем референтные фото пользователя в ZIP
+        zip_path = _pack_refs_zip(uid, avatar)         # STORAGE.pack_refs_zip(...)
 
-    caption_prefix = f"photo of person {token}. " + _caption_for_gender(g) + ", frontal face, neutral relaxed expression, natural light"
+        # 3) Без S3 дальше не поедем: нужен публично-доступный по URL архив
+        if not s3_client or not S3_BUCKET:
+            raise RuntimeError(
+                "Для обучения через API нужен S3. Включите USE_S3=1 и задайте S3_BUCKET/S3_REGION/"
+                "S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY (+S3_ENDPOINT_URL при кастомном S3)."
+            )
 
-    with open(zip_path, "rb") as f:
+        # 4) Заливаем ZIP в S3 и генерим presigned URL
+        key = _s3_key("profiles", str(uid), "avatars", avatar, "train.zip")
+        with open(zip_path, "rb") as fz:
+            _retry(
+                s3_client.put_object,
+                Bucket=S3_BUCKET,
+                Key=key,
+                Body=fz,
+                ContentType="application/zip",
+                label="s3_put_trainzip"
+            )
+
+        presigned_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": key},
+            ExpiresIn=int(os.getenv("TRAIN_ZIP_URL_TTL", "21600"))  # 6 часов по умолчанию
+        )
+
+        # 5) Готовим caption_prefix (теги пола, токен и т.п.)
+        prof = load_profile(uid)
+        av = get_avatar(prof, avatar)
+        g = (av.get("gender") or prof.get("gender") or auto_detect_gender(uid, avatar) or "female").lower()
+        token = av.get("token") or _avatar_token(uid, avatar)
+
+        caption_prefix = (
+            f"photo of person {token}. "
+            + _caption_for_gender(g)
+            + ", frontal face, neutral relaxed expression, natural light"
+        )
+
+        # 6) Вызываем Replicate Trainings API — ПЕРЕДАЁМ URL, НЕ ФАЙЛ
+        client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
         training = _retry(
             client.trainings.create,
             version=trainer_version,
             input={
-                LORA_INPUT_KEY: f,
+                LORA_INPUT_KEY: presigned_url,           # <= ключ тренера (обычно "input_images") с PRESIGNED URL
                 "max_train_steps": LORA_MAX_STEPS,
                 "lora_lr": LORA_LR,
                 "use_face_detection_instead": LORA_USE_FACE_DET,
                 "resolution": LORA_RESOLUTION,
-                "network_rank": int(os.getenv("LORA_RANK","16")),
-                "network_alpha": int(os.getenv("LORA_ALPHA","16")),
+                "network_rank": int(os.getenv("LORA_RANK", "16")),
+                "network_alpha": int(os.getenv("LORA_ALPHA", "16")),
                 "caption_prefix": caption_prefix,
-                "autocaption": False, "captioner": "none", "caption_model": "none",
-                "use_llava": False, "use_blip": False,
+                "autocaption": False,
+                "captioner": "none",
+                "caption_model": "none",
+                "use_llava": False,
+                "use_blip": False,
             },
             destination=dest_model,
             label="replicate_train"
         )
-    prof = load_profile(uid); av = get_avatar(prof, avatar)
-    av["training_id"] = training.id; av["status"] = "starting"; av["finetuned_model"] = dest_model
-    save_profile(uid, prof)
-    return training.id
+
+        # 7) Сохраняем статус и идентификаторы в профиль
+        prof = load_profile(uid)
+        av = get_avatar(prof, avatar)
+        av["training_id"] = training.id
+        av["status"] = "starting"
+        av["finetuned_model"] = dest_model
+        save_profile(uid, prof)
+
+        return training.id
+
 
 def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Optional[str]]:
         """
