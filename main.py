@@ -1034,10 +1034,10 @@ def start_lora_training(uid:int, avatar:str) -> str:
     save_profile(uid, prof)
     return training.id
 
-def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str], Optional[str]]:
+def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Optional[str]]:
         """
         Возвращает (status, slug_with_version_if_ready, error_text_or_None).
-        Никогда не пишет training_id в finetuned_version.
+        Обновляет профиль ТОЛЬКО через один объект prof (без повторных load_profile()).
         """
         prof = load_profile(uid)
         av = get_avatar(prof, avatar)
@@ -1046,61 +1046,47 @@ def check_training_status(uid:int, avatar:str) -> Tuple[str, Optional[str], Opti
             return ("not_started", None, None)
 
         client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-
-        # 1) читаем объект тренировки
         tr = client.trainings.get(tid)
-        # status может быть: "starting","queued","running","processing","succeeded","failed","canceled"
-        status = getattr(tr, "status", None) or (tr.get("status") if isinstance(tr, dict) else None) or "unknown"
 
-        # пробуем достать явную ошибку (когда есть)
-        err = None
-        try:
-            if isinstance(tr, dict):
-                err = tr.get("error") or tr.get("detail")
-            else:
-                err = getattr(tr, "error", None) or getattr(tr, "detail", None)
-        except Exception:
-            pass
+        # статус с сервера
+        if isinstance(tr, dict):
+            status = tr.get("status", "unknown")
+            destination = tr.get("destination") or av.get("finetuned_model")
+            err = tr.get("error") or tr.get("detail")
+        else:
+            status = getattr(tr, "status", None) or "unknown"
+            destination = getattr(tr, "destination", None) or av.get("finetuned_model")
+            err = getattr(tr, "error", None) or getattr(tr, "detail", None)
 
-        # храним актуальный статус сразу (даже промежуточный)
+        # сразу записываем актуальный статус в ТОТ ЖЕ prof
         av["status"] = status
+        if destination:
+            av["finetuned_model"] = destination
         save_profile(uid, prof)
 
+        # ещё не готово — выходим
         if status != "succeeded":
-            # ещё не готово — версию не трогаем
             return (status, None, err)
 
-        # 2) когда succeeded — аккуратно определяем slug с версией
-        # destination — это <owner>/<model>, версии берём из самой модели
-        destination = getattr(tr, "destination", None) or (isinstance(tr, dict) and tr.get("destination")) \
-                      or av.get("finetuned_model")
+        # на succeeded аккуратно пинним версию через список версий модели
         if not destination:
-            # как запасной вариант используем нашу целевую
             destination = _dest_model_slug(avatar)
 
-        # получаем актуальную последнюю версию у destination
-        slug_with_version: Optional[str] = None
+        slug_with_version = None
         try:
             model_obj = replicate.models.get(destination)
             versions = list(model_obj.versions.list())
             if versions:
-                # берём первую (у Replicate это обычно свежая)
                 slug_with_version = f"{destination}:{versions[0].id}"
+                # сохраняем ТОЛЬКО version-id в av["finetuned_version"]
+                av["finetuned_version"] = versions[0].id
+                save_profile(uid, prof)
         except Exception as e:
-            # даже если не смогли достать версию — оставим без неё, но статус уже succeeded
-            logging.warning("Could not resolve finetuned version for %s: %s", destination, e)
+            logging.warning("resolve version failed for %s: %s", destination, e)
             slug_with_version = destination
 
-        # 3) Пишем в профиль только корректную версию (если есть)
-        av = get_avatar(load_profile(uid), avatar)
-        av["status"] = status
-        av["finetuned_model"] = destination
-        if slug_with_version and ":" in slug_with_version:
-            # сохраняем только часть после ':' — это и есть version id модели, а НЕ training_id
-            av["finetuned_version"] = slug_with_version.split(":", 1)[1]
-        save_profile(uid, load_profile(uid))
-
         return (status, slug_with_version, None)
+
 
 
 def _pinned_slug(av: Dict[str, Any]) -> str:
