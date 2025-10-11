@@ -20,7 +20,7 @@ from zipfile import ZipFile, ZIP_STORED
 import requests
 import replicate
 from replicate import Client
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
@@ -88,15 +88,15 @@ ALLOW_SEATED   = os.getenv("ALLOW_SEATED", "1").lower() in ("1","true","yes","y"
 
 # ---- Anti-drift / anti-wide-face ----
 NEGATIVE_PROMPT_BASE = (
-    "cartoon, anime, cgi, 3d render, stylized, illustration, plastic skin, overprocessed, airbrushed, beauty-filter, "
+    "cartoon, anime, cgi, 3d render, stylized, illustration, digital painting, painterly, brush strokes, "
+    "vector art, smooth shading, plastic skin, overprocessed, airbrushed, beauty-filter, "
     "lowres, blurry, textureless skin, porcelain skin, waxy, gaussian blur, smoothing filter, "
     "text, watermark, logo, bad anatomy, extra fingers, different person, identity drift, face swap, "
-    "ethnicity change, age change, hairline change, beard removed, fake skin, "
+    "ethnicity change, skin tone change, undertone shift, tanning effect, bleaching, age change, hairline change, "
     "distorted proportions, vertical face elongation, face slimming, stretched chin, narrow jaw, "
     "lens distortion, fisheye, warping, stretched face, perspective distortion, "
     "plain selfie, flash photo, harsh shadows, denoise artifacts, over-sharpened, waxy highlight roll-off, "
-    "skin smoothing, porcelain texture, HDR glamour, excessive clarity, "
-    "eyes closed, heavy makeup, overdrawn lips, false eyelashes, thick eyeliner, glam retouch"
+    "skin smoothing, porcelain texture, HDR glamour, excessive clarity"
 )
 
 NO_FULL_BODY_NEG = (
@@ -106,8 +106,9 @@ NO_FULL_BODY_NEG = (
 )
 
 AESTHETIC_SUFFIX = (
-    ", photorealistic, visible fine skin texture, natural color, soft filmic contrast, "
-    "micro-sharpen on eyes and lips only, anatomically plausible facial landmarks"
+    ", RAW photograph, DSLR photo, 85mm lens, shallow depth of field, true-to-life color, " 
+    "soft filmic contrast, natural white balance, visible fine skin pores and micro-texture, "
+    "subtle film grain, micro-sharpen on eyes only, realistic lens response"
 )
 
 # ---------- NATURAL/PRETTY ----------
@@ -201,6 +202,24 @@ def _s3_key(*parts: str) -> str:
 
 def tmp_path(suffix=".jpg") -> Path:
     return Path(tempfile.mkstemp(prefix="bot_", suffix=suffix)[1])
+    
+def _downscale_like_camera(im: Image.Image, target_max=1152) -> Image.Image:
+        # мягкое даунскейление → менее «цифровой» вид
+        w, h = im.size
+        if max(w, h) <= target_max:
+            return im
+        scale = target_max / float(max(w, h))
+        nw, nh = int(w * scale), int(h * scale)
+        return im.resize((nw, nh), Image.Resampling.LANCZOS)
+
+def _photo_look(im: Image.Image) -> Image.Image:
+    # лёгкая резкость + очень тонкое зерно
+    im = _downscale_like_camera(im, 1152)
+    im = im.filter(ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=6))
+    # микро-зерно (Pillow >= 10): эффект шума и лёгкое смешивание
+    noise = Image.effect_noise(im.size, 3).convert("L").point(lambda p: int(p*0.08))
+    im = Image.blend(im, Image.merge("RGB", (noise, noise, noise)), 0.08)
+    return im
 
 # --- FS utils (локальный fallback) ---
 def user_dir(uid:int) -> Path:
@@ -1161,9 +1180,8 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     model_slug  = _pinned_slug(av)
 
     guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
-    guidance     = float(max(4.0, min(5.2, float(guidance_val))))
-    steps = int(min(int(MAX_STEPS), int(GEN_STEPS)))
-    steps = max(36, min(44, steps))
+    guidance = float(max(4.0, min(4.4, float(guidance_val))))  # было до 4.6 — оставь 4.2–4.4
+    steps = 40  # стабильно фоторалистично
 
     # какие композиции рендерим
     variant_comps = _variants_for_preset(meta)
@@ -1216,15 +1234,19 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                 lock = "🔒" if lockface_on else "◻️"
                 caption = f"{preset} • {av_name} • {lock} {tag} {comp_kind} • {w}×{h}"
 
-                try:
-                    await update.effective_message.reply_photo(photo=url, caption=caption)
-                except Exception as e:
-                    if "http url content" in str(e).lower() or "http url specified" in str(e).lower():
-                        img_bytes = await asyncio.to_thread(_download_image_bytes, url)
-                        bio = io.BytesIO(img_bytes); bio.name = "image.jpg"
-                        await update.effective_message.reply_photo(photo=bio, caption=caption)
-                    else:
-                        raise
+                        # Всегда скачиваем → прогоняем через photo-look → шлём
+# Всегда скачиваем → прогоняем через photo-look → шлё
+                img_bytes = await asyncio.to_thread(_download_image_bytes, url)
+
+                bio = io.BytesIO(img_bytes)
+                im = Image.open(bio).convert("RGB")
+                im = _photo_look(im)  # «как с камеры»
+
+                bio2 = io.BytesIO()
+                im.save(bio2, "JPEG", quality=92)
+                bio2.seek(0)p
+                bio2.name = "image.jpg"
+                await update.effective_message.reply_photo(photo=bio2, caption=caption)
 
         await update.effective_message.reply_text(
             "Готово. По умолчанию рендерим: half, half, closeup — строго без full body."
