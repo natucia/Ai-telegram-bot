@@ -1,33 +1,28 @@
-# === Telegram LoRA Bot (Flux LoRA trainer + Redis persist
-# + Identity/Gender locks — NO InstantID, pure LoRA
-# + MULTI-AVATARS + NATURAL/Pretty per-user + CONSISTENT FACE SCALE
-# + S3 storage + concurrency limits + retries
-# + STRICT WAIST-UP ONLY (no full body)
-# + SUBJECT TOKEN + THEME BOOST SANITIZER + IDENTITY-SAFE MODE
-# + AVATAR-SCOPED GENDER + NO-COMMAND UX FOR AVATARS ) ===
+# === Telegram LoRA Bot (Flux LoRA trainer + Redis persist 
+# + Identity/Gender locks — NO InstantID, pure LoRA 
+# + MULTI-AVATARS + NATURAL/Pretty per-user + CONSISTENT FACE SCALE 
+# + S3 storage + concurrency limits + retries 
+# + STRICT WAIST-UP ONLY (no full body) 
+# + SUBJECT TOKEN + THEME BOOST SANITIZER + IDENTITY-SAFE MODE 
+# + AVATAR-SCOPED GENDER + NO-COMMAND UX FOR AVATARS 
+# + FACE ID ADAPTER (cheese.ai style) ===
 
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 Style = Dict[str, Any]
-
 from styles import (
-    STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST,
-    SCENE_GUIDANCE, RISKY_PRESETS
+    STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST, SCENE_GUIDANCE, RISKY_PRESETS
 )
-
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, tempfile, hashlib, base64
 from pathlib import Path
 from zipfile import ZipFile, ZIP_STORED
-
 import requests
 import replicate
 from replicate import Client
 from PIL import Image, ImageOps, ImageFilter
-
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes,
-    CallbackQueryHandler, filters
+    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 )
 import struct
 
@@ -54,6 +49,13 @@ LORA_INPUT_KEY = os.getenv("LORA_INPUT_KEY", "input_images").strip()
 # Пол (опц.) — автоинференс
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
 
+# --- Face ID Adapter ---
+FACE_ID_ADAPTER_ENABLED = os.getenv("FACE_ID_ADAPTER_ENABLED", "true").lower() in ("1","true","yes","y")
+FACE_ID_MODEL_SLUG = os.getenv("FACE_ID_MODEL_SLUG", "lucataco/ip-adapter-faceid").strip()
+FACE_ID_WEIGHT = float(os.getenv("FACE_ID_WEIGHT", "0.8"))
+FACE_ID_NOISE = float(os.getenv("FACE_ID_NOISE", "0.1"))
+FACE_ID_SCALE = float(os.getenv("FACE_ID_SCALE", "0.9"))
+
 # --- Параметры обучения ---
 LORA_MAX_STEPS = int(os.getenv("LORA_MAX_STEPS", "1400"))
 LORA_LR = float(os.getenv("LORA_LR", "0.0006"))
@@ -65,6 +67,7 @@ DEFAULT_FEMALE_CAPTION = (
     "brown eyes, neutral relaxed expression, balanced facial proportions, natural lip shape, "
     "no retouch, true-to-life skin texture"
 )
+
 DEFAULT_MALE_CAPTION = (
     "a high quality photo of the same man, natural brows, short hair or neat hairstyle, "
     "brown eyes, neutral relaxed expression, balanced facial proportions, natural lip shape, "
@@ -81,11 +84,11 @@ MAX_STEPS = int(os.getenv("MAX_STEPS", "50"))
 # --- CONSISTENT FACE SCALE ---
 CONSISTENT_SCALE = os.getenv("CONSISTENT_SCALE", "1").lower() in ("1","true","yes","y")
 HEAD_HEIGHT_FRAC = float(os.getenv("HEAD_HEIGHT_FRAC", "0.42"))
-HEAD_WIDTH_FRAC  = float(os.getenv("HEAD_WIDTH_FRAC", "0.32"))
+HEAD_WIDTH_FRAC = float(os.getenv("HEAD_WIDTH_FRAC", "0.32"))
 
 # --- Composition policy ---
 FORCE_WAIST_UP = os.getenv("FORCE_WAIST_UP", "1").lower() in ("1","true","yes","y")
-ALLOW_SEATED   = os.getenv("ALLOW_SEATED", "1").lower() in ("1","true","yes","y")
+ALLOW_SEATED = os.getenv("ALLOW_SEATED", "1").lower() in ("1","true","yes","y")
 
 # ---- Anti-drift / anti-wide-face ----
 NEGATIVE_PROMPT_BASE = (
@@ -117,6 +120,7 @@ NATURAL_POS = (
     "unretouched skin, realistic fine pores, subtle skin texture variations, "
     "natural micro-contrast, gentle film grain, true-to-life color, accurate skin undertones"
 )
+
 NATURAL_NEG = (
     "skin smoothing, airbrush, beauty-filter, porcelain skin, waxy skin, HDR glam, "
     "overprocessed clarity, excessive de-noise, plastic texture, glam retouch"
@@ -126,9 +130,11 @@ PRETTY_POS = (
     "subtle beauty retouch, even skin tone, faint under-eye smoothing, "
     "gentle softening around nasolabial area, slight glow, tidy eyebrows"
 )
+
 PRETTY_NEG = (
     "over-smoothing, harsh pores, deep nasolabial folds, oily hotspot shine, oversharpened skin, beauty filter"
 )
+
 PRETTY_COMP_HINT = "camera slightly above eye level, flattering portrait angle"
 
 # ---------- FACIAL RELAX ----------
@@ -137,6 +143,7 @@ FACIAL_RELAX_POS = (
     "subtle nasolabial area, softened smile lines, gentle mouth corners, "
     "no frown lines between eyebrows"
 )
+
 FACIAL_RELAX_NEG = (
     "jaw clenching, tensed masseter muscles, deep nasolabial folds, "
     "marionette lines, harsh smile lines, emphasized wrinkles, grimace"
@@ -178,7 +185,6 @@ def _download_image_bytes(url: str, tries: int = 3, timeout: float = HTTP_TIMEOU
 
 # ---------- storage (FS/S3) ----------
 DATA_DIR = Path("profiles"); DATA_DIR.mkdir(exist_ok=True)
-
 USE_S3 = os.getenv("USE_S3", "0").lower() in ("1","true","yes","y")
 S3_BUCKET = os.getenv("S3_BUCKET", "").strip()
 S3_REGION = os.getenv("S3_REGION", "").strip()
@@ -222,10 +228,13 @@ def _photo_look(im: Image.Image) -> Image.Image:
 # --- FS utils (локальный fallback) ---
 def user_dir(uid:int) -> Path:
     p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
+
 def avatars_root(uid:int) -> Path:
     p = user_dir(uid) / "avatars"; p.mkdir(parents=True, exist_ok=True); return p
+
 def avatar_dir(uid:int, avatar:str) -> Path:
     p = avatars_root(uid) / avatar; p.mkdir(parents=True, exist_ok=True); return p
+
 def profile_path(uid:int) -> Path:
     return user_dir(uid) / "profile.json"
 
@@ -247,17 +256,23 @@ class FSStorage(Storage):
         path = avatar_dir(uid, avatar) / f"ref_{int(time.time()*1000)}.jpg"
         _save_ref_downscaled_local(path, raw)
         return str(path)
+
     def list_ref_images(self, uid:int, avatar:str) -> List[str]:
         return sorted(str(p) for p in avatar_dir(uid, avatar).glob("ref_*.jpg"))
+
     def delete_avatar(self, uid:int, avatar:str):
         adir = avatar_dir(uid, avatar)
         with contextlib.suppress(Exception):
-            if adir.exists(): shutil.rmtree(adir)
+            if adir.exists():
+                shutil.rmtree(adir)
+
     def get_local_copy(self, key:str) -> Path:
         return Path(key)
+
     def pack_refs_zip(self, uid:int, avatar:str) -> Path:
         refs = self.list_ref_images(uid, avatar)
-        if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
+        if len(refs) < 10:
+            raise RuntimeError("Нужно 10 фото для обучения.")
         zpath = avatar_dir(uid, avatar) / "train.zip"
         with ZipFile(zpath, "w", compression=ZIP_STORED) as z:
             for i, kp in enumerate(refs, 1):
@@ -266,7 +281,8 @@ class FSStorage(Storage):
 
 class S3Storage(Storage):
     def save_ref_image(self, uid:int, avatar:str, raw:bytes) -> str:
-        if not s3_client: raise RuntimeError("S3 не инициализирован.")
+        if not s3_client:
+            raise RuntimeError("S3 не инициализирован.")
         buf = io.BytesIO()
         im = Image.open(io.BytesIO(raw))
         im = ImageOps.exif_transpose(im).convert("RGB")
@@ -275,40 +291,49 @@ class S3Storage(Storage):
         key = _s3_key("profiles", str(uid), "avatars", avatar, f"ref_{int(time.time()*1000)}.jpg")
         _retry(s3_client.put_object, Bucket=S3_BUCKET, Key=key, Body=buf.getvalue(), ContentType="image/jpeg", label="s3_put")
         return f"s3://{S3_BUCKET}/{key}"
+
     def list_ref_images(self, uid:int, avatar:str) -> List[str]:
-        if not s3_client: return []
+        if not s3_client:
+            return []
         prefix = _s3_key("profiles", str(uid), "avatars", avatar, "ref_")
         keys: List[str] = []
         cont = None
         while True:
             resp = _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, ContinuationToken=cont, label="s3_list") \
-                   if cont else _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, label="s3_list")
+                if cont else _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, label="s3_list")
             for it in resp.get("Contents", []):
                 keys.append(f"s3://{S3_BUCKET}/{it['Key']}")
-            if not resp.get("IsTruncated"): break
+            if not resp.get("IsTruncated"):
+                break
             cont = resp.get("NextContinuationToken")
         return sorted(keys)
+
     def delete_avatar(self, uid:int, avatar:str):
         prefix = _s3_key("profiles", str(uid), "avatars", avatar)
         cont = None
         while True:
             resp = _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, ContinuationToken=cont, label="s3_list") \
-                   if cont else _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, label="s3_list")
+                if cont else _retry(s3_client.list_objects_v2, Bucket=S3_BUCKET, Prefix=prefix, label="s3_list")
             keys = [ {"Key": o["Key"]} for o in resp.get("Contents", []) ]
             if keys:
                 _retry(s3_client.delete_objects, Bucket=S3_BUCKET, Delete={"Objects": keys}, label="s3_del")
-            if not resp.get("IsTruncated"): break
+            if not resp.get("IsTruncated"):
+                break
             cont = resp.get("NextContinuationToken")
+
     def get_local_copy(self, key:str) -> Path:
-        if not key.startswith("s3://"): raise RuntimeError("Ожидался s3:// ключ")
+        if not key.startswith("s3://"):
+            raise RuntimeError("Ожидался s3:// ключ")
         _, _, bucket_and_key = key.partition("s3://")
         bucket, _, obj_key = bucket_and_key.partition("/")
         path = tmp_path(".jpg")
         _retry(s3_client.download_file, bucket, obj_key, str(path), label="s3_download")
         return path
+
     def pack_refs_zip(self, uid:int, avatar:str) -> Path:
         refs = self.list_ref_images(uid, avatar)
-        if len(refs) < 10: raise RuntimeError("Нужно 10 фото для обучения.")
+        if len(refs) < 10:
+            raise RuntimeError("Нужно 10 фото для обучения.")
         zpath = Path(tempfile.mkstemp(prefix="train_", suffix=".zip")[1])
         with ZipFile(zpath, "w", compression=ZIP_STORED) as z:
             for i, key in enumerate(refs, 1):
@@ -328,10 +353,12 @@ DEFAULT_AVATAR = {
     "status": None,
     "lockface": True,
     "token": None,
-    "gender": None,  # <-- пол хранится на уровне аватара
+    "gender": None, # <-- пол хранится на уровне аватара
+    "face_embedding": None, # <-- Face ID embedding
 }
+
 DEFAULT_PROFILE = {
-    "gender": None,  # глобальный (бэкап), но не обязателен
+    "gender": None, # глобальный (бэкап), но не обязателен
     "natural": True,
     "pretty": False,
     "current_avatar": "default",
@@ -356,7 +383,8 @@ def get_current_avatar_name(prof:Dict[str,Any]) -> str:
     return name
 
 def get_avatar(prof:Dict[str,Any], name:Optional[str]=None) -> Dict[str,Any]:
-    if not name: name = get_current_avatar_name(prof)
+    if not name:
+        name = get_current_avatar_name(prof)
     if name not in prof["avatars"]:
         prof["avatars"][name] = DEFAULT_AVATAR.copy()
     av = prof["avatars"][name]
@@ -369,7 +397,8 @@ def list_ref_images(uid:int, avatar:str) -> List[str]:
     return STORAGE.list_ref_images(uid, avatar)
 
 def _migrate_single_to_multi(uid:int, prof:Dict[str,Any]) -> Dict[str,Any]:
-    if "avatars" in prof: return prof
+    if "avatars" in prof:
+        return prof
     migrated = DEFAULT_PROFILE.copy()
     migrated["gender"] = prof.get("gender")
     default = DEFAULT_AVATAR.copy()
@@ -378,7 +407,7 @@ def _migrate_single_to_multi(uid:int, prof:Dict[str,Any]) -> Dict[str,Any]:
     default["finetuned_version"] = prof.get("finetuned_version")
     default["status"] = prof.get("status")
     default["lockface"] = prof.get("lockface", True)
-    default["gender"] = prof.get("gender")  # переносим в аватар как начальное значение
+    default["gender"] = prof.get("gender") # переносим в аватар как начальное значение
     imgs = prof.get("images", [])
     if imgs:
         default["images"] = STORAGE.list_ref_images(uid, "default")
@@ -433,7 +462,8 @@ def delete_profile(uid:int):
             _redis.delete(f"profile:{uid}")
     prof = load_profile(uid)
     for name in list(prof.get("avatars", {}).keys()):
-        if name == "default": continue
+        if name == "default":
+            continue
         STORAGE.delete_avatar(uid, name)
     STORAGE.delete_avatar(uid, "default")
     p = user_dir(uid)
@@ -445,24 +475,30 @@ def delete_profile(uid:int):
 _MODEL_VER_CACHE: Dict[str, str] = {}
 
 def resolve_model_version(slug: str) -> str:
-    if ":" in slug: return slug
-    if slug in _MODEL_VER_CACHE: return f"{slug}:{_MODEL_VER_CACHE[slug]}"
+    if ":" in slug:
+        return slug
+    if slug in _MODEL_VER_CACHE:
+        return f"{slug}:{_MODEL_VER_CACHE[slug]}"
     model = replicate.models.get(slug)
     versions = list(model.versions.list())
-    if not versions: raise RuntimeError(f"Нет версий модели {slug}")
+    if not versions:
+        raise RuntimeError(f"Нет версий модели {slug}")
     _MODEL_VER_CACHE[slug] = versions[0].id
     return f"{slug}:{versions[0].id}"
 
 def extract_any_url(out: Any) -> Optional[str]:
-    if isinstance(out, str) and out.startswith(("http","https")): return out
+    if isinstance(out, str) and out.startswith(("http","https")):
+        return out
     if isinstance(out, list):
         for v in out:
             u = extract_any_url(v)
-            if u: return u
+            if u:
+                return u
     if isinstance(out, dict):
         for v in out.values():
             u = extract_any_url(v)
-            if u: return u
+            if u:
+                return u
     return None
 
 def _check_slug(slug: str, label: str):
@@ -478,11 +514,13 @@ def _infer_gender_from_image_local(local_path: Path) -> Optional[str]:
         version_slug = resolve_model_version(GENDER_MODEL_SLUG)
         with open(local_path, "rb") as img_b:
             pred = client.predictions.create(version=version_slug, input={"image": img_b})
-            pred.wait()
-            out = pred.output
-            g = (out.get("gender") if isinstance(out, dict) else str(out)).lower()
-            if "female" in g or "woman" in g: return "female"
-            if "male" in g or "man" in g: return "male"
+        pred.wait()
+        out = pred.output
+        g = (out.get("gender") if isinstance(out, dict) else str(out)).lower()
+        if "female" in g or "woman" in g:
+            return "female"
+        if "male" in g or "man" in g:
+            return "male"
     except Exception as e:
         logger.warning("Gender inference error: %s", e)
     return None
@@ -491,7 +529,8 @@ def auto_detect_gender(uid:int, avatar: Optional[str]=None) -> str:
     prof = load_profile(uid)
     av_name = avatar or get_current_avatar_name(prof)
     refs = list_ref_images(uid, av_name)
-    if not refs: return "female"
+    if not refs:
+        return "female"
     face_key = refs[0]
     local = STORAGE.get_local_copy(face_key)
     g = _infer_gender_from_image_local(local)
@@ -505,6 +544,76 @@ def _caption_for_gender(g: str) -> str:
     if env_override:
         return env_override
     return DEFAULT_MALE_CAPTION if (g or "").lower() == "male" else DEFAULT_FEMALE_CAPTION
+
+# ---------- Face ID Adapter ----------
+def extract_face_embedding(image_path: Path) -> Optional[str]:
+    """Извлекает Face ID embedding с помощью модели IP-Adapter FaceID"""
+    try:
+        client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+        version_slug = resolve_model_version(FACE_ID_MODEL_SLUG)
+
+        with open(image_path, "rb") as img_file:
+            prediction = client.predictions.create(
+                version=version_slug,
+                input={
+                    "image": img_file,
+                    "scale": FACE_ID_SCALE,
+                    "prompt": "face",  # Минимальный промпт для извлечения эмбеддинга
+                    "num_outputs": 1,
+                    "num_inference_steps": 20,
+                    "seed": 42
+                }
+            )
+
+        prediction.wait()
+
+        # IP-Adapter FaceID обычно возвращает эмбеддинг в output
+        if prediction.output and isinstance(prediction.output, list):
+            # Сохраняем URL первого изображения как репрезентацию эмбеддинга
+            return prediction.output[0]
+        elif prediction.output and isinstance(prediction.output, str):
+            return prediction.output
+
+    except Exception as e:
+        logger.warning("Face ID embedding extraction failed: %s", e)
+
+    return None
+
+def prepare_face_embedding(uid: int, avatar: str) -> Optional[str]:
+    """Подготавливает Face ID embedding для аватара"""
+    prof = load_profile(uid)
+    av = get_avatar(prof, avatar)
+
+    # Если эмбеддинг уже есть, возвращаем его
+    if av.get("face_embedding"):
+        return av["face_embedding"]
+
+    # Ищем лучшее референсное изображение для извлечения эмбеддинга
+    refs = list_ref_images(uid, avatar)
+    if not refs:
+        return None
+
+    # Используем первое изображение (предполагаем, что оно наиболее качественное)
+    face_key = refs[0]
+    local_path = STORAGE.get_local_copy(face_key)
+
+    try:
+        embedding_url = extract_face_embedding(local_path)
+        if embedding_url:
+            # Сохраняем embedding в профиль
+            av["face_embedding"] = embedding_url
+            save_profile(uid, prof)
+            logger.info("Face ID embedding extracted for avatar %s", avatar)
+            return embedding_url
+    except Exception as e:
+        logger.error("Failed to extract Face ID embedding: %s", e)
+    finally:
+        # Очищаем временный файл
+        with contextlib.suppress(Exception):
+            if local_path.exists() and str(local_path).startswith(tempfile.gettempdir()):
+                local_path.unlink()
+
+    return None
 
 # ---------- Промпт-замки ----------
 def _beauty_guardrail() -> str:
@@ -521,7 +630,7 @@ def _oval_lock() -> str:
             "no vertical face elongation, no face slimming, "
             "no stretched or lengthened chin, no narrowed or widened jaw, "
             "preserve original jawline curvature and cheekbone width")
-    
+
 def _ethnicity_lock() -> str:
     return (
         "preserve the same ethnicity as in the training photos, "
@@ -552,11 +661,13 @@ def _gender_lock(gender:str) -> Tuple[str, str]:
 
 def _safe_portrait_size(w:int, h:int) -> Tuple[int,int]:
     ar = w / max(1, h)
-    if ar >= 0.75: return int(h*0.66), h  # ~2:3
+    if ar >= 0.75:
+        return int(h*0.66), h # ~2:3
     return w, h
 
 def _face_scale_hint() -> str:
-    if not CONSISTENT_SCALE: return ""
+    if not CONSISTENT_SCALE:
+        return ""
     hh = int(HEAD_HEIGHT_FRAC * 100); hw = int(HEAD_WIDTH_FRAC * 100)
     return (f"keep constant head scale across all images, head height ~{hh}% of frame from chin to top of head, "
             f"head width ~{hw}% of frame width, subject centered, do not zoom in or out")
@@ -567,7 +678,8 @@ def _variants_for_preset(meta: Style) -> List[str]:
     if isinstance(comps, list) and comps:
         comps = [("half" if c == "full" else c) for c in comps]
         comps = [c for c in comps if c in ("half","closeup")]
-        if comps: return comps
+        if comps:
+            return comps
     return ["half", "half", "closeup"]
 
 def _maybe_seated_hint() -> str:
@@ -594,7 +706,7 @@ def _comp_negatives(kind: str) -> str:
 def _tone_text(tone: str) -> str:
     return {
         "daylight": "soft natural daylight, neutral colors",
-        "warm": "golden hour warmth, gentle highlights",
+        "warm": "golden hour warmth, gentle highlights", 
         "cool": "cool cinematic light, clean color balance",
         "noir": "high contrast noir lighting, subtle rim light",
         "neon": "neon signs, wet reflections, cinematic backlight, vibrant saturation",
@@ -602,29 +714,32 @@ def _tone_text(tone: str) -> str:
     }.get(tone, "balanced soft lighting")
 
 _FACE_KEYS = ("face","skin","jaw","cheek","nose","lips","eyes","eyelid","eyelash","makeup","freckles")
+
 def _safe_theme_boost(txt:str) -> str:
     t = (txt or "").lower()
-    if any(k in t for k in _FACE_KEYS): return ""
+    if any(k in t for k in _FACE_KEYS):
+        return ""
     return txt
 
 def _style_lock(role:str, outfit:str, props:str, background:str, comp_hint:str) -> str:
-    bits = [role or "", f"wearing {outfit}" if outfit else "", f"with {props}" if props else "",
+    bits = [role or "", f"wearing {outfit}" if outfit else "", f"with {props}" if props else "", 
             f"background: {background}" if background else "", comp_hint, "unmistakable scene identity"]
     return ", ".join([b for b in bits if b])
 
 def _inject_beauty(core_prompt: str, comp_text: str, natural: bool, pretty: bool) -> str:
     parts = [core_prompt]
-    if natural: parts.append(NATURAL_POS)
+    if natural:
+        parts.append(NATURAL_POS)
     if pretty:
         parts.append(PRETTY_POS)
-        if "eye level" in comp_text or "chest level" in comp_text:
-            parts.append(PRETTY_COMP_HINT)
+    if "eye level" in comp_text or "chest level" in comp_text:
+        parts.append(PRETTY_COMP_HINT)
     return ", ".join(parts)
 
-def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
-                 theme_boost:str, natural:bool, pretty:bool, avatar_token:str="") -> Tuple[str, str]:
+def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_boost:str, natural:bool, pretty:bool, avatar_token:str="") -> Tuple[str, str]:
     role = meta.get("role_f") if (gender=="female" and meta.get("role_f")) else meta.get("role","")
-    if not role and meta.get("role_m") and gender=="male": role = meta.get("role_m","")
+    if not role and meta.get("role_m") and gender=="male":
+        role = meta.get("role_m","")
     outfit = meta.get("outfit_f") if (gender=="female" and meta.get("outfit_f")) else meta.get("outfit","")
     props = meta.get("props",""); bg = meta.get("bg","")
     subject_tag = (f"photo of person {avatar_token}" if avatar_token else "").strip()
@@ -634,14 +749,24 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
     hair_lock = "keep original hair color tone and hairstyle family"
 
     common_bits = [
-        subject_tag, tone_text, gpos,
+        subject_tag,
+        tone_text,
+        gpos,
         "same person as the training photos, no ethnicity change, exact facial identity +++",
         "photorealistic, realistic body proportions, natural fine skin texture, filmic look",
         "keep original facial proportions, same interocular distance and cheekbone width, preserve lip shape and beard density",
         "85mm lens portrait look",
-        hair_lock, _frontal_lock(), _oval_lock(), _head_scale_lock(), _face_scale_hint(),
-        anti, _beauty_guardrail(), _face_lock(), _ethnicity_lock(),
-        FACIAL_RELAX_POS, theme_boost
+        hair_lock,
+        _frontal_lock(),
+        _oval_lock(),
+        _head_scale_lock(),
+        _face_scale_hint(),
+        anti,
+        _beauty_guardrail(),
+        _face_lock(),
+        _ethnicity_lock(),
+        FACIAL_RELAX_POS,
+        theme_boost
     ]
 
     if role or outfit or props or bg:
@@ -654,9 +779,12 @@ def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str,
     core = _inject_beauty(core, comp_text, natural, pretty)
 
     neg = gneg
-    if natural: neg = (neg + ", " + NATURAL_NEG) if neg else NATURAL_NEG
-    if pretty:  neg = (neg + ", " + PRETTY_NEG) if neg else PRETTY_NEG
+    if natural:
+        neg = (neg + ", " + NATURAL_NEG) if neg else NATURAL_NEG
+    if pretty:
+        neg = (neg + ", " + PRETTY_NEG) if neg else PRETTY_NEG
     neg = (neg + ", " + FACIAL_RELAX_NEG) if neg else FACIAL_RELAX_NEG
+
     return core, neg
 
 IDENTITY_SAFE_NEG = (
@@ -672,32 +800,70 @@ def _identity_safe_tune(preset_key:str, guidance:float, comps:List[str]) -> Tupl
     return g, cc, IDENTITY_SAFE_NEG
 
 # ---------- Инференс/генерация ----------
-def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, w:int, h:int, negative_prompt:str) -> str:
+def generate_with_face_id_adapter(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, 
+                                w:int, h:int, negative_prompt:str, face_embedding_url:str) -> str:
+    """Генерация с использованием Face ID adapter"""
     mv = resolve_model_version(model_slug)
+
     def _run():
         return replicate.run(mv, input={
             "prompt": prompt + AESTHETIC_SUFFIX,
             "negative_prompt": negative_prompt,
-            "width": w, "height": h,
+            "width": w,
+            "height": h,
+            "num_inference_steps": min(MAX_STEPS, steps),
+            "guidance_scale": guidance,
+            "seed": seed,
+            "ip_adapter_scale": FACE_ID_WEIGHT,
+            "face_image": face_embedding_url,  # Используем Face ID embedding
+            "face_id_noise": FACE_ID_NOISE,
+        })
+
+    out = _retry(_run, label="replicate_gen_faceid")
+    url = extract_any_url(out)
+    if not url:
+        raise RuntimeError("Empty output from Face ID generation")
+    return url
+
+def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, 
+                          w:int, h:int, negative_prompt:str, face_embedding_url:Optional[str]=None) -> str:
+    """Универсальная функция генерации с поддержкой Face ID adapter"""
+
+    # Если включен Face ID adapter и есть embedding, используем его
+    if FACE_ID_ADAPTER_ENABLED and face_embedding_url:
+        return generate_with_face_id_adapter(
+            model_slug, prompt, steps, guidance, seed, w, h, negative_prompt, face_embedding_url
+        )
+
+    # Стандартная генерация без Face ID
+    mv = resolve_model_version(model_slug)
+
+    def _run():
+        return replicate.run(mv, input={
+            "prompt": prompt + AESTHETIC_SUFFIX,
+            "negative_prompt": negative_prompt,
+            "width": w,
+            "height": h,
             "num_inference_steps": min(MAX_STEPS, steps),
             "guidance_scale": guidance,
             "seed": seed,
         })
+
     out = _retry(_run, label="replicate_gen")
     url = extract_any_url(out)
-    if not url: raise RuntimeError("Empty output")
+    if not url:
+        raise RuntimeError("Empty output")
     return url
 
 # ---------- UI/KB ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton("🧭 Выбрать стиль", callback_data="nav:styles")],
-        [InlineKeyboardButton("📸 Набор фото", callback_data="nav:enroll"),
-         InlineKeyboardButton("🧪 Обучение", callback_data="nav:train")],
+        [InlineKeyboardButton("📸 Набор фото", callback_data="nav:enroll"), InlineKeyboardButton("🧪 Обучение", callback_data="nav:train")],
         [InlineKeyboardButton("ℹ️ Мой статус", callback_data="nav:status")],
         [InlineKeyboardButton("🤖 Аватары", callback_data="nav:avatars")],
-        [InlineKeyboardButton("✨ Natural/Pretty", callback_data="nav:beauty"),
-         InlineKeyboardButton("🔒 LOCKFACE", callback_data="nav:lockface")],
+        [InlineKeyboardButton("✨ Natural/Pretty", callback_data="nav:beauty"), InlineKeyboardButton("🔒 LOCKFACE", callback_data="nav:lockface")],
+        [InlineKeyboardButton("👤 Face ID", callback_data="nav:faceid")],  # Новая кнопка для Face ID
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -706,8 +872,10 @@ def categories_kb() -> InlineKeyboardMarkup:
     rows, row = [], []
     for i, name in enumerate(names, 1):
         row.append(InlineKeyboardButton(name, callback_data=f"cat:{name}"))
-        if i % 2 == 0: rows.append(row); row=[]
-    if row: rows.append(row)
+        if i % 2 == 0:
+            rows.append(row); row=[]
+    if row:
+        rows.append(row)
     rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="nav:menu")])
     return InlineKeyboardMarkup(rows)
 
@@ -725,16 +893,15 @@ def avatars_kb(uid:int) -> InlineKeyboardMarkup:
     for n in names:
         label = f"{'✅ ' if n==cur else ''}{n}"
         rows.append([InlineKeyboardButton(label, callback_data=f"avatar:set:{n}")])
-    rows.append([InlineKeyboardButton("➕ Новый", callback_data="avatar:new"),
-                 InlineKeyboardButton("🗑 Удалить…", callback_data="avatar:del")])
+    rows.append([InlineKeyboardButton("➕ Новый", callback_data="avatar:new"), InlineKeyboardButton("🗑 Удалить…", callback_data="avatar:del")])
     rows.append([InlineKeyboardButton("⬅️ Меню", callback_data="nav:menu")])
     return InlineKeyboardMarkup(rows)
 
 def avatar_gender_kb(name:str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("♀ Женский", callback_data=f"avatar:gender:{name}:female"),
-         InlineKeyboardButton("♂ Мужской", callback_data=f"avatar:gender:{name}:male")]
-    ])
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("♀ Женский", callback_data=f"avatar:gender:{name}:female"),
+        InlineKeyboardButton("♂ Менский", callback_data=f"avatar:gender:{name}:male")
+    ]])
 
 def enroll_done_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("Готово ✅", callback_data="enroll:done")]])
@@ -755,15 +922,25 @@ def delete_confirm_kb(name:str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Нет", callback_data="nav:avatars")]
     ])
 
+def face_id_toggle_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Включить Face ID", callback_data="faceid:enable"),
+            InlineKeyboardButton("❌ Выключить Face ID", callback_data="faceid:disable")
+        ],
+        [InlineKeyboardButton("🔄 Обновить Embedding", callback_data="faceid:refresh")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="nav:menu")]
+    ])
+
 # ----- Callback для «Аватары» и связанных действий -----
 async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     uid = update.effective_user.id
     prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-
     parts = q.data.split(":")
     action = parts[1] if len(parts) > 1 else ""
+
     if action == "set":
         name = parts[2] if len(parts) > 2 else None
         if not name or name not in prof["avatars"]:
@@ -781,8 +958,7 @@ async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         PENDING_NEW_AVATAR[uid] = True
         await q.message.reply_text("Введи имя нового аватара одним сообщением (например: travel, work, glam).")
 
-    elif action == "gender":
-        # avatar:gender:<name>:female|male
+    elif action == "gender": # avatar:gender:<name>:female|male
         if len(parts) >= 4:
             name, g = parts[2], parts[3]
             prof = load_profile(uid)
@@ -796,8 +972,7 @@ async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "del":
         await q.message.reply_text("Выбери, что удалить:", reply_markup=delete_pick_kb(uid))
 
-    elif action == "delpick":
-        # выбор конкретного аватара на удаление
+    elif action == "delpick": # выбор конкретного аватара на удаление
         name = parts[2] if len(parts) > 2 else None
         if not name:
             await q.message.reply_text("Не понял, что удалять.", reply_markup=avatars_kb(uid)); return
@@ -818,6 +993,51 @@ async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await q.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
 
+# ---------- Face ID Callback ----------
+async def face_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = update.effective_user.id
+    prof = load_profile(uid)
+    av_name = get_current_avatar_name(prof)
+    av = get_avatar(prof, av_name)
+
+    parts = q.data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+
+    if action == "enable":
+        global FACE_ID_ADAPTER_ENABLED
+        FACE_ID_ADAPTER_ENABLED = True
+        await q.message.reply_text("✅ Face ID adapter включен", reply_markup=face_id_toggle_kb())
+
+    elif action == "disable":
+        FACE_ID_ADAPTER_ENABLED = False
+        await q.message.reply_text("❌ Face ID adapter выключен", reply_markup=face_id_toggle_kb())
+
+    elif action == "refresh":
+        await q.message.reply_text("🔄 Обновляю Face ID embedding...")
+        try:
+            embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
+            if embedding:
+                await q.message.reply_text("✅ Face ID embedding обновлен", reply_markup=face_id_toggle_kb())
+            else:
+                await q.message.reply_text("❌ Не удалось обновить Face ID embedding", reply_markup=face_id_toggle_kb())
+        except Exception as e:
+            await q.message.reply_text(f"❌ Ошибка: {e}", reply_markup=face_id_toggle_kb())
+
+    else:
+        status = "включен" if FACE_ID_ADAPTER_ENABLED else "выключен"
+        has_embedding = "есть" if av.get("face_embedding") else "нет"
+        await q.message.reply_text(
+            f"👤 Face ID Adapter\n\n"
+            f"Статус: {status}\n"
+            f"Embedding: {has_embedding}\n"
+            f"Вес: {FACE_ID_WEIGHT}\n"
+            f"Шум: {FACE_ID_NOISE}\n"
+            f"Масштаб: {FACE_ID_SCALE}",
+            reply_markup=face_id_toggle_kb()
+        )
+
 # ---------- Handlers ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -825,9 +1045,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя в узнаваемых сценах.\n\n"
         "— «📸 Набор фото» — загрузи до 10 снимков.\n"
-        "— «🧪 Обучение» — тренируем твою LoRA.\n"
+        "— «🧪 Обучение» — тренируем твою LoRA.\n" 
         "— «🧭 Выбрать стиль» — сцены и жанры.\n"
-        "— «🤖 Аватары» — несколько моделей с отдельным полом.\n",
+        "— «🤖 Аватары» — несколько моделей с отдельным полом.\n"
+        "— «👤 Face ID» — улучшенное сохранение идентичности лица.\n",
         reply_markup=main_menu_kb()
     )
 
@@ -835,18 +1056,25 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     uid = update.effective_user.id
     prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-
     key = q.data.split(":",1)[1]
-    if key == "styles": await q.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
-    elif key == "menu": await q.message.reply_text("Главное меню:", reply_markup=main_menu_kb())
-    elif key == "enroll": await id_enroll(update, context)
-    elif key == "train": await trainid_cmd(update, context)
-    elif key == "status": await id_status(update, context)
-    elif key == "avatars": await q.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
+
+    if key == "styles":
+        await q.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
+    elif key == "menu":
+        await q.message.reply_text("Главное меню:", reply_markup=main_menu_kb())
+    elif key == "enroll":
+        await id_enroll(update, context)
+    elif key == "train":
+        await trainid_cmd(update, context)
+    elif key == "status":
+        await id_status(update, context)
+    elif key == "avatars":
+        await q.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
     elif key == "beauty":
         prof = load_profile(uid)
         prof["pretty"] = not prof.get("pretty", False)
-        if prof["pretty"]: prof["natural"] = True
+        if prof["pretty"]:
+            prof["natural"] = True
         save_profile(uid, prof)
         await q.message.reply_text(f"Pretty: {'ON' if prof['pretty'] else 'OFF'} • Natural: {'ON' if prof['natural'] else 'OFF'}")
     elif key == "lockface":
@@ -856,6 +1084,8 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_profile(uid, prof)
         state = "включён" if av["lockface"] else "выключен"
         await q.message.reply_text(f"LOCKFACE {state}")
+    elif key == "faceid":
+        await face_id_cb(update, context)
 
 async def styles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
@@ -868,11 +1098,10 @@ async def cb_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-
     av_name = get_current_avatar_name(prof)
     ENROLL_FLAG[(uid, av_name)] = True
     await update.effective_message.reply_text(
-        f"Набор включён для «{av_name}». Пришли подряд до 10 фронтальных фото без фильтров.",
+        f"Набор включён для «{av_name}». Пришли подряд до 10 фронтальных фото без фильтров.", 
         reply_markup=enroll_done_kb()
     )
 
@@ -887,12 +1116,24 @@ async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ENROLL_FLAG[(uid, av_name)] = False
     av = get_avatar(prof, av_name)
     av["images"] = list_ref_images(uid, av_name)
+
     # если у аватара нет пола — попробуем определить
     if not av.get("gender"):
         try:
             av["gender"] = auto_detect_gender(uid, av_name)
         except Exception:
             av["gender"] = av.get("gender") or (prof.get("gender") or "female")
+
+    # Подготавливаем Face ID embedding при включенном адаптере
+    if FACE_ID_ADAPTER_ENABLED:
+        try:
+            await update.effective_message.reply_text("🔄 Подготавливаю Face ID embedding...")
+            embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
+            if embedding:
+                await update.effective_message.reply_text("✅ Face ID embedding готов")
+        except Exception as e:
+            logger.warning("Face ID embedding preparation failed: %s", e)
+
     save_profile(uid, prof)
     g = av.get("gender") or "—"
     await update.effective_message.reply_text(
@@ -901,57 +1142,54 @@ async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     if g == "—":
         await update.effective_message.reply_text(
-            f"Укажи пол для «{av_name}»:",
+            f"Укажи пол для «{av_name}»:", 
             reply_markup=avatar_gender_kb(av_name)
         )
 
 async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        uid = update.effective_user.id
+    uid = update.effective_user.id
+    # 1) читаем профиль и активный аватар
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+    av_name = get_current_avatar_name(prof); av = get_avatar(prof, av_name)
 
-        # 1) читаем профиль и активный аватар
-        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-        av_name = get_current_avatar_name(prof); av = get_avatar(prof, av_name)
+    # 2) если есть активная тренировка — ОБНОВИ статус через Replicate
+    tid = av.get("training_id")
+    if tid:
+        # если ещё не конечный статус — проверим через API
+        if av.get("status") not in {"succeeded", "failed", "canceled"}:
+            try:
+                status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
+                # перечитываем профиль после обновления
+                prof = load_profile(uid); av = get_avatar(prof, av_name)
+            except Exception as e:
+                logging.warning("id_status: check failed: %s", e)
 
-        # 2) если есть активная тренировка — ОБНОВИ статус через Replicate
-        tid = av.get("training_id")
-        if tid:
-            # если ещё не конечный статус — проверим через API
-            if av.get("status") not in {"succeeded", "failed", "canceled"}:
-                try:
-                    status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
-                    # перечитываем профиль после обновления
-                    prof = load_profile(uid); av = get_avatar(prof, av_name)
-                except Exception as e:
-                    logging.warning("id_status: check failed: %s", e)
+    # 3) готовим вывод
+    model = av.get("finetuned_model") or "—"
+    ver_id = av.get("finetuned_version") or "—"
+    st = av.get("status") or "—"
+    token = av.get("token") or "—"
+    g = av.get("gender") or "—"
+    face_id_status = "✅" if av.get("face_embedding") else "❌"
 
-        # 3) готовим вывод
-        model  = av.get("finetuned_model") or "—"
-        ver_id = av.get("finetuned_version") or "—"
-        st     = av.get("status") or "—"
-        token  = av.get("token") or "—"
-        g      = av.get("gender") or "—"
+    # универсальная ссылка на логи
+    log_btn = None
+    if tid:
+        log_btn = InlineKeyboardMarkup([[InlineKeyboardButton("Открыть логи Replicate", url=f"https://replicate.com/trainings/{tid}")]])
 
-        # универсальная ссылка на логи
-        log_btn = None
-        if tid:
-            log_btn = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Открыть логи Replicate", url=f"https://replicate.com/trainings/{tid}")]]
-            )
-
-        msg = (
-            f"Активный аватар: {av_name}\n"
-            f"Фото: {len(list_ref_images(uid, av_name))}\n"
-            f"Статус: {st}\n"
-            f"Модель: {model}\n"
-            f"Версия: {ver_id}\n"
-            f"Токен: {token}\n"
-            f"Пол (аватар): {g}\n"
-            f"LOCKFACE: {'on' if av.get('lockface') else 'off'}\n"
-            f"Natural: {'ON' if prof.get('natural', True) else 'OFF'} • Pretty: {'ON' if prof.get('pretty', False) else 'OFF'}"
-        )
-
-        await update.effective_message.reply_text(msg, reply_markup=log_btn)
-
+    msg = (
+        f"Активный аватар: {av_name}\n"
+        f"Фото: {len(list_ref_images(uid, av_name))}\n"
+        f"Статус: {st}\n"
+        f"Модель: {model}\n"
+        f"Версия: {ver_id}\n"
+        f"Токен: {token}\n"
+        f"Пол (аватар): {g}\n"
+        f"LOCKFACE: {'on' if av.get('lockface') else 'off'}\n"
+        f"Face ID: {face_id_status}\n"
+        f"Natural: {'ON' if prof.get('natural', True) else 'OFF'} • Pretty: {'ON' if prof.get('pretty', False) else 'OFF'}"
+    )
+    await update.effective_message.reply_text(msg, reply_markup=log_btn)
 
 async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -962,13 +1200,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
     av_name = get_current_avatar_name(prof)
+
     if ENROLL_FLAG.get((uid, av_name)):
         refs = list_ref_images(uid, av_name)
         if len(refs) >= 10:
             await update.message.reply_text("Уже 10/10. Нажми «Готово ✅»."); return
+
         f = await update.message.photo[-1].get_file()
         data = await f.download_as_bytearray()
         _ = STORAGE.save_ref_image(uid, av_name, bytes(data))
+
         prof = load_profile(uid); av = get_avatar(prof, av_name)
         av["images"] = list_ref_images(uid, av_name)
         save_profile(uid, prof)
@@ -983,7 +1224,7 @@ def set_current_avatar(uid:int, name:str):
         prof["avatars"][name] = DEFAULT_AVATAR.copy()
     prof["current_avatar"] = name
     prof["_uid_hint"] = uid
-    _ = get_avatar(prof, name)  # гарантируем токен
+    _ = get_avatar(prof, name) # гарантируем токен
     save_profile(uid, prof)
 
 def ensure_avatar(uid:int, name:str):
@@ -996,18 +1237,22 @@ def ensure_avatar(uid:int, name:str):
 
 def del_avatar(uid:int, name:str):
     prof = load_profile(uid)
-    if name == "default": raise RuntimeError("Нельзя удалить аватар 'default'.")
-    if name not in prof["avatars"]: return
+    if name == "default":
+        raise RuntimeError("Нельзя удалить аватар 'default'.")
+    if name not in prof["avatars"]:
+        return
     STORAGE.delete_avatar(uid, name)
     prof["avatars"].pop(name, None)
-    if prof["current_avatar"] == name: prof["current_avatar"] = "default"
+    if prof["current_avatar"] == name:
+        prof["current_avatar"] = "default"
     save_profile(uid, prof)
 
 # ---- Текстовый обработчик для имени нового аватара (без команд) ----
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = (update.message.text or "").strip()
-    if not text: return
+    if not text:
+        return
 
     if PENDING_NEW_AVATAR.get(uid):
         name = re.sub(r"[^\w\-\.\@]+", "_", text)[:32] or "noname"
@@ -1016,7 +1261,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         PENDING_NEW_AVATAR.pop(uid, None)
         # сразу спрашиваем пол
         await update.message.reply_text(
-            f"Создан и выбран аватар: «{name}». Укажи пол:",
+            f"Создан и выбран аватар: «{name}». Укажи пол:", 
             reply_markup=avatar_gender_kb(name)
         )
         return
@@ -1026,7 +1271,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- Обучение / Генерация ----
 def _dest_model_slug(avatar:str) -> str:
-    if not DEST_OWNER: raise RuntimeError("REPLICATE_DEST_OWNER не задан.")
+    if not DEST_OWNER:
+        raise RuntimeError("REPLICATE_DEST_OWNER не задан.")
     return f"{DEST_OWNER}/{DEST_MODEL}"
 
 def _ensure_destination_exists(slug: str):
@@ -1040,208 +1286,197 @@ def _pack_refs_zip(uid:int, avatar:str) -> Path:
     return STORAGE.pack_refs_zip(uid, avatar)
 
 def start_lora_training(uid: int, avatar: str) -> str:
-        """
-        Стартует обучение LoRA на Replicate.
-        Работает с:
-          - replicate/fast-flux-trainer  (обязательно trigger_word + lora_type=subject)
-          - replicate/flux-lora-trainer  (caption_prefix и гиперпараметры)
-        Делает:
-          1) pack_refs_zip → S3 → presigned HTTPS URL
-          2) sanity-check ZIP по URL (HTTP 200 и сигнатура PK)
-          3) trainings.create(...) с правильными полями под выбранный тренер
-          4) сохраняет training_id и статус в профиль
-        """
-        # --- целевая модель и тренер
-        dest_model = _dest_model_slug(avatar)
-        _ensure_destination_exists(dest_model)
-        trainer_slug = os.getenv("LORA_TRAINER_SLUG", "replicate/fast-flux-trainer").strip()
-        trainer_version = resolve_model_version(trainer_slug)
+    """Стартует обучение LoRA на Replicate."""
+    # --- целевая модель и тренер
+    dest_model = _dest_model_slug(avatar)
+    _ensure_destination_exists(dest_model)
+    trainer_slug = os.getenv("LORA_TRAINER_SLUG", "replicate/fast-flux-trainer").strip()
+    trainer_version = resolve_model_version(trainer_slug)
 
-        # --- упаковка фото
-        zip_path = _pack_refs_zip(uid, avatar)
+    # --- упаковка фото
+    zip_path = _pack_refs_zip(uid, avatar)
 
-        # --- presigned URL (или явный URL из ENV для диагностики)
-        direct_override = os.getenv("TRAIN_ZIP_DIRECT_URL", "").strip()
-        if direct_override:
-            presigned_url = direct_override
-        else:
-            if not s3_client or not S3_BUCKET:
-                raise RuntimeError("Нужен S3: установи USE_S3=1 и S3_* переменные окружения.")
-            key = _s3_key("profiles", str(uid), "avatars", avatar, "train.zip")
-            with open(zip_path, "rb") as fz:
-                _retry(
-                    s3_client.put_object,
-                    Bucket=S3_BUCKET, Key=key, Body=fz,
-                    ContentType="application/zip",
-                    label="s3_put_trainzip"
-                )
-            presigned_url = s3_client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": S3_BUCKET, "Key": key},
-                ExpiresIn=int(os.getenv("TRAIN_ZIP_URL_TTL", "21600"))  # 6 часов
+    # --- presigned URL (или явный URL из ENV для диагностики)
+    direct_override = os.getenv("TRAIN_ZIP_DIRECT_URL", "").strip()
+    if direct_override:
+        presigned_url = direct_override
+    else:
+        if not s3_client or not S3_BUCKET:
+            raise RuntimeError("Нужен S3: установи USE_S3=1 и S3_* переменные окружения.")
+        key = _s3_key("profiles", str(uid), "avatars", avatar, "train.zip")
+        with open(zip_path, "rb") as fz:
+            _retry(
+                s3_client.put_object, Bucket=S3_BUCKET, Key=key, Body=fz, 
+                ContentType="application/zip", label="s3_put_trainzip"
             )
-
-        # --- проверка доступности ZIP
-        if not presigned_url.lower().startswith("https://"):
-            raise RuntimeError("Presigned URL должен быть HTTPS.")
-        try:
-            r = requests.get(presigned_url, timeout=25, stream=True)
-            r.raise_for_status()
-            sig = r.raw.read(4) if hasattr(r, "raw") else r.content[:4]
-            if sig[:2] != b"PK":
-                raise RuntimeError("Presigned URL не отдаёт валидный ZIP (нет сигнатуры PK).")
-        except Exception as e:
-            raise RuntimeError(f"ZIP недоступен по presigned URL: {e}")
-
-        # --- токен/пол/подпись
-        prof = load_profile(uid)
-        av = get_avatar(prof, avatar)
-        gender = (av.get("gender") or prof.get("gender") or auto_detect_gender(uid, avatar) or "female").lower()
-        token = av.get("token") or _avatar_token(uid, avatar)
-        caption_prefix = (
-            f"photo of person {token}. "
-            + _caption_for_gender(gender)
-            + ", frontal face, neutral relaxed expression, natural light"
+        presigned_url = s3_client.generate_presigned_url(
+            "get_object", 
+            Params={"Bucket": S3_BUCKET, "Key": key},
+            ExpiresIn=int(os.getenv("TRAIN_ZIP_URL_TTL", "21600")) # 6 часов
         )
 
-        # --- поля под конкретный тренер
-        payload: Dict[str, Any] = {
-            "input_images": presigned_url,                 # ZIP-URL обязательно
-            "resolution": LORA_RESOLUTION,
-            "use_face_detection_instead": LORA_USE_FACE_DET,
-            "max_train_steps": LORA_MAX_STEPS,
-        }
-        lower_slug = trainer_slug.lower()
-        if "fast-flux-trainer" in lower_slug:
-            payload.update({
-                "trigger_word": token,
-                "lora_type": "subject",
-                "caption_prefix": caption_prefix,          # понимается тренером, не критично
-            })
-        else:
-            # replicate/flux-lora-trainer
-            payload.update({
-                "caption_prefix": caption_prefix,
-                "autocaption": False, "captioner": "none", "caption_model": "none",
-                "use_llava": False, "use_blip": False,
-                "network_rank": int(os.getenv("LORA_RANK", "16")),
-                "network_alpha": int(os.getenv("LORA_ALPHA", "16")),
-                "lora_lr": LORA_LR,
-            })
+    # --- проверка доступности ZIP
+    if not presigned_url.lower().startswith("https://"):
+        raise RuntimeError("Presigned URL должен быть HTTPS.")
+    try:
+        r = requests.get(presigned_url, timeout=25, stream=True)
+        r.raise_for_status()
+        sig = r.raw.read(4) if hasattr(r, "raw") else r.content[:4]
+        if sig[:2] != b"PK":
+            raise RuntimeError("Presigned URL не отдаёт валидный ZIP (нет сигнатуры PK).")
+    except Exception as e:
+        raise RuntimeError(f"ZIP недоступен по presigned URL: {e}")
 
-        # --- запуск тренировки
-        client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-        training = _retry(
-            client.trainings.create,
-            version=trainer_version,
-            input=payload,
-            destination=dest_model
-        )
+    # --- токен/пол/подпись
+    prof = load_profile(uid)
+    av = get_avatar(prof, avatar)
+    gender = (av.get("gender") or prof.get("gender") or auto_detect_gender(uid, avatar) or "female").lower()
+    token = av.get("token") or _avatar_token(uid, avatar)
+    caption_prefix = (
+        f"photo of person {token}. " + _caption_for_gender(gender) + 
+        ", frontal face, neutral relaxed expression, natural light"
+    )
 
-        # --- безопасно достаём id (SDK может вернуть dict)
-        tid = getattr(training, "id", None)
-        if tid is None and isinstance(training, dict):
-            tid = training.get("id")
-        if not tid:
-            raise RuntimeError(f"Replicate не вернул training id: {training!r}")
+    # --- поля под конкретный тренер
+    payload: Dict[str, Any] = {
+        "input_images": presigned_url, # ZIP-URL обязательно
+        "resolution": LORA_RESOLUTION,
+        "use_face_detection_instead": LORA_USE_FACE_DET,
+        "max_train_steps": LORA_MAX_STEPS,
+    }
 
-        # --- записываем профиль
-        prof = load_profile(uid)
-        av = get_avatar(prof, avatar)
-        av["training_id"] = tid
-        av["status"] = "starting"
-        av["finetuned_model"] = dest_model
-        save_profile(uid, prof)
+    lower_slug = trainer_slug.lower()
+    if "fast-flux-trainer" in lower_slug:
+        payload.update({
+            "trigger_word": token,
+            "lora_type": "subject",
+            "caption_prefix": caption_prefix, # понимается тренером, не критично
+        })
+    else: # replicate/flux-lora-trainer
+        payload.update({
+            "caption_prefix": caption_prefix,
+            "autocaption": False,
+            "captioner": "none", 
+            "caption_model": "none",
+            "use_llava": False,
+            "use_blip": False,
+            "network_rank": int(os.getenv("LORA_RANK", "16")),
+            "network_alpha": int(os.getenv("LORA_ALPHA", "16")),
+            "lora_lr": LORA_LR,
+        })
 
-        return tid
-    
+    # --- запуск тренировки
+    client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+    training = _retry(
+        client.trainings.create,
+        version=trainer_version,
+        input=payload,
+        destination=dest_model
+    )
+
+    # --- безопасно достаём id (SDK может вернуть dict)
+    tid = getattr(training, "id", None)
+    if tid is None and isinstance(training, dict):
+        tid = training.get("id")
+    if not tid:
+        raise RuntimeError(f"Replicate не вернул training id: {training!r}")
+
+    # --- записываем профиль
+    prof = load_profile(uid)
+    av = get_avatar(prof, avatar)
+    av["training_id"] = tid
+    av["status"] = "starting"
+    av["finetuned_model"] = dest_model
+    save_profile(uid, prof)
+
+    return tid
+
 def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Optional[str]]:
-        """
-        Возвращает (status, slug_with_version_if_ready, error_text_or_None).
-        Обновляет профиль, даже если training завершён давно.
-        """
-        prof = load_profile(uid)
-        av = get_avatar(prof, avatar)
-        tid = av.get("training_id")
-        if not tid:
-            return ("not_started", None, None)
+    """Возвращает (status, slug_with_version_if_ready, error_text_or_None)."""
+    prof = load_profile(uid)
+    av = get_avatar(prof, avatar)
+    tid = av.get("training_id")
+    if not tid:
+        return ("not_started", None, None)
 
-        client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+    client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+    try:
+        tr = client.trainings.get(tid)
+    except Exception as e:
+        return ("unknown", None, str(e))
 
+    # Универсально получаем поля (Replicate SDK может вернуть dict или объект)
+    if isinstance(tr, dict):
+        status = tr.get("status", "unknown")
+        destination = tr.get("destination") or av.get("finetuned_model")
+        err = tr.get("error") or tr.get("detail")
+    else:
+        status = getattr(tr, "status", "unknown")
+        destination = getattr(tr, "destination", None) or av.get("finetuned_model")
+        err = getattr(tr, "error", None) or getattr(tr, "detail", None)
+
+    av["status"] = status
+    if destination:
+        av["finetuned_model"] = destination
+
+    # Если succeeded — закрепляем версию
+    slug_with_ver = None
+    if status == "succeeded" and destination:
         try:
-            tr = client.trainings.get(tid)
+            model_obj = replicate.models.get(destination)
+            versions = list(model_obj.versions.list())
+            if versions:
+                slug_with_ver = f"{destination}:{versions[0].id}"
+                av["finetuned_version"] = versions[0].id
         except Exception as e:
-            return ("unknown", None, str(e))
+            logging.warning(f"Не удалось получить версию модели {destination}: {e}")
+            slug_with_ver = destination
 
-        # Универсально получаем поля (Replicate SDK может вернуть dict или объект)
-        if isinstance(tr, dict):
-            status = tr.get("status", "unknown")
-            destination = tr.get("destination") or av.get("finetuned_model")
-            err = tr.get("error") or tr.get("detail")
-        else:
-            status = getattr(tr, "status", "unknown")
-            destination = getattr(tr, "destination", None) or av.get("finetuned_model")
-            err = getattr(tr, "error", None) or getattr(tr, "detail", None)
-
-        av["status"] = status
-        if destination:
-            av["finetuned_model"] = destination
-
-        # Если succeeded — закрепляем версию
-        slug_with_ver = None
-        if status == "succeeded" and destination:
-            try:
-                model_obj = replicate.models.get(destination)
-                versions = list(model_obj.versions.list())
-                if versions:
-                    slug_with_ver = f"{destination}:{versions[0].id}"
-                    av["finetuned_version"] = versions[0].id
-            except Exception as e:
-                logging.warning(f"Не удалось получить версию модели {destination}: {e}")
-                slug_with_ver = destination
-
-        save_profile(uid, prof)
-        return (status, slug_with_ver, err)
+    save_profile(uid, prof)
+    return (status, slug_with_ver, err)
 
 def _pinned_slug(av: Dict[str, Any]) -> str:
-        base = av.get("finetuned_model") or ""
-        ver = av.get("finetuned_version")
+    base = av.get("finetuned_model") or ""
+    ver = av.get("finetuned_version")
 
-        # Если есть и модель и версия
-        if base and ver:
-            # Убедимся, что версия не содержит лишних символов
-            clean_ver = ver.strip()
-            if ":" in clean_ver:
-                clean_ver = clean_ver.split(":")[-1]
-            return f"{base}:{clean_ver}"
+    # Если есть и модель и версия
+    if base and ver:
+        # Убедимся, что версия не содержит лишних символов
+        clean_ver = ver.strip()
+        if ":" in clean_ver:
+            clean_ver = clean_ver.split(":")[-1]
+        return f"{base}:{clean_ver}"
 
-        # Если есть только модель, попробуем получить последнюю версию
-        elif base:
-            try:
-                model_obj = replicate.models.get(base)
-                versions = list(model_obj.versions.list())
-                if versions:
-                    latest_ver = versions[0].id
-                    av["finetuned_version"] = latest_ver
-                    # Сохраняем обновленную версию в профиль
-                    uid = av.get("_uid_hint", 0)
-                    prof = load_profile(uid)
-                    current_av_name = get_current_avatar_name(prof)
-                    if current_av_name in prof["avatars"]:
-                        prof["avatars"][current_av_name]["finetuned_version"] = latest_ver
-                        save_profile(uid, prof)
-                    return f"{base}:{latest_ver}"
-            except Exception as e:
-                logger.error(f"Failed to get latest version for {base}: {e}")
+    # Если есть только модель, попробуем получить последнюю версию
+    elif base:
+        try:
+            model_obj = replicate.models.get(base)
+            versions = list(model_obj.versions.list())
+            if versions:
+                latest_ver = versions[0].id
+                av["finetuned_version"] = latest_ver
+                # Сохраняем обновленную версию в профиль
+                uid = av.get("_uid_hint", 0)
+                prof = load_profile(uid)
+                current_av_name = get_current_avatar_name(prof)
+                if current_av_name in prof["avatars"]:
+                    prof["avatars"][current_av_name]["finetuned_version"] = latest_ver
+                    save_profile(uid, prof)
+                return f"{base}:{latest_ver}"
+        except Exception as e:
+            logger.error(f"Failed to get latest version for {base}: {e}")
 
-        return base or ""
+    return base or ""
 
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id; prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
     av_name = get_current_avatar_name(prof)
+
     if len(list_ref_images(uid, av_name)) < 10:
         await update.effective_message.reply_text(f"Нужно 10 фото в «{av_name}». Сначала «📸 Набор фото», затем «Готово ✅»."); return
+
     await update.effective_message.reply_text(f"Запускаю обучение LoRA для «{av_name}»…")
+
     try:
         async with TRAIN_SEMAPHORE:
             training_id = await asyncio.to_thread(start_lora_training, uid, av_name)
@@ -1255,51 +1490,50 @@ async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(f"Не удалось запустить обучение: {e}")
 
 async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        uid = update.effective_user.id
-        prof = load_profile(uid)
-        av_name = get_current_avatar_name(prof)
+    uid = update.effective_user.id
+    prof = load_profile(uid)
+    av_name = get_current_avatar_name(prof)
+    status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
+    prof = load_profile(uid) # перечитаем после обновления
+    av = get_avatar(prof, av_name)
+    tid = av.get("training_id")
 
-        status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
-        prof = load_profile(uid)  # перечитаем после обновления
-        av = get_avatar(prof, av_name)
-        tid = av.get("training_id")
+    # человекочитаемая строка статуса
+    display = {
+        "starting": "starting (готовится к запуску)",
+        "queued": "queued (в очереди)", 
+        "running": "running (обучается)",
+        "processing": "processing (публикую версию)",
+        "succeeded": "succeeded",
+        "failed": "failed",
+        "canceled": "canceled",
+        "unknown": "unknown"
+    }.get(status, status)
 
-        # человекочитаемая строка статуса
-        display = {
-            "starting": "starting (готовится к запуску)",
-            "queued": "queued (в очереди)",
-            "running": "running (обучается)",
-            "processing": "processing (публикую версию)",
-            "succeeded": "succeeded",
-            "failed": "failed",
-            "canceled": "canceled",
-            "unknown": "unknown"
-        }.get(status, status)
+    train_url = f"https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{tid}" if (DEST_OWNER and DEST_MODEL and tid) else None
 
-        train_url = f"https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{tid}" if (DEST_OWNER and DEST_MODEL and tid) else None
+    if status == "succeeded" and slug_with_ver:
+        await update.effective_message.reply_text(
+            f"Готово ✅\nАватар: {av_name}\nМодель: {slug_with_ver}\nТеперь — «🧭 Выбрать стиль».",
+            reply_markup=categories_kb()
+        )
+        return
 
-        if status == "succeeded" and slug_with_ver:
-            await update.effective_message.reply_text(
-                f"Готово ✅\nАватар: {av_name}\nМодель: {slug_with_ver}\nТеперь — «🧭 Выбрать стиль».",
-                reply_markup=categories_kb()
-            )
-            return
+    if status in ("starting", "queued", "running", "processing"):
+        extra = f"\nЛоги: {train_url}" if train_url else ""
+        await update.effective_message.reply_text(f"Статус «{av_name}»: {display}{extra}")
+        return
 
-        if status in ("starting", "queued", "running", "processing"):
-            extra = f"\nЛоги: {train_url}" if train_url else ""
-            await update.effective_message.reply_text(f"Статус «{av_name}»: {display}{extra}")
-            return
+    if status in ("failed", "canceled"):
+        msg = f"⚠️ Тренировка «{av_name}»: {status.upper()}."
+        if err:
+            msg += f"\nПричина: {err}"
+        if train_url:
+            msg += f"\nЛоги: {train_url}"
+        await update.effective_message.reply_text(msg)
+        return
 
-        if status in ("failed", "canceled"):
-            msg = f"⚠️ Тренировка «{av_name}»: {status.upper()}."
-            if err:
-                msg += f"\nПричина: {err}"
-            if train_url: 
-                msg += f"\nЛоги: {train_url}"
-            await update.effective_message.reply_text(msg)
-            return
-
-        await update.effective_message.reply_text(f"Статус «{av_name}»: {display}.")
+    await update.effective_message.reply_text(f"Статус «{av_name}»: {display}.")
 
 # === Принудительное обновление статуса с Replicate ===
 async def refreshstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1338,6 +1572,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
     av_name = get_current_avatar_name(prof)
     av = get_avatar(prof, av_name)
+
     if av.get("status") != "succeeded":
         await update.effective_message.reply_text(
             f"Модель «{av_name}» ещё не готова. Нажми «🧪 Обучение», затем проверяй статус."
@@ -1352,18 +1587,15 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
 
     gender = (av.get("gender") or prof.get("gender") or "female").lower()
     natural = prof.get("natural", True)
-    pretty  = prof.get("pretty", False)
-    preset_key  = str(preset)
-
-    tone_text   = _tone_text(meta.get("tone", "daylight"))
+    pretty = prof.get("pretty", False)
+    preset_key = str(preset)
+    tone_text = _tone_text(meta.get("tone", "daylight"))
     theme_boost = _safe_theme_boost(THEME_BOOST.get(preset_key, ""))
-    model_slug  = _pinned_slug(av)
+    model_slug = _pinned_slug(av)
 
     guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
-    guidance = float(max(3.8, min(4.2, float(guidance_val))))
-    # и убеждаемся, что preset в RISKY_PRESETS
+    guidance = float(max(3.8, min(4.2, float(guidance_val)))) # и убеждаемся, что preset в RISKY_PRESETS
     steps = 40
-
     variant_comps = _variants_for_preset(meta)
     guidance, variant_comps, extra_neg = _identity_safe_tune(preset_key, guidance, variant_comps)
 
@@ -1375,6 +1607,17 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
     token = av.get("token")
     base_seed = _stable_seed(token or "notoken", preset_key)
 
+    # Получаем Face ID embedding если включен
+    face_embedding_url = None
+    if FACE_ID_ADAPTER_ENABLED:
+        face_embedding_url = av.get("face_embedding")
+        if not face_embedding_url:
+            # Пытаемся подготовить embedding если его нет
+            try:
+                face_embedding_url = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
+            except Exception as e:
+                logger.warning("Failed to prepare Face ID embedding: %s", e)
+
     try:
         async with GEN_SEMAPHORE:
             for idx, comp_kind in enumerate(variant_comps, 1):
@@ -1384,30 +1627,40 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
                     meta, gender, comp_text, tone_text, theme_boost, natural, pretty, avatar_token=token
                 )
                 neg_base = _neg_with_gender(NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind), gender_negative)
-                if FORCE_WAIST_UP: neg_base = (neg_base + ", " + NO_FULL_BODY_NEG).strip(", ")
-                if extra_neg:      neg_base = (neg_base + ", " + extra_neg).strip(", ")
+                if FORCE_WAIST_UP:
+                    neg_base = (neg_base + ", " + NO_FULL_BODY_NEG).strip(", ")
+                if extra_neg:
+                    neg_base = (neg_base + ", " + extra_neg).strip(", ")
 
                 url = await asyncio.to_thread(
                     generate_from_finetune,
-                    model_slug=model_slug, prompt=prompt_core,
-                    steps=steps, guidance=guidance, seed=seed, w=w, h=h,
-                    negative_prompt=neg_base
+                    model_slug=model_slug,
+                    prompt=prompt_core,
+                    steps=steps,
+                    guidance=guidance,
+                    seed=seed,
+                    w=w,
+                    h=h,
+                    negative_prompt=neg_base,
+                    face_embedding_url=face_embedding_url  # Передаем Face ID embedding
                 )
 
                 tag = "👤" if comp_kind == "closeup" else "🧍"
                 lock = "🔒" if lockface_on else "◻️"
-                caption = f"{preset} • {av_name} • {lock} {tag} {comp_kind} • {w}×{h}"
+                face_id_indicator = "👤" if face_embedding_url else ""
+                caption = f"{preset} • {av_name} • {lock} {tag} {comp_kind} {face_id_indicator} • {w}×{h}"
 
                 img_bytes = await asyncio.to_thread(_download_image_bytes, url)
                 bio = io.BytesIO(img_bytes)
                 im = Image.open(bio).convert("RGB")
-                im = _photo_ook(im) if False else _photo_look(im)  # качество как было
+                im = _photo_look(im)
                 out_io = io.BytesIO()
                 im.save(out_io, "JPEG", quality=92)
                 out_io.seek(0); out_io.name = "image.jpg"
                 await update.effective_message.reply_photo(photo=out_io, caption=caption)
 
-        await update.effective_message.reply_text("Готово. По умолчанию: half, half, closeup — без full body.")
+            await update.effective_message.reply_text("Готово. По умолчанию: half, half, closeup — без full body.")
+
     except Exception as e:
         logging.exception("generation failed")
         await update.effective_message.reply_text(f"Ошибка генерации: {e}")
@@ -1417,7 +1670,8 @@ async def pretty_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     prof = load_profile(uid)
     prof["pretty"] = not prof.get("pretty", False)
-    if prof["pretty"]: prof["natural"] = True
+    if prof["pretty"]:
+        prof["natural"] = True
     save_profile(uid, prof)
     await update.message.reply_text(f"Pretty: {'ON' if prof['pretty'] else 'OFF'} (Natural: {'ON' if prof['natural'] else 'OFF'})")
 
@@ -1448,6 +1702,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_category, pattern=r"^cat:"))
     app.add_handler(CallbackQueryHandler(cb_style, pattern=r"^style:"))
     app.add_handler(CallbackQueryHandler(avatar_cb, pattern=r"^avatar:"))
+    app.add_handler(CallbackQueryHandler(face_id_cb, pattern=r"^faceid:"))
     app.add_handler(CallbackQueryHandler(cb_enroll_done, pattern=r"^enroll:done$"))
 
     # Фото и текст
@@ -1456,13 +1711,16 @@ def main():
 
     # Пинг слагов
     _check_slug(LORA_TRAINER_SLUG, "LoRA trainer")
-    logger.info("InstantID removed: pure LoRA mode.")
+    if FACE_ID_ADAPTER_ENABLED:
+        _check_slug(FACE_ID_MODEL_SLUG, "Face ID model")
 
+    logger.info("InstantID removed: pure LoRA mode.")
     logger.info(
-        "Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s ConsistentScale=%s WaistUp=%s Storage=%s",
-        LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}", GEN_WIDTH, GEN_HEIGHT,
-        GEN_STEPS, GEN_GUIDANCE, CONSISTENT_SCALE, FORCE_WAIST_UP, "S3" if USE_S3 else "FS"
+        "Bot up. Trainer=%s DEST=%s GEN=%dx%d steps=%s guidance=%s ConsistentScale=%s WaistUp=%s Storage=%s FaceID=%s",
+        LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}", GEN_WIDTH, GEN_HEIGHT, GEN_STEPS, GEN_GUIDANCE,
+        CONSISTENT_SCALE, FORCE_WAIST_UP, "S3" if USE_S3 else "FS", FACE_ID_ADAPTER_ENABLED
     )
+
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
