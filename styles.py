@@ -353,41 +353,41 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     # ===== КИНО / КОМИКСЫ / ПОП-КУЛЬТУРА (вдохновение) =====
-    "Готэм-ночь (Бэтмен-вайб)": {
-        "desc": "Кинематографичный образ Бэтмена: герой в бронекостюме на фоне неонового Готэма. Атмосфера — мощь, глянец и энергия ночного города.",
-        "role": "cinematic Batman hero portrait in neon Gotham city",
+    "Готэм-ночь (Бэтмен-вайб)":"Бэтмен": {
+        "desc": "Бэтмен в кинематографичном неон-городе: герой в бронекостюме по пояс, на фоне сияющего Бэтмобиля и дождливых улиц Готэма. Атмосфера — мощь, стиль и контраст света.",
+        "role": "Batman hero portrait, waist-up cinematic composition",
         "outfit": (
-            "high-tech armored batsuit with raised bat emblem on chest, "
-            "sleek matte-black armor plates with subtle blue reflections, "
-            "short tactical cape, cowl with pointed ears, armored gloves"
+            "high-tech armored batsuit with embossed bat emblem on chest, "
+            "matte and glossy black plates with subtle reflections, "
+            "short tactical cape, cowl with pointed ears, gauntlets with fins"
         ),
         "props": (
-            "Batmobile in background with glowing blue headlights and wet reflections, "
-            "rain mist and cinematic rim lighting, "
-            "batarang in hand or attached to utility belt"
+            "Batmobile in background with blue and red glowing headlights, "
+            "rain reflections on wet asphalt, faint mist, "
+            "batarang in gloved hand or attached to utility belt"
         ),
         "bg": (
-            "neon-lit Gotham skyline at night, skyscrapers, holographic ads, "
-            "wet asphalt, steam, bat-signal on low clouds, "
-            "blue-orange cinematic contrast light"
+            "futuristic Gotham skyline at night, neon billboards, "
+            "bat-signal projected into clouds, cinematic backlight, "
+            "light haze and reflections from wet pavement"
         ),
-        "comp": "waistup",  # только по пояс
+        "comp": "waistup",
         "tone": "cinematic vibrant",
         "required_attributes": [
             "bat emblem on chest",
-            "batmobile visible in background",
-            "black armored batsuit",
-            "cape and cowl with ears",
-            "neon night Gotham city",
-            "waist-up composition only"
+            "batmobile visible behind",
+            "armored batsuit",
+            "cape and cowl with bat ears",
+            "neon Gotham city",
+            "waist-up framing only"
         ],
         "force_keywords": [
-            "waist-up shot, no full body, focus on upper body and chest emblem",
-            "armored batsuit, detailed bat emblem",
-            "Batmobile behind, glowing lights and rain reflections",
-            "cinematic close-up, neon lighting, Gotham night"
+            "waist-up shot, not full body, cinematic portrait composition",
+            "detailed armored batsuit with bat emblem",
+            "Batmobile glowing in background, rain reflections, neon lights",
+            "cinematic vibrant lighting, blue-orange contrast"
         ],
-        "negative": "no full body, no wide shot, no distant view, no standing full figure"
+        "negative": "no full body, no wide shot, no distant standing figure, no small character"
     },
     "Халк-эффект": {
         "desc": "Мощная зеленая трансформация: огромное мускулистое тело, зеленная кожа, разорванная одежда.",
@@ -408,16 +408,50 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "neon skyline with moon",
         "comp": "half", "tone": "neon"
     },
-    "Харли-Квинн": {
-                                       "desc": "Аутентичный образ Харли Квинн: красно-черное комбинезон, грим арлекина, бейсбольная бита, хулиганский стиль.",
-                                       "role": "harley quinn character with full authentic appearance",
-                                       "outfit_f": "red and black harlequin jumpsuit, fishnet stockings, combat boots",
-                                       "outfit": "harley quinn inspired outfit with red and black colors",
-                                       "props": "baseball bat, giant mallet, playing cards, confetti explosion, ""Daddy's Little Monster"" shirt visible",
-                                       "bg": "graffiti-covered asylum or carnival alley",
-                                       "comp": "half", "tone": "neon",
-                                       "required_attributes": ["classic harley quinn makeup", "red and black color scheme", "harlequin pattern", "baseball bat or mallet"]
-                                   },
+"Харли-Квинн": {
+    "desc": (
+        "Динамичный образ дуэта из Готэма: "
+        "если женщина — харизматичная Харли Квинн, "
+        "если мужчина — безумный Джокер. "
+        "Яркие цвета, неон, безумие и шарм хаоса."
+    ),
+    "role": "Harley Quinn or Joker character portrait (auto by gender)",
+    "outfit_f": (
+        "red and black harlequin jumpsuit or short shorts with suspenders, "
+        "fishnet stockings, bomber jacket with patches, combat boots, "
+        "silver or gold jewelry, playful makeup"
+    ),
+    "outfit": (
+        "purple tailored suit with green shirt and tie, "
+        "sometimes open collar, leather gloves, "
+        "chaotic accessories, messy green hair"
+    ),
+    "props_f": (
+        "baseball bat with graffiti text, giant mallet, "
+        "spray paint can, confetti, ‘Daddy’s Little Monster’ shirt visible"
+    ),
+    "props": (
+        "joker playing cards floating in air, walking cane or knife, "
+        "green smoke or neon mist, graffiti laughter symbols in the background"
+    ),
+    "bg": (
+        "neon-lit Gotham alley or carnival, graffiti walls, "
+        "bright pink and blue lighting, chaotic spray paint patterns"
+    ),
+    "comp": "half",
+    "tone": "neon vibrant",
+    "required_attributes": [
+        "for female: harlequin makeup, red and black palette, baseball bat or mallet",
+        "for male: green hair, white face paint, red grin smile, purple suit"
+    ],
+    "force_keywords_f": [
+        "Harley Quinn style, playful, rebellious, red and black outfit, clown makeup, baseball bat, confetti explosion"
+    ],
+    "force_keywords_m": [
+        "Joker style, chaotic energy, purple suit, green hair, white face paint, sinister grin, playing cards"
+    ],
+    "negative": "no full body, no gore, no blood, no violence"
+},
     "Супергерой": {
         "desc": "Комиксовая динамика, контровой свет, гоночные неоны.",
         "role": "superhero in action pose",

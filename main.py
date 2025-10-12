@@ -1916,6 +1916,14 @@ async def start_generation_for_preset(
                         meta, gender, comp_text, tone_text, theme_boost,
                         natural, pretty, avatar_token
                     )
+                    # === Спецлогика для Харли Квинн / Джокера ===
+                    if preset == "Харли-Квинн":
+                        gender = (av.get("gender") or prof.get("gender") or "female").lower()
+                        if gender.startswith("f"):  # женщина
+                            prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
+                        else:  # мужчина
+                            prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
+
                     if extra_neg:
                         neg = _neg_with_gender(neg, extra_neg)
 
