@@ -418,13 +418,15 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "cool"
     },
     "Киборг": {
-        "desc": "Пол-лица человек, пол-лица андроид: швы, панели, подсветка.",
-        "role": "half-human half-android",
-        "outfit": "sleek outfit to frame the face",
-        "props": "exposed cybernetic plates on one side, glowing seams, micro panel gaps",
-        "bg": "clean lab bay or dark tech backdrop",
-        "comp": "half", "tone": "cool",
-        "allow_body_change": False
+        "desc": "Половина лица — биомеханика, половина — человек",
+        "role": "cinematic portrait with subtle sci-fi set dressing",
+        "props": "futuristic lab vibe, soft rim light",
+        "bg": "dark neutral background with faint tech bokeh",
+        "comp": "closeup",
+        "tone": "cool",
+        "cyborg_split": True,        # <— ключ-метка
+        "cyborg_side": "left",       # left/right (можешь сделать кнопкой позже)
+        "cyborg_feather": 72         # ширина мягкого шва
     },
 
     # ===== НОЧНЫЕ / УЖАСЫ / ГОТИКА =====
