@@ -799,7 +799,7 @@ def _identity_safe_tune(preset_key:str, guidance:float, comps:List[str]) -> Tupl
     return g, cc, IDENTITY_SAFE_NEG
 
 # ---------- Инференс/генерация ----------
-    def generate_from_finetune(
+def generate_from_finetune(
         model_slug: str,
         prompt: str,
         steps: int,
