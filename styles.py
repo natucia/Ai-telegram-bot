@@ -410,45 +410,49 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
     "Харли-Квинн": {
         "desc": (
-            "Образ дуэта безумия из Готэма: "
-            "если женщина — дерзкая Харли Квинн, "
-            "если мужчина — безумный Джокер с кроваво-красной улыбкой. "
-            "Яркие неоновые огни, граффити и атмосфера хаоса."
+            "Дуэт из Готэма: если женщина — Харли Квинн, если мужчина — Джокер. "
+            "Неоновый, дерзкий, по пояс."
         ),
-        "role": "Harley Quinn or Joker portrait (auto by gender)",
+        "role": "Harley Quinn or Joker portrait (auto by gender), waist-up, neon cinematic",
         "outfit_f": (
-            "red and black harlequin jumpsuit or cropped jacket with suspenders, "
-            "fishnet stockings, short shorts, combat boots, colorful tips in hair"
+            "red & black harlequin outfit (short jacket or jumpsuit), "
+            "fishnet stockings, combat boots, playful pigtails with colored tips"
         ),
         "outfit": (
-            "purple tailored suit, green shirt, sometimes with vest, "
-            "leather gloves, messy green hair slicked back, confident smirk"
+            "purple tailored suit, mustard vest, green shirt, leather gloves, "
+            "messy green hair slicked back"
         ),
         "props_f": (
-            "baseball bat with graffiti text, giant mallet, spray paint can, "
-            "‘Daddy’s Little Monster’ shirt, confetti, chaotic background lights"
+            "baseball bat with graffiti, giant mallet, spray paint, "
+            "‘Daddy’s Little Monster’ shirt, confetti"
         ),
         "props": (
-            "joker playing cards, cane or knife, graffiti laughter symbols, "
-            "neon smoke, cracked mirror reflections, chaotic lighting"
+            "joker playing cards, cane, neon smoke, graffiti laughter symbols"
         ),
         "bg": (
-            "neon-lit Gotham alley or nightclub, graffiti walls, "
-            "pink-blue lighting, smoke and chaos"
+            "neon-lit Gotham alley or club, graffiti walls, pink/blue rim light, haze"
         ),
-        "comp": "half",
+        "comp": "waistup",
         "tone": "neon vibrant",
-        "required_attributes": [
-            "for female: harlequin makeup, red and black outfit, baseball bat or mallet",
-            "for male: green hair, white face paint, red smeared lipstick smile, purple suit"
-        ],
+
+        # Женщина → Харли
         "force_keywords_f": [
-            "Harley Quinn style, playful chaotic energy, red and black outfit, clown makeup, baseball bat, colorful highlights in hair, confetti explosion"
+            "Harley Quinn style, harlequin clown makeup",
+            "red and black color scheme, playful rebellious attitude",
+            "baseball bat or oversized mallet",
+            "waist-up shot, not full body"
         ],
+
+        # Мужчина → Джокер (жёсткая фиксация грима!)
         "force_keywords_m": [
-            "Joker style, green hair slicked back, white face paint, bright red lipstick smile painted across cheeks, "
-            "smudged clown makeup, sinister grin, purple suit, chaos energy, neon lighting"
+            "Joker style, white painted clown face base",
+            "dark blue eye paint in triangle shapes above and below eyes",
+            "thick bright red lipstick painted in a wide grin extending across cheeks "
+            "beyond the natural lip line, clearly visible, smudged and messy",
+            "green hair, purple suit, sinister grin",
+            "waist-up shot, not full body"
         ],
+
         "negative": "no full body, no gore, no realistic blood, no violence"
     },
     "Супергерой": {
