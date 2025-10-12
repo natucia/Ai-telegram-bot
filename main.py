@@ -10,6 +10,11 @@
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 from typing import Union, IO
 Style = Dict[str, Any]
+from faceid_workflow_integration import (
+    start_generation_for_preset as start_generation_faceid,
+    on_user_upload_photo as on_user_upload_face,
+    training_poller_tick,
+)
 from styles import (
     STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST, SCENE_GUIDANCE, RISKY_PRESETS
 )
@@ -1307,24 +1312,28 @@ async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-    av_name = get_current_avatar_name(prof)
+    prof = load_profile(uid)
+    prof["_uid_hint"] = uid
+    save_profile(uid, prof)
 
-    if ENROLL_FLAG.get((uid, av_name)):
-        refs = list_ref_images(uid, av_name)
-        if len(refs) >= 10:
-            await update.message.reply_text("Уже 10/10. Нажми «Готово ✅»."); return
+    av_name = get_current_avatar_name(prof)  # <— без пробелов внутри имени!
 
-        f = await update.message.photo[-1].get_file()
+    # резолвер: байты из TG → STORAGE.save_ref_image → HTTPS URL
+    async def _resolve_direct_photo_url(update, context) -> str:
+        global STORAGE
+        f = await update.effective_message.photo[-1].get_file()
         data = await f.download_as_bytearray()
-        _ = STORAGE.save_ref_image(uid, av_name, bytes(data))
+        url = STORAGE.save_ref_image(uid, av_name, data)
+        return url
 
-        prof = load_profile(uid); av = get_avatar(prof, av_name)
-        av["images"] = list_ref_images(uid, av_name)
-        save_profile(uid, prof)
-        await update.message.reply_text(f"Сохранила ({len(refs)+1}/10) для «{av_name}». Ещё?")
-    else:
-        await update.message.reply_text("Сначала включи набор: «📸 Набор фото».")
+    await on_user_upload_face(
+        update, context,
+        load_profile, save_profile,
+        get_current_avatar_name, get_avatar,
+        _resolve_direct_photo_url,
+        start_lora_training
+    )
+
 
 # ---- Аватарные команды/утилиты ----
 def set_current_avatar(uid:int, name:str):
@@ -1676,111 +1685,12 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     preset = q.data.split(":",1)[1]
     await start_generation_for_preset(update, context, preset)
 
-async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
-                            uid = update.effective_user.id
-                            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                            av_name = get_current_avatar_name(prof)
-                            av = get_avatar(prof, av_name)
-
-                            if av.get("status") != "succeeded":
-                                await update.effective_message.reply_text(
-                                    f"Модель «{av_name}» ещё не готова. Нажми «🧪 Обучение», затем проверяй статус."
-                                )
-                                return
-
-                            # стиль и параметры
-                            meta = STYLE_PRESETS[preset]
-                            if FORCE_WAIST_UP:
-                                meta = dict(meta)
-                                meta["comps"] = [("half" if c == "full" else c) for c in meta.get("comps", []) if c in ("half","closeup")]
-                                if not meta["comps"]:
-                                    meta["comps"] = ["half","half","closeup"]
-
-                            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-                            natural = prof.get("natural", True)
-                            pretty  = prof.get("pretty", False)
-
-                            preset_key  = str(preset)
-                            tone_text   = _tone_text(meta.get("tone", "daylight"))
-                            theme_boost = _safe_theme_boost(THEME_BOOST.get(preset_key, ""))
-
-                            model_slug = _pinned_slug(av)
-
-                            guidance_val   = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
-                            guidance       = float(max(3.8, min(4.2, float(guidance_val))))
-                            steps          = 40
-                            variant_comps  = _variants_for_preset(meta)
-                            guidance, variant_comps, extra_neg = _identity_safe_tune(preset_key, guidance, variant_comps)
-
-                            # >>> FaceID: берём уже HTTPS/путь через хелпер (никаких bytes!)
-                            face_ref = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
-                            logger.info("FACEID FLAGS: enabled=%s, ref=%s", FACE_ID_ADAPTER_ENABLED, "SET" if face_ref else "NONE")
-
-                            await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
-                            await update.effective_message.reply_text(
-                                f"🎬 {preset}\nАватар: {av_name}\n{meta.get('desc', preset)}\n\nВарианты: {', '.join(variant_comps)}…"
-                            )
-
-                            lockface_on = av.get("lockface", True)
-                            token = av.get("token")
-                            base_seed = _stable_seed(token or "notoken", preset_key)
-
-                            try:
-                                async with GEN_SEMAPHORE:
-                                    for idx, comp_kind in enumerate(variant_comps, 1):
-                                        seed = (base_seed + idx) if lockface_on else random.randrange(2**32)
-                                        comp_text, (w, h) = _comp_text_and_size(comp_kind)
-
-                                        prompt_core, gender_negative = build_prompt(
-                                            meta, gender, comp_text, tone_text, theme_boost, natural, pretty, avatar_token=token
-                                        )
-
-                                        neg_base = _neg_with_gender(
-                                            NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind),
-                                            gender_negative
-                                        )
-                                        if FORCE_WAIST_UP:
-                                            neg_base = (neg_base + ", " + NO_FULL_BODY_NEG).strip(", ")
-                                        if extra_neg:
-                                            neg_base = (neg_base + ", " + extra_neg).strip(", ")
-
-                                        url = await asyncio.to_thread(
-                                            generate_from_finetune,
-                                            model_slug=model_slug,
-                                            prompt=prompt_core,
-                                            steps=steps,
-                                            guidance=guidance,
-                                            seed=seed,
-                                            w=w,
-                                            h=h,
-                                            negative_prompt=neg_base,
-                                            face_embedding_url=face_ref,  # <— ВАЖНО: URL/путь, не bytes
-                                        )
-
-                                        img_bytes = await asyncio.to_thread(_download_image_bytes, url)
-                                        bio = io.BytesIO(img_bytes)
-                                        im = Image.open(bio).convert("RGB")
-                                        im = _photo_look(im)
-                                        out_io = io.BytesIO()
-                                        im.save(out_io, "JPEG", quality=92)
-                                        out_io.seek(0); out_io.name = "image.jpg"
-
-                                        tag = "👤" if comp_kind == "closeup" else "🧍"
-                                        lock = "🔒" if lockface_on else "◻️"
-                                        faceid_flag = "👤" if (FACE_ID_ADAPTER_ENABLED and face_ref) else ""
-                                        caption = f"{preset} • {av_name} • {lock} {tag} {comp_kind} {faceid_flag} • {w}×{h}"
-                                        await update.effective_message.reply_photo(photo=out_io, caption=caption)
-
-                                await update.effective_message.reply_text(
-                                    f"✅ Готово! Face ID: {'ON' if (FACE_ID_ADAPTER_ENABLED and face_ref) else 'OFF/нет ref'}"
-                                )
-
-                            except Exception as e:
-                                logging.exception("generation failed")
-                                await update.effective_message.reply_text(f"Ошибка генерации: {e}")
-
-
-
+async def start_generation_for_preset(update, context, preset):
+    await start_generation_faceid(
+        update, context, preset,
+        STYLE_PRESETS,
+        load_profile, get_current_avatar_name, get_avatar
+    )
 
 
 # --- Toggles (пер-юзер) ---
@@ -1838,8 +1748,22 @@ def main():
         LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}", GEN_WIDTH, GEN_HEIGHT, GEN_STEPS, GEN_GUIDANCE,
         CONSISTENT_SCALE, FORCE_WAIST_UP, "S3" if USE_S3 else "FS", FACE_ID_ADAPTER_ENABLED
     )
+    import asyncio
 
-    app.run_polling(drop_pending_updates=True)
+async def poll_training_loop():
+        while True:
+            try:
+                await training_poller_tick(
+                    load_all_profiles, save_profile,
+                    get_current_avatar_name, get_avatar,
+                    check_lora_training_status
+                )
+            except Exception as e:
+                print("Ошибка в training_poller_tick:", e)
+            await asyncio.sleep(300)  # каждые 5 минут
+
+asyncio.create_task(poll_training_loop())
+app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
