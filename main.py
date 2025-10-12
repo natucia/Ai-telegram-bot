@@ -9,6 +9,7 @@
 
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 from typing import Union, IO
+Style = Dict[str, Any]
 from faceid_workflow_integration import (
     start_generation_for_preset as start_generation_faceid,
     on_user_upload_photo as on_user_upload_face,
@@ -17,8 +18,6 @@ from faceid_workflow_integration import (
 from styles import (
     STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST, SCENE_GUIDANCE, RISKY_PRESETS
 )
-
-Style = Dict[str, Any]
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, tempfile, hashlib, base64
 from pathlib import Path
 from zipfile import ZipFile, ZIP_STORED
@@ -1714,18 +1713,17 @@ async def natural_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- System ----------
 async def _post_init(app):
     await app.bot.delete_webhook(drop_pending_updates=True)
+    app.job_queue.run_repeating(_poller_job, interval=300, first=15)
 
 async def _poller_job(context: ContextTypes.DEFAULT_TYPE):
     await training_poller_tick(
         load_all_profiles, save_profile,
         get_current_avatar_name, get_avatar,
-        check_lora_training_status
+        check_training_status
     )
 
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(_post_init).build()
-    assert app.job_queue is not None
-    app.job_queue.run_repeating(_poller_job, interval=300, first=15)
 
     # Команды (оставлены для совместимости; UX — кнопками)
     app.add_handler(CommandHandler("start", start))
