@@ -418,28 +418,30 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "cool"
     },
     "Киборг": {
-        "desc": "Футуристический портрет: половина лица скрыта изящной механической маской с шестерёнками и голографическими элементами. Атмосфера — будущее, свет неоновых ламп и отражения металла.",
-        "role": "half-cybernetic portrait in futuristic sci-fi setting",
+        "desc": "Полу-киборг из будущего: половина лица из полированного металла, с микро-шестерёнками и неоновой подсветкой. Атмосфера — футуризм и технология, холодный блеск стали и синего света.",
+        "role": "half-cyborg portrait, cinematic sci-fi style",
         "outfit": (
-            "sleek minimalistic outfit or lab uniform with metallic accents, "
-            "thin fiber-optic strands woven into collar"
+            "fitted futuristic bodysuit or tactical uniform with metallic seams, "
+            "micro-LED threads along the collar, subtle armor texture"
         ),
         "props": (
-            "detachable half-face cyber mask on the {cy_side} side with tiny screws, "
-            "visible brass gears, chrome plates, faint blue circuit glow, "
-            "micro holographic display near the temple, thin straps behind the ear"
+            "half-face biomechanical shell with titanium plates, "
+            "small mechanical joints and bolts, visible servo seams, "
+            "thin glowing lines running under the skin, "
+            "fiber-optic implants and chrome cheek plates, "
+            "blue and violet reflections, cold light bounce on the metal"
         ),
         "bg": (
-            "dark futuristic laboratory interior with holographic interfaces, "
-            "transparent display panels, cold blue and violet backlight, "
-            "faint sparks of electricity and lens flares, volumetric light haze"
+            "dark high-tech corridor or research lab, "
+            "faint steam, holographic screens with schematics, "
+            "lens flares and neon reflections, volumetric light beams in mist"
         ),
         "comp": "closeup",
         "tone": "cool",
         "cyborg_split": True,
         "cyborg_mode": "mask",
         "cyborg_side": "left",
-        "cyborg_feather": 72,
+        "cyborg_feather": 72
     },
 
     # ===== НОЧНЫЕ / УЖАСЫ / ГОТИКА =====
