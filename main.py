@@ -799,75 +799,125 @@ def _identity_safe_tune(preset_key:str, guidance:float, comps:List[str]) -> Tupl
     return g, cc, IDENTITY_SAFE_NEG
 
 # ---------- Инференс/генерация ----------
-def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int,
-           w:int, h:int, negative_prompt:str, face_embedding_url:Optional[str]=None) -> str:
+def generate_from_finetune(
+    model_slug: str,
+    prompt: str,
+    steps: int,
+    guidance: float,
+    seed: int,
+    w: int,
+    h: int,
+    negative_prompt: str,
+    face_embedding_url: Optional[str] = None,
+) -> str:
+    """Универсальная генерация. Если включён FaceID и есть ref, идём через адаптер.
+       Иначе — обычный LoRA-инференс без адаптера.
+    """
     use_faceid = bool(FACE_ID_ADAPTER_ENABLED and face_embedding_url)
     logger.info("GEN: model=%s use_faceid=%s", model_slug, use_faceid)
 
     if use_faceid:
         return generate_with_face_id_adapter(
-    model_slug, prompt, steps, guidance, seed, w, h, negative_prompt, face_embedding_url
-    )
+            model_slug=model_slug,
+            prompt=prompt,
+            steps=steps,
+            guidance=guidance,
+            seed=seed,
+            w=w,
+            h=h,
+            negative_prompt=negative_prompt,
+            face_embedding_url=face_embedding_url,
+        )
 
-    # plain LoRA путь
+    # --- Plain LoRA (без адаптера)
     mv = resolve_model_version(model_slug)
-    out = _retry(lambda: replicate.run(mv, input={
-    "prompt": prompt + AESTHETIC_SUFFIX,
-    "negative_prompt": negative_prompt,
-    "width": w, "height": h,
-    "num_inference_steps": min(MAX_STEPS, steps),
-    "guidance_scale": guidance,
-    "seed": seed,
-    }), label="replicate_gen_plain")
+    out = _retry(
+        lambda: replicate.run(
+            mv,
+            input={
+                "prompt": prompt + AESTHETIC_SUFFIX,
+                "negative_prompt": negative_prompt,
+                "width": w,
+                "height": h,
+                "num_inference_steps": min(MAX_STEPS, steps),
+                "guidance_scale": guidance,
+                "seed": seed,
+            },
+        ),
+        label="replicate_gen_plain",
+    )
     url = extract_any_url(out)
     if not url:
         raise RuntimeError("Empty output (plain)")
     return url
 
 
-def generate_with_face_id_adapter(model_slug:str, prompt:str, steps:int, guidance:float, seed:int,
-                  w:int, h:int, negative_prompt:str, face_embedding_url:str) -> str:
-    mv = resolve_model_version(model_slug)
+def generate_with_face_id_adapter(
+        model_slug: str,
+        prompt: str,
+        steps: int,
+        guidance: float,
+        seed: int,
+        w: int,
+        h: int,
+        negative_prompt: str,
+        face_embedding_url: str,
+    ) -> str:
+        """Генерация c IP-Adapter FaceID. Пробуем разные имена входов (face_image/ip_adapter_image/id_image).
+           Если модель не принимает ни один ключ — кидаем понятную ошибку.
+        """
+        mv = resolve_model_version(model_slug)
 
-    def _face_input():
-        if isinstance(face_embedding_url, str) and face_embedding_url.startswith(("http://","https://")):
-            return face_embedding_url
-        try:
-                return
-                open(face_embedding_url, "rb")
-        except Exception:
-            return face_embedding_url
+        def _face_input():
+            # URL (https/s3/file) — отдадим как есть; локальный путь — откроем; иначе — чем богаты
+            if isinstance(face_embedding_url, str) and face_embedding_url.startswith(("http://", "https://", "s3://", "file://")):
+                return face_embedding_url
+            try:
+                return open(face_embedding_url, "rb")
+            except Exception:
+                return face_embedding_url
 
-    candidates = [
-    {"face_image": _face_input(), "ip_adapter_scale": FACE_ID_WEIGHT, "face_id_noise": FACE_ID_NOISE},
-    {"ip_adapter_image": _face_input(), "ip_adapter_scale": FACE_ID_WEIGHT, "face_id_noise": FACE_ID_NOISE},
-    {"id_image": _face_input(), "ip_adapter_scale": FACE_ID_WEIGHT, "face_id_noise": FACE_ID_NOISE},
-    ]
-    last_err = None
-    for idx, extra in enumerate(candidates, 1):
-        logger.info("FACE-ID TRY %d: model=%s keys=%s weight=%.2f noise=%.2f",
-    idx, model_slug, list(extra.keys()), FACE_ID_WEIGHT, FACE_ID_NOISE)
-        try:
-            out = _retry(lambda: replicate.run(mv, input={
-    "prompt": prompt + AESTHETIC_SUFFIX,
-    "negative_prompt": negative_prompt,
-    "width": w, "height": h,
-    "num_inference_steps": min(MAX_STEPS, steps),
-    "guidance_scale": guidance,
-    "seed": seed,
-        **extra,
-    }), label=f"replicate_gen_faceid_try{idx}")
-            url = extract_any_url(out)
-            if url:
-                logger.info("FACE-ID OK with keys=%s", list(extra.keys()))
-                return url
+        candidates = [
+            {"face_image": _face_input(), "ip_adapter_scale": FACE_ID_WEIGHT, "face_id_noise": FACE_ID_NOISE},
+            {"ip_adapter_image": _face_input(), "ip_adapter_scale": FACE_ID_WEIGHT, "face_id_noise": FACE_ID_NOISE},
+            {"id_image": _face_input(), "ip_adapter_scale": FACE_ID_WEIGHT, "face_id_noise": FACE_ID_NOISE},
+        ]
+
+        last_err = None
+        for idx, extra in enumerate(candidates, 1):
+            logger.info(
+                "FACE-ID TRY %d: model=%s keys=%s weight=%.2f noise=%.2f",
+                idx, model_slug, list(extra.keys()), FACE_ID_WEIGHT, FACE_ID_NOISE
+            )
+            try:
+                out = _retry(
+                    lambda: replicate.run(
+                        mv,
+                        input={
+                            "prompt": prompt + AESTHETIC_SUFFIX,
+                            "negative_prompt": negative_prompt,
+                            "width": w,
+                            "height": h,
+                            "num_inference_steps": min(MAX_STEPS, steps),
+                            "guidance_scale": guidance,
+                            "seed": seed,
+                            **extra,
+                        },
+                    ),
+                    label=f"replicate_gen_faceid_try{idx}",
+                )
+                url = extract_any_url(out)
+                if url:
+                    logger.info("FACE-ID OK with keys=%s", list(extra.keys()))
+                    return url
                 last_err = RuntimeError("Empty output with FACE-ID")
-        except Exception as e:
-            logger.warning("FACE-ID TRY %d failed: %s", idx, e)
-    last_err = e
+            except Exception as e:
+                logger.warning("FACE-ID TRY %d failed: %s", idx, e)
+                last_err = e
 
-    # сюда попадаем, когда модель вообще не принимает ни один ключ адаптера
-    raise RuntimeError(f"Face-ID not supported by model '{model_slug}' (last: {last_err})")
+        # Ни один ключ не подошёл — модель не поддерживает адаптер
+        raise RuntimeError(f"Face-ID not supported by model '{model_slug}' (last: {last_err})")
+
 
 # ---------- UI/KB ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
@@ -1582,144 +1632,142 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start_generation_for_preset(update, context, preset)
 
 async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
-                            uid = update.effective_user.id
-                            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                            av_name = get_current_avatar_name(prof)
-                            av = get_avatar(prof, av_name)
+    uid = update.effective_user.id
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+    av_name = get_current_avatar_name(prof)
+    av = get_avatar(prof, av_name)
 
-                            # модель должна быть обучена
-                            if av.get("status") != "succeeded":
-                                await update.effective_message.reply_text(
-                                    f"Модель «{av_name}» ещё не готова. Нажми «🧪 Обучение», затем проверяй статус."
-                                )
-                                return
+    # Модель должна быть готова
+    if av.get("status") != "succeeded":
+        await update.effective_message.reply_text(
+            f"Модель «{av_name}» ещё не готова. Нажми «🧪 Обучение», затем проверяй статус."
+        )
+        return
 
-                            # мета пресета + принудительное waist-up
-                            meta = STYLE_PRESETS[preset]
-                            if FORCE_WAIST_UP:
-                                meta = dict(meta)
-                                meta["comps"] = [("half" if c == "full" else c) for c in meta.get("comps", []) if c in ("half","closeup")]
-                                if not meta["comps"]:
-                                    meta["comps"] = ["half", "half", "closeup"]
+    # --- Метаданные стиля
+    meta = STYLE_PRESETS[preset]
+    if FORCE_WAIST_UP:
+        meta = dict(meta)
+        meta["comps"] = [("half" if c == "full" else c) for c in meta.get("comps", []) if c in ("half", "closeup")]
+        if not meta["comps"]:
+            meta["comps"] = ["half", "half", "closeup"]
 
-                            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-                            natural = prof.get("natural", True)
-                            pretty  = prof.get("pretty", False)
+    gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+    natural = prof.get("natural", True)
+    pretty  = prof.get("pretty", False)
 
-                            preset_key  = str(preset)
-                            tone_text   = _tone_text(meta.get("tone", "daylight"))
-                            theme_boost = _safe_theme_boost(THEME_BOOST.get(preset_key, ""))
+    preset_key = str(preset)
+    tone_text  = _tone_text(meta.get("tone", "daylight"))
+    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset_key, ""))
 
-                            # слуг натренированной модели (с учётом закреплённой версии)
-                            model_slug = _pinned_slug(av)
-                            if not model_slug:
-                                await update.effective_message.reply_text("Не нашла обученную модель. Открой «ℹ️ Мой статус» и проверь training = succeeded.")
-                                return
+    # Пин на версию модели (LoRA-слуг)
+    model_slug = _pinned_slug(av)
 
-                            # guidance/steps/варианты + identity-safe тюнинг
-                            guidance_val   = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
-                            guidance       = float(max(3.8, min(4.2, float(guidance_val))))
-                            steps          = 40
-                            variant_comps  = _variants_for_preset(meta)
-                            guidance, variant_comps, extra_neg = _identity_safe_tune(preset_key, guidance, variant_comps)
+    # Guidance/steps/композиции
+    guidance_val = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
+    guidance = float(max(3.8, min(4.2, float(guidance_val))))
+    steps = 40
+    variant_comps = _variants_for_preset(meta)
+    guidance, variant_comps, extra_neg = _identity_safe_tune(preset_key, guidance, variant_comps)
 
-                            await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
-                            desc = meta.get("desc", preset)
-                            await update.effective_message.reply_text(
-                                f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nВарианты: {', '.join(variant_comps)}…"
-                            )
+    # --- FaceID reference: берём реальное лицо (картинку), а не «эмбеддинг URL»
+    face_ref = None
+    if FACE_ID_ADAPTER_ENABLED:
+        refs = list_ref_images(uid, av_name)
+        if refs:
+            try:
+                # локальную копию (если S3) — чтобы можно было передать как файл
+                face_ref = STORAGE.get_local_copy(refs[0])
+            except Exception:
+                # если это уже https:// или s3 presigned — оставим как есть
+                face_ref = refs[0]
+    logger.info("FACEID FLAGS: enabled=%s, ref=%s",
+                FACE_ID_ADAPTER_ENABLED, ("SET" if face_ref else "NONE"))
 
-                            lockface_on = av.get("lockface", True)
-                            token       = av.get("token")
-                            base_seed   = _stable_seed(token or "notoken", preset_key)
+    # (опционально) форсим инференс через FaceID-совместимый пайплайн
+    force_faceid = os.getenv("FORCE_FACEID_INFERENCE", "0").lower() in ("1","true","yes","y")
+    if force_faceid:
+        model_slug = os.getenv("FACE_ID_INFERENCE_SLUG", "lucataco/ip-adapter-faceid").strip()
+        logger.info("DEBUG: forcing FaceID inference via %s", model_slug)
 
-                            # --- Face ID embedding: один для всех кадров ---
-                            face_embedding_url: Optional[str] = None
-                            if FACE_ID_ADAPTER_ENABLED:
-                                face_embedding_url = (av.get("face_embedding") or "").strip()
-                                if not face_embedding_url:
-                                    try:
-                                        await asyncio.to_thread(prepare_face_embedding, uid, av_name)
-                                        # перечитываем профиль, чтобы увидеть свежее значение
-                                        prof = load_profile(uid); av = get_avatar(prof, av_name)
-                                        face_embedding_url = (av.get("face_embedding") or "").strip()
-                                    except Exception as e:
-                                        logger.warning("prepare_face_embedding failed: %s", e)
+    # UX-сообщение
+    await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
+    desc = meta.get("desc", preset)
+    await update.effective_message.reply_text(
+        f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nВарианты: {', '.join(variant_comps)}…"
+    )
 
-                            # лог/уведомление про адаптер
-                            if FACE_ID_ADAPTER_ENABLED and face_embedding_url:
-                                logger.info(f"🚀 GENERATING {len(variant_comps)} IMAGES WITH FACE ID ADAPTER")
-                                await update.effective_message.reply_text(
-                                    f"👤 Использую Face ID адаптер для всех {len(variant_comps)} изображений"
-                                )
-                            else:
-                                logger.info(f"⚡ GENERATING {len(variant_comps)} IMAGES WITHOUT ADAPTER")
-                                if FACE_ID_ADAPTER_ENABLED and not face_embedding_url:
-                                    await update.effective_message.reply_text("⚠️ Face ID включен, но embedding не найден. Генерация без адаптера.")
+    # Лок-фейс/токен/seed
+    lockface_on = av.get("lockface", True)
+    token = av.get("token")
+    base_seed = _stable_seed(token or "notoken", preset_key)
 
-                            try:
-                                async with GEN_SEMAPHORE:
-                                    for idx, comp_kind in enumerate(variant_comps, 1):
-                                        seed = (base_seed + idx) if lockface_on else random.randrange(2**32)
-                                        comp_text, (w, h) = _comp_text_and_size(comp_kind)
+    try:
+        async with GEN_SEMAPHORE:
+            for idx, comp_kind in enumerate(variant_comps, 1):
+                seed = (base_seed + idx) if lockface_on else random.randrange(2**32)
 
-                                        prompt_core, gender_negative = build_prompt(
-                                            meta, gender, comp_text, tone_text, theme_boost, natural, pretty, avatar_token=(av.get("token") or "")
-                                        )
+                comp_text, (w, h) = _comp_text_and_size(comp_kind)
+                prompt_core, gender_negative = build_prompt(
+                    meta, gender, comp_text, tone_text, theme_boost, natural, pretty, avatar_token=token
+                )
 
-                                        neg_base = _neg_with_gender(
-                                            NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind),
-                                            gender_negative
-                                        )
-                                        if FORCE_WAIST_UP:
-                                            neg_base = (neg_base + ", " + NO_FULL_BODY_NEG).strip(", ")
-                                        if extra_neg:
-                                            neg_base = (neg_base + ", " + extra_neg).strip(", ")
+                neg_base = _neg_with_gender(
+                    NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind),
+                    gender_negative
+                )
+                if FORCE_WAIST_UP:
+                    neg_base = (neg_base + ", " + NO_FULL_BODY_NEG).strip(", ")
+                if extra_neg:
+                    neg_base = (neg_base + ", " + extra_neg).strip(", ")
 
-                                        url = await asyncio.to_thread(
-                                            generate_from_finetune,
-                                            model_slug=model_slug,
-                                            prompt=prompt_core,
-                                            steps=steps,
-                                            guidance=guidance,
-                                            seed=seed,
-                                            w=w,
-                                            h=h,
-                                            negative_prompt=neg_base,
-                                            face_embedding_url=face_embedding_url  # один и тот же embedding на все варианты
-                                        )
+                # Диагностика перед вызовом
+                logger.info("GEN: model=%s use_faceid=%s", model_slug, bool(FACE_ID_ADAPTER_ENABLED and face_ref))
 
-                                        tag = "👤" if comp_kind == "closeup" else "🧍"
-                                        lock = "🔒" if lockface_on else "◻️"
-                                        faceid_indicator = "👤" if (FACE_ID_ADAPTER_ENABLED and face_embedding_url) else ""
-                                        caption = f"{preset} • {av_name} • {lock} {tag} {comp_kind} {faceid_indicator} • {w}×{h}"
+                # Генерация (передаём одно и то же face_ref для всех кадров)
+                url = await asyncio.to_thread(
+                    generate_from_finetune,
+                    model_slug=model_slug,
+                    prompt=prompt_core,
+                    steps=steps,
+                    guidance=guidance,
+                    seed=seed,
+                    w=w,
+                    h=h,
+                    negative_prompt=neg_base,
+                    face_embedding_url=face_ref,  # <-- вот это важно
+                )
 
-                                        img_bytes = await asyncio.to_thread(_download_image_bytes, url)
-                                        bio = io.BytesIO(img_bytes)
-                                        im = Image.open(bio).convert("RGB")
-                                        im = _photo_look(im)
-                                        out_io = io.BytesIO()
-                                        im.save(out_io, "JPEG", quality=92)
-                                        out_io.seek(0); out_io.name = "image.jpg"
-                                        await update.effective_message.reply_photo(photo=out_io, caption=caption)
+                # Отправка результата
+                tag = "👤" if comp_kind == "closeup" else "🧍"
+                lock = "🔒" if lockface_on else "◻️"
+                faceid_flag = "👤" if (FACE_ID_ADAPTER_ENABLED and face_ref) else ""
+                caption = f"{preset} • {av_name} • {lock} {tag} {comp_kind} {faceid_flag} • {w}×{h}"
 
-                                # финальное сообщение
-                                if FACE_ID_ADAPTER_ENABLED and face_embedding_url:
-                                    await update.effective_message.reply_text(
-                                        f"✅ Готово! Все {len(variant_comps)} изображения сгенерированы с Face ID адаптером.\n"
-                                        f"Вес адаптера: {FACE_ID_WEIGHT}"
-                                    )
-                                else:
-                                    await update.effective_message.reply_text(
-                                        f"✅ Готово! Все {len(variant_comps)} изображения сгенерированы.\n"
-                                        f"Face ID адаптер: {'выключен' if not FACE_ID_ADAPTER_ENABLED else 'нет embedding'}"
-                                    )
+                img_bytes = await asyncio.to_thread(_download_image_bytes, url)
+                bio = io.BytesIO(img_bytes)
+                im = Image.open(bio).convert("RGB")
+                im = _photo_look(im)
+                out_io = io.BytesIO()
+                im.save(out_io, "JPEG", quality=92)
+                out_io.seek(0); out_io.name = "image.jpg"
+                await update.effective_message.reply_photo(photo=out_io, caption=caption)
 
-                            except Exception as e:
-                                logging.exception("generation failed")
-                                await update.effective_message.reply_text(f"Ошибка генерации: {e}")
+            # Финальное сообщение
+            if FACE_ID_ADAPTER_ENABLED and face_ref:
+                await update.effective_message.reply_text(
+                    f"✅ Готово! Все {len(variant_comps)} изображения сгенерированы с Face ID адаптером.\n"
+                    f"Вес: {FACE_ID_WEIGHT} • Шум: {FACE_ID_NOISE}"
+                )
+            else:
+                await update.effective_message.reply_text(
+                    f"✅ Готово! Все {len(variant_comps)} изображения сгенерированы.\n"
+                    f"Face ID: {'выключен' if not FACE_ID_ADAPTER_ENABLED else 'нет ref-фото'}"
+                )
 
-
+    except Exception as e:
+        logging.exception("generation failed")
+        await update.effective_message.reply_text(f"Ошибка генерации: {e}")
 
 
 # --- Toggles (пер-юзер) ---
