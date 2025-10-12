@@ -922,7 +922,7 @@ def generate_with_face_id_adapter(
         return url
 
     raise RuntimeError(f"Empty output with FACE-ID (model={model_slug})")
-p
+
 # ---------- UI/KB ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
     rows = [
@@ -1717,8 +1717,7 @@ async def start_generation_for_preset(update: Update, context: ContextTypes.DEFA
             await update.effective_message.reply_text(
                 f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nВарианты: {', '.join(variant_comps)}…"
             )
-
-            lockface_on = av.get("lockface", True)
+    lockface_on = av.get("lockface", True)
             token = av.get("token")
             base_seed = _stable_seed(token or "notoken", preset_key)
 
