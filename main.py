@@ -462,6 +462,61 @@ def save_profile(uid:int, prof:Dict[str,Any]):
         user_dir(uid).mkdir(parents=True, exist_ok=True)
         profile_path(uid).write_text(json.dumps(prof, ensure_ascii=False))
 
+# --- Итерация по всем профилям (для фонового поллера) ---
+
+def load_all_profiles() -> Iterable[Tuple[int, Dict[str, Any]]]:
+    """
+    Возвращает пары (uid, profile) для ВСЕХ пользователей.
+    Работает и с Redis, и с файловым хранилищем.
+    """
+    results: List[Tuple[int, Dict[str, Any]]] = []
+
+    if _redis:
+        try:
+            # SCAN по ключам вида "profile:<uid>"
+            for key in _redis.scan_iter(match="profile:*", count=100):
+                try:
+                    uid_str = str(key).split(":", 1)[1]
+                    uid = int(uid_str)
+                except Exception:
+                    continue
+                try:
+                    raw = _redis.get(key)
+                    if not raw:
+                        continue
+                    prof = {**DEFAULT_PROFILE, **json.loads(raw)}
+                    prof = _migrate_single_to_multi(uid, prof)
+                    results.append((uid, prof))
+                except Exception as e:
+                    logger.warning("load_all_profiles[redis] skip %r: %s", key, e)
+        except Exception as e:
+            logger.warning("load_all_profiles[redis] failed: %s", e)
+
+    else:
+        # Файловый режим: пробегаем папку profiles/
+        try:
+            if DATA_DIR.exists():
+                for p in DATA_DIR.iterdir():
+                    if not p.is_dir():
+                        continue
+                    try:
+                        uid = int(p.name)
+                    except Exception:
+                        continue
+                    prof_path = p / "profile.json"
+                    if not prof_path.exists():
+                        continue
+                    try:
+                        prof = {**DEFAULT_PROFILE, **json.loads(prof_path.read_text())}
+                        prof = _migrate_single_to_multi(uid, prof)
+                        results.append((uid, prof))
+                    except Exception as e:
+                        logger.warning("load_all_profiles[fs] skip %s: %s", prof_path, e)
+        except Exception as e:
+            logger.warning("load_all_profiles[fs] failed: %s", e)
+
+    return results
+
 def delete_profile(uid:int):
     if _redis:
         with contextlib.suppress(Exception):
