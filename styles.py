@@ -455,43 +455,37 @@ STYLE_PRESETS: Dict[str, Style] = {
 
     # ===== НОЧНЫЕ / УЖАСЫ / ГОТИКА =====
     "Вампирский бал": {
-        "desc": "Готическая элегантность с обязательными вампирскими чертами: острые клыки, сияющие красные глаза, аристократическая бледность. Атмосфера — таинственный бал под лунным светом и свечами.",
+        "desc": "Готическая элегантность с обязательными вампирскими чертами: острые клыки и красные глаза. Атмосфера – мистический бал под лунным светом и свечами.",
         "role": "vampire aristocrat attending a gothic masquerade ball",
         "outfit_f": (
-            "dark velvet or lace gown with corset, "
-            "gothic jewelry, subtle shimmer, "
-            "deep neckline with silver pendant shaped like a cross or rose"
+            "dark velvet or lace gown with corset, silver jewelry, "
+            "delicate gothic accessories"
         ),
         "outfit": (
-            "black or crimson tailcoat with embroidered collar, "
-            "high cravat, gloves, gothic brooch"
+            "black or crimson tailcoat with embroidered collar, cravat, "
+            "leather gloves, subtle sheen fabric"
         ),
         "props": (
-            "clearly visible sharp fangs slightly revealed in half-smile, "
+            "slightly elongated canine teeth visible even when lips closed, "
             "crimson glowing eyes reflecting candlelight, "
-            "ornate goblet with mysterious red drink, "
-            "silver candelabra, dark roses, scattered petals, "
-            "mist swirling on the marble floor"
+            "goblet with dark red drink, candelabra, roses, wax drips"
         ),
         "bg": (
-            "lavish gothic ballroom with chandeliers, "
-            "stained glass windows, candlelight flicker, "
-            "moonlight streaming through tall arches, "
-            "soft fog and golden dust particles in the air"
+            "lavish gothic ballroom illuminated by candles, "
+            "crimson drapes, moonlight through stained glass, "
+            "mist and golden dust in the air"
         ),
         "comp": "half",
         "tone": "noir",
         "required_attributes": [
-            "sharp fangs",
-            "crimson glowing eyes",
-            "pale aristocratic skin",
-            "gothic elegance",
-            "candlelight reflections"
+            "sharp elongated fangs",
+            "glowing crimson eyes",
+            "pale aristocratic skin"
         ],
         "force_keywords": [
-            "visible vampire fangs",
-            "glowing red eyes",
-            "pale luminous skin"
+            "sharp visible vampire fangs",
+            "slightly open mouth showing fangs",
+            "glowing red eyes under candlelight"
         ]
     },
     "Зомби-апокалипсис (кино)": {
