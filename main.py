@@ -799,70 +799,75 @@ def _identity_safe_tune(preset_key:str, guidance:float, comps:List[str]) -> Tupl
     return g, cc, IDENTITY_SAFE_NEG
 
 # ---------- Инференс/генерация ----------
-def generate_with_face_id_adapter(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, 
-          w:int, h:int, negative_prompt:str, face_embedding_url:str) -> str:
+def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int,
+           w:int, h:int, negative_prompt:str, face_embedding_url:Optional[str]=None) -> str:
+    use_faceid = bool(FACE_ID_ADAPTER_ENABLED and face_embedding_url)
+    logger.info("GEN: model=%s use_faceid=%s", model_slug, use_faceid)
+
+    if use_faceid:
+        return generate_with_face_id_adapter(
+    model_slug, prompt, steps, guidance, seed, w, h, negative_prompt, face_embedding_url
+    )
+
+    # plain LoRA путь
     mv = resolve_model_version(model_slug)
-
-    def _input_face():
-    # Если это presigned HTTPS — отдаём строку; если локальный путь — откроем файл
-        if isinstance(face_embedding_url, str) and face_embedding_url.startswith("http"):
-            return face_embedding_url
-        try:
-            return open(face_embedding_url, "rb")
-        except Exception:
-            return face_embedding_url  # на всякий случай
-
-    def _run():
-        return replicate.run(mv, input={
+    out = _retry(lambda: replicate.run(mv, input={
     "prompt": prompt + AESTHETIC_SUFFIX,
     "negative_prompt": negative_prompt,
-    "width": w,
-    "height": h,
+    "width": w, "height": h,
     "num_inference_steps": min(MAX_STEPS, steps),
     "guidance_scale": guidance,
     "seed": seed,
-    # ключи как в IP-Adapter FaceID-пайплайне
-    "ip_adapter_scale": FACE_ID_WEIGHT,
-    "face_image": _input_face(),
-    "face_id_noise": FACE_ID_NOISE,
-    })
-
-    out = _retry(_run, label="replicate_gen_faceid")
+    }), label="replicate_gen_plain")
     url = extract_any_url(out)
     if not url:
-        raise RuntimeError("Empty output from Face ID generation")
+        raise RuntimeError("Empty output (plain)")
     return url
 
 
-def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, 
-                          w:int, h:int, negative_prompt:str, face_embedding_url:Optional[str]=None) -> str:
-    """Универсальная функция генерации с поддержкой Face ID adapter"""
-
-    # Если включен Face ID adapter и есть embedding, используем его
-    if FACE_ID_ADAPTER_ENABLED and face_embedding_url:
-        return generate_with_face_id_adapter(
-            model_slug, prompt, steps, guidance, seed, w, h, negative_prompt, face_embedding_url
-        )
-
-    # Стандартная генерация без Face ID
+def generate_with_face_id_adapter(model_slug:str, prompt:str, steps:int, guidance:float, seed:int,
+                  w:int, h:int, negative_prompt:str, face_embedding_url:str) -> str:
     mv = resolve_model_version(model_slug)
 
-    def _run():
-        return replicate.run(mv, input={
-            "prompt": prompt + AESTHETIC_SUFFIX,
-            "negative_prompt": negative_prompt,
-            "width": w,
-            "height": h,
-            "num_inference_steps": min(MAX_STEPS, steps),
-            "guidance_scale": guidance,
-            "seed": seed,
-        })
+    def _face_input():
+        if isinstance(face_embedding_url, str) and face_embedding_url.startswith(("http://","https://")):
+            return face_embedding_url
+        try:
+                return
+                open(face_embedding_url, "rb")
+        except Exception:
+            return face_embedding_url
 
-    out = _retry(_run, label="replicate_gen")
-    url = extract_any_url(out)
-    if not url:
-        raise RuntimeError("Empty output")
-    return url
+    candidates = [
+    {"face_image": _face_input(), "ip_adapter_scale": FACE_ID_WEIGHT, "face_id_noise": FACE_ID_NOISE},
+    {"ip_adapter_image": _face_input(), "ip_adapter_scale": FACE_ID_WEIGHT, "face_id_noise": FACE_ID_NOISE},
+    {"id_image": _face_input(), "ip_adapter_scale": FACE_ID_WEIGHT, "face_id_noise": FACE_ID_NOISE},
+    ]
+    last_err = None
+    for idx, extra in enumerate(candidates, 1):
+        logger.info("FACE-ID TRY %d: model=%s keys=%s weight=%.2f noise=%.2f",
+    idx, model_slug, list(extra.keys()), FACE_ID_WEIGHT, FACE_ID_NOISE)
+        try:
+            out = _retry(lambda: replicate.run(mv, input={
+    "prompt": prompt + AESTHETIC_SUFFIX,
+    "negative_prompt": negative_prompt,
+    "width": w, "height": h,
+    "num_inference_steps": min(MAX_STEPS, steps),
+    "guidance_scale": guidance,
+    "seed": seed,
+        **extra,
+    }), label=f"replicate_gen_faceid_try{idx}")
+            url = extract_any_url(out)
+            if url:
+                logger.info("FACE-ID OK with keys=%s", list(extra.keys()))
+                return url
+                last_err = RuntimeError("Empty output with FACE-ID")
+        except Exception as e:
+            logger.warning("FACE-ID TRY %d failed: %s", idx, e)
+    last_err = e
+
+    # сюда попадаем, когда модель вообще не принимает ни один ключ адаптера
+    raise RuntimeError(f"Face-ID not supported by model '{model_slug}' (last: {last_err})")
 
 # ---------- UI/KB ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
