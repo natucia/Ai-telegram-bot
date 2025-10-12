@@ -408,50 +408,49 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "neon skyline with moon",
         "comp": "half", "tone": "neon"
     },
-"Харли-Квинн": {
-    "desc": (
-        "Динамичный образ дуэта из Готэма: "
-        "если женщина — харизматичная Харли Квинн, "
-        "если мужчина — безумный Джокер. "
-        "Яркие цвета, неон, безумие и шарм хаоса."
-    ),
-    "role": "Harley Quinn or Joker character portrait (auto by gender)",
-    "outfit_f": (
-        "red and black harlequin jumpsuit or short shorts with suspenders, "
-        "fishnet stockings, bomber jacket with patches, combat boots, "
-        "silver or gold jewelry, playful makeup"
-    ),
-    "outfit": (
-        "purple tailored suit with green shirt and tie, "
-        "sometimes open collar, leather gloves, "
-        "chaotic accessories, messy green hair"
-    ),
-    "props_f": (
-        "baseball bat with graffiti text, giant mallet, "
-        "spray paint can, confetti, ‘Daddy’s Little Monster’ shirt visible"
-    ),
-    "props": (
-        "joker playing cards floating in air, walking cane or knife, "
-        "green smoke or neon mist, graffiti laughter symbols in the background"
-    ),
-    "bg": (
-        "neon-lit Gotham alley or carnival, graffiti walls, "
-        "bright pink and blue lighting, chaotic spray paint patterns"
-    ),
-    "comp": "half",
-    "tone": "neon vibrant",
-    "required_attributes": [
-        "for female: harlequin makeup, red and black palette, baseball bat or mallet",
-        "for male: green hair, white face paint, red grin smile, purple suit"
-    ],
-    "force_keywords_f": [
-        "Harley Quinn style, playful, rebellious, red and black outfit, clown makeup, baseball bat, confetti explosion"
-    ],
-    "force_keywords_m": [
-        "Joker style, chaotic energy, purple suit, green hair, white face paint, sinister grin, playing cards"
-    ],
-    "negative": "no full body, no gore, no blood, no violence"
-},
+    "Харли-Квинн": {
+        "desc": (
+            "Образ дуэта безумия из Готэма: "
+            "если женщина — дерзкая Харли Квинн, "
+            "если мужчина — безумный Джокер с кроваво-красной улыбкой. "
+            "Яркие неоновые огни, граффити и атмосфера хаоса."
+        ),
+        "role": "Harley Quinn or Joker portrait (auto by gender)",
+        "outfit_f": (
+            "red and black harlequin jumpsuit or cropped jacket with suspenders, "
+            "fishnet stockings, short shorts, combat boots, colorful tips in hair"
+        ),
+        "outfit": (
+            "purple tailored suit, green shirt, sometimes with vest, "
+            "leather gloves, messy green hair slicked back, confident smirk"
+        ),
+        "props_f": (
+            "baseball bat with graffiti text, giant mallet, spray paint can, "
+            "‘Daddy’s Little Monster’ shirt, confetti, chaotic background lights"
+        ),
+        "props": (
+            "joker playing cards, cane or knife, graffiti laughter symbols, "
+            "neon smoke, cracked mirror reflections, chaotic lighting"
+        ),
+        "bg": (
+            "neon-lit Gotham alley or nightclub, graffiti walls, "
+            "pink-blue lighting, smoke and chaos"
+        ),
+        "comp": "half",
+        "tone": "neon vibrant",
+        "required_attributes": [
+            "for female: harlequin makeup, red and black outfit, baseball bat or mallet",
+            "for male: green hair, white face paint, red smeared lipstick smile, purple suit"
+        ],
+        "force_keywords_f": [
+            "Harley Quinn style, playful chaotic energy, red and black outfit, clown makeup, baseball bat, colorful highlights in hair, confetti explosion"
+        ],
+        "force_keywords_m": [
+            "Joker style, green hair slicked back, white face paint, bright red lipstick smile painted across cheeks, "
+            "smudged clown makeup, sinister grin, purple suit, chaos energy, neon lighting"
+        ],
+        "negative": "no full body, no gore, no realistic blood, no violence"
+    },
     "Супергерой": {
         "desc": "Комиксовая динамика, контровой свет, гоночные неоны.",
         "role": "superhero in action pose",
