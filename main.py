@@ -1807,73 +1807,84 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     preset = q.data.split(":",1)[1]
     await start_generation_for_preset(update, context, preset)
 
-    # === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url ===
+# === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ===
 async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
-        uid = update.effective_user.id
-        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-        av_name = get_current_avatar_name(prof)
-        av = get_avatar(prof, av_name)
+    uid = update.effective_user.id
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+    av_name = get_current_avatar_name(prof)
+    av = get_avatar(prof, av_name)
 
-        # модель готова?
-        if av.get("status") != "succeeded":
-            await update.effective_message.reply_text(
-                f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+    # проверка готовности модели
+    if av.get("status") != "succeeded":
+        await update.effective_message.reply_text(
+            f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+        )
+        return
+
+    # закреплённый слаг версии
+    model_slug = _pinned_slug(av) or av.get("finetuned_model")
+    if not model_slug:
+        await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
+        return
+
+    # метаданные стиля
+    if preset not in STYLE_PRESETS:
+        await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
+        return
+    meta = STYLE_PRESETS[preset]
+
+    gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+    natural = bool(prof.get("natural", True))
+    pretty  = bool(prof.get("pretty", False))
+    avatar_token = av.get("token", "")
+
+    # композиции и identity-safe твики
+    comps = _variants_for_preset(meta)           # может вернуть ["half","half","closeup"]
+    guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
+
+    # FaceID: ссылка/путь; если нет — сгеним без него
+    face_ref = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
+
+    await update.effective_message.reply_text(f"Генерирую «{preset}»…")
+    sent = 0
+
+    # ВАЖНО: используем enumerate и добавляем индекс в сид (и чуть варьируем comp_text)
+    for i, comp in enumerate(comps):
+        try:
+            comp_text, (w, h) = _comp_text_and_size(comp)
+
+            # лёгкая вариация для устранения кэша при одинаковых comp
+            if comp == "half" and i % 2 == 1:
+                comp_text += ", camera slightly closer, gentle 5° head turn"
+            elif comp == "closeup" and i % 2 == 1:
+                comp_text += ", micro-reframe, eyes focus a touch brighter"
+
+            tone_text   = _tone_text(meta.get("tone", ""))
+            theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
+
+            prompt, neg = build_prompt(
+                meta, gender, comp_text, tone_text, theme_boost,
+                natural, pretty, avatar_token
             )
-            return
+            if extra_neg:
+                neg = _neg_with_gender(neg, extra_neg)
 
-        # модельный слаг (прибитая версия)
-        model_slug = _pinned_slug(av) or av.get("finetuned_model")
-        if not model_slug:
-            await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
-            return
+            # УНИКАЛЬНЫЙ сид на каждый кадр (фикс дублей)
+            seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
 
-        # мета стиля
-        if preset not in STYLE_PRESETS:
-            await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
-            return
-        meta = STYLE_PRESETS[preset]
+            url = await asyncio.to_thread(
+                generate_from_finetune,
+                model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
+            )
+            await update.effective_message.reply_photo(url)
+            sent += 1
 
-        gender = (av.get("gender") or prof.get("gender") or "female").lower()
-        natural = bool(prof.get("natural", True))
-        pretty = bool(prof.get("pretty", False))
-        avatar_token = av.get("token", "")
+        except Exception as e:
+            logger.exception("gen failed for comp=%s", comp)
+            await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
 
-        # вариации композиции + identity-safe твики
-        comps = _variants_for_preset(meta)
-        guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
-
-        # FaceID: подготовим ссылку/путь; если не получилось — просто сгеним без него
-        face_ref = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
-
-        await update.effective_message.reply_text(f"Генерирую «{preset}»…")
-        sent = 0
-        for comp in comps:
-            try:
-                comp_text, (w, h) = _comp_text_and_size(comp)
-                tone_text = _tone_text(meta.get("tone", ""))
-                theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
-
-                prompt, neg = build_prompt(
-                    meta, gender, comp_text, tone_text, theme_boost,
-                    natural, pretty, avatar_token
-                )
-                if extra_neg:
-                    neg = _neg_with_gender(neg, extra_neg)
-
-                seed = _stable_seed(str(uid), av_name, preset, comp)
-                url = await asyncio.to_thread(
-                    generate_from_finetune,
-                    model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
-                )
-                await update.effective_message.reply_photo(url)
-                sent += 1
-            except Exception as e:
-                logger.exception("gen failed for comp=%s", comp)
-                await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
-
-        if sent == 0:
-            await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
-
+    if sent == 0:
+        await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
 
 
 # --- Toggles (пер-юзер) ---
