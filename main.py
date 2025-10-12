@@ -1161,48 +1161,50 @@ async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- Face ID Callback ----------
 async def face_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = update.effective_user.id
-    prof = load_profile(uid)
-    av_name = get_current_avatar_name(prof)
-    av = get_avatar(prof, av_name)
+            q = update.callback_query
+            await q.answer()
+            uid = update.effective_user.id
+            prof = load_profile(uid)
+            av_name = get_current_avatar_name(prof)
+            av = get_avatar(prof, av_name)
 
-    parts = q.data.split(":")
-    action = parts[1] if len(parts) > 1 else ""
+            parts = q.data.split(":")
+            action = parts[1] if len(parts) > 1 else ""
 
-    if action == "enable":
-        global FACE_ID_ADAPTER_ENABLED
-        FACE_ID_ADAPTER_ENABLED = True
-        await q.message.reply_text("✅ Face ID adapter включен", reply_markup=face_id_toggle_kb())
+            if action == "enable":
+                global FACE_ID_ADAPTER_ENABLED
+                FACE_ID_ADAPTER_ENABLED = True
+                await _edit_or_reply(q.message, "✅ Face ID adapter включен", reply_markup=face_id_toggle_kb())
 
-    elif action == "disable":
-        FACE_ID_ADAPTER_ENABLED = False
-        await q.message.reply_text("❌ Face ID adapter выключен", reply_markup=face_id_toggle_kb())
+            elif action == "disable":
+                FACE_ID_ADAPTER_ENABLED = False
+                await _edit_or_reply(q.message, "❌ Face ID adapter выключен", reply_markup=face_id_toggle_kb())
 
-    elif action == "refresh":
-        await q.message.reply_text("🔄 Обновляю Face ID embedding...")
-        try:
-            embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
-            if embedding:
-                await q.message.reply_text("✅ Face ID embedding обновлен", reply_markup=face_id_toggle_kb())
+            elif action == "refresh":
+                # показываем прогресс в том же сообщении
+                msg = await _edit_or_reply(q.message, "🔄 Обновляю Face ID embedding…", reply_markup=None)
+                try:
+                    embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
+                    if embedding:
+                        await _edit_or_reply(msg, "✅ Face ID embedding обновлён", reply_markup=face_id_toggle_kb())
+                    else:
+                        await _edit_or_reply(msg, "❌ Не удалось обновить Face ID embedding", reply_markup=face_id_toggle_kb())
+                except Exception as e:
+                    await _edit_or_reply(msg, f"❌ Ошибка: {e}", reply_markup=face_id_toggle_kb())
+
             else:
-                await q.message.reply_text("❌ Не удалось обновить Face ID embedding", reply_markup=face_id_toggle_kb())
-        except Exception as e:
-            await q.message.reply_text(f"❌ Ошибка: {e}", reply_markup=face_id_toggle_kb())
+                status = "включен" if FACE_ID_ADAPTER_ENABLED else "выключен"
+                has_embedding = "есть" if av.get("face_embedding") else "нет"
+                text = (
+                    "👤 Face ID Adapter\n\n"
+                    f"Статус: {status}\n"
+                    f"Embedding: {has_embedding}\n"
+                    f"Вес: {FACE_ID_WEIGHT}\n"
+                    f"Шум: {FACE_ID_NOISE}\n"
+                    f"Масштаб: {FACE_ID_SCALE}"
+                )
+                await _edit_or_reply(q.message, text, reply_markup=face_id_toggle_kb())
 
-    else:
-        status = "включен" if FACE_ID_ADAPTER_ENABLED else "выключен"
-        has_embedding = "есть" if av.get("face_embedding") else "нет"
-        await q.message.reply_text(
-            f"👤 Face ID Adapter\n\n"
-            f"Статус: {status}\n"
-            f"Embedding: {has_embedding}\n"
-            f"Вес: {FACE_ID_WEIGHT}\n"
-            f"Шум: {FACE_ID_NOISE}\n"
-            f"Масштаб: {FACE_ID_SCALE}",
-            reply_markup=face_id_toggle_kb()
-        )
 
 # ---------- Handlers ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1217,49 +1219,89 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "— «👤 Face ID» — улучшенное сохранение идентичности лица.\n",
         reply_markup=main_menu_kb()
     )
+# ---------- UI utils ----------
+from telegram.error import BadRequest
+
+async def _edit_or_reply(qmsg, text: str, reply_markup=None):
+    """
+    Стараемся перерисовать текущее сообщение.
+    Если Telegram не даёт (слишком старое/не изменилось) — шлём новое и удаляем старое.
+    """
+    try:
+        await qmsg.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+        return qmsg
+    except BadRequest:
+        m = await qmsg.reply_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+        with contextlib.suppress(Exception):
+            await qmsg.delete()
+        return m
 
 async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    uid = update.effective_user.id
-    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-    key = q.data.split(":",1)[1]
+            q = update.callback_query
+            await q.answer()
+            uid = update.effective_user.id
+            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+            key = q.data.split(":", 1)[1]
 
-    if key == "styles":
-        await q.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
-    elif key == "menu":
-        await q.message.reply_text("Главное меню:", reply_markup=main_menu_kb())
-    elif key == "enroll":
-        await id_enroll(update, context)
-    elif key == "train":
-        await trainid_cmd(update, context)
-    elif key == "status":
-        await id_status(update, context)
-    elif key == "avatars":
-        await q.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
-    elif key == "beauty":
-        prof = load_profile(uid)
-        prof["pretty"] = not prof.get("pretty", False)
-        if prof["pretty"]:
-            prof["natural"] = True
-        save_profile(uid, prof)
-        await q.message.reply_text(f"Pretty: {'ON' if prof['pretty'] else 'OFF'} • Natural: {'ON' if prof['natural'] else 'OFF'}")
-    elif key == "lockface":
-        prof = load_profile(uid)
-        av = get_avatar(prof)
-        av["lockface"] = not av.get("lockface", True)
-        save_profile(uid, prof)
-        state = "включён" if av["lockface"] else "выключен"
-        await q.message.reply_text(f"LOCKFACE {state}")
-    elif key == "faceid":
-        await face_id_cb(update, context)
+            if key == "styles":
+                await _edit_or_reply(q.message, "Выбери категорию:", reply_markup=categories_kb())
+
+            elif key == "menu":
+                await _edit_or_reply(q.message, "Главное меню:", reply_markup=main_menu_kb())
+
+            elif key == "enroll":
+                await _edit_or_reply(q.message, "📸 Набор фото…", reply_markup=None)
+                await id_enroll(update, context)
+
+            elif key == "train":
+                await _edit_or_reply(q.message, "🧪 Обучение…", reply_markup=None)
+                await trainid_cmd(update, context)
+
+            elif key == "status":
+                await _edit_or_reply(q.message, "ℹ️ Обновляю статус…", reply_markup=None)
+                await id_status(update, context)
+
+            elif key == "avatars":
+                await _edit_or_reply(q.message, "Аватары:", reply_markup=avatars_kb(uid))
+
+            elif key == "beauty":
+                prof = load_profile(uid)
+                prof["pretty"] = not prof.get("pretty", False)
+                if prof["pretty"]:
+                    prof["natural"] = True
+                save_profile(uid, prof)
+                await _edit_or_reply(
+                    q.message,
+                    f"Pretty: {'ON' if prof['pretty'] else 'OFF'} • Natural: {'ON' if prof['natural'] else 'OFF'}",
+                    reply_markup=main_menu_kb()
+                )
+
+            elif key == "lockface":
+                prof = load_profile(uid)
+                av = get_avatar(prof)
+                av["lockface"] = not av.get("lockface", True)
+                save_profile(uid, prof)
+                state = "включён" if av["lockface"] else "выключен"
+                await _edit_or_reply(q.message, f"LOCKFACE {state}", reply_markup=main_menu_kb())
+
+            elif key == "faceid":
+                # делегируем, но пусть и там будет редактирование
+                await face_id_cb(update, context)
+
+            else:
+                await _edit_or_reply(q.message, "Главное меню:", reply_markup=main_menu_kb())
+
 
 async def styles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
+        # если пришла команда, создаём одно сообщение с меню
+        await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
 
 async def cb_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    cat = q.data.split(":",1)[1]
-    await q.message.reply_text(f"Стиль — {cat}. Выбери сцену:", reply_markup=styles_kb_for_category(cat))
+        q = update.callback_query
+        await q.answer()
+        cat = q.data.split(":", 1)[1]
+        await _edit_or_reply(q.message, f"Стиль — {cat}. Выбери сцену:", reply_markup=styles_kb_for_category(cat))
+
 
 async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -1803,88 +1845,99 @@ def _neg_with_gender(neg_base:str, gender_negative:str) -> str:
     return (neg_base + (", " + gender_negative if gender_negative else "")).strip(", ")
 
 async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    preset = q.data.split(":",1)[1]
-    await start_generation_for_preset(update, context, preset)
+        q = update.callback_query
+        await q.answer()
+        preset = q.data.split(":", 1)[1]
+
+        # Перерисовываем текущее сообщение, убираем клавиатуру
+        await _edit_or_reply(q.message, f"Генерирую «{preset}»…", reply_markup=None)
+
+        # Стартуем генерацию без повторного "Генерирую…"
+        await start_generation_for_preset(update, context, preset, show_intro=False)
+
 
 # === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ===
-async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
-    uid = update.effective_user.id
-    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-    av_name = get_current_avatar_name(prof)
-    av = get_avatar(prof, av_name)
+async def start_generation_for_preset(
+            update: Update,
+            context: ContextTypes.DEFAULT_TYPE,
+            preset: str,
+            show_intro: bool = True
+        ):
+            uid = update.effective_user.id
+            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+            av_name = get_current_avatar_name(prof)
+            av = get_avatar(prof, av_name)
 
-    # проверка готовности модели
-    if av.get("status") != "succeeded":
-        await update.effective_message.reply_text(
-            f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
-        )
-        return
+            # проверка готовности модели
+            if av.get("status") != "succeeded":
+                await update.effective_message.reply_text(
+                    f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+                )
+                return
 
-    # закреплённый слаг версии
-    model_slug = _pinned_slug(av) or av.get("finetuned_model")
-    if not model_slug:
-        await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
-        return
+            # закреплённый слаг версии
+            model_slug = _pinned_slug(av) or av.get("finetuned_model")
+            if not model_slug:
+                await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
+                return
 
-    # метаданные стиля
-    if preset not in STYLE_PRESETS:
-        await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
-        return
-    meta = STYLE_PRESETS[preset]
+            # метаданные стиля
+            if preset not in STYLE_PRESETS:
+                await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
+                return
+            meta = STYLE_PRESETS[preset]
 
-    gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-    natural = bool(prof.get("natural", True))
-    pretty  = bool(prof.get("pretty", False))
-    avatar_token = av.get("token", "")
+            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+            natural = bool(prof.get("natural", True))
+            pretty  = bool(prof.get("pretty", False))
+            avatar_token = av.get("token", "")
 
-    # композиции и identity-safe твики
-    comps = _variants_for_preset(meta)           # может вернуть ["half","half","closeup"]
-    guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
+            # композиции и identity-safe твики
+            comps = _variants_for_preset(meta)           # например ["half","half","closeup"]
+            guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
 
-    # FaceID: ссылка/путь; если нет — сгеним без него
-    face_ref = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
+            # FaceID: ссылка/путь; если нет — сгеним без него
+            face_ref = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
 
-    await update.effective_message.reply_text(f"Генерирую «{preset}»…")
-    sent = 0
+            if show_intro:
+                await update.effective_message.reply_text(f"Генерирую «{preset}»…")
 
-    # ВАЖНО: используем enumerate и добавляем индекс в сид (и чуть варьируем comp_text)
-    for i, comp in enumerate(comps):
-        try:
-            comp_text, (w, h) = _comp_text_and_size(comp)
+            sent = 0
+            for i, comp in enumerate(comps):
+                try:
+                    comp_text, (w, h) = _comp_text_and_size(comp)
 
-            # лёгкая вариация для устранения кэша при одинаковых comp
-            if comp == "half" and i % 2 == 1:
-                comp_text += ", camera slightly closer, gentle 5° head turn"
-            elif comp == "closeup" and i % 2 == 1:
-                comp_text += ", micro-reframe, eyes focus a touch brighter"
+                    # лёгкая вариация кадра, чтобы не триггерить кэш/дубликаты
+                    if comp == "half" and i % 2 == 1:
+                        comp_text += ", camera slightly closer, gentle 5° head turn"
+                    elif comp == "closeup" and i % 2 == 1:
+                        comp_text += ", micro-reframe, eyes focus a touch brighter"
 
-            tone_text   = _tone_text(meta.get("tone", ""))
-            theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
+                    tone_text   = _tone_text(meta.get("tone", ""))
+                    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
 
-            prompt, neg = build_prompt(
-                meta, gender, comp_text, tone_text, theme_boost,
-                natural, pretty, avatar_token
-            )
-            if extra_neg:
-                neg = _neg_with_gender(neg, extra_neg)
+                    prompt, neg = build_prompt(
+                        meta, gender, comp_text, tone_text, theme_boost,
+                        natural, pretty, avatar_token
+                    )
+                    if extra_neg:
+                        neg = _neg_with_gender(neg, extra_neg)
 
-            # УНИКАЛЬНЫЙ сид на каждый кадр (фикс дублей)
-            seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
+                    seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
 
-            url = await asyncio.to_thread(
-                generate_from_finetune,
-                model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
-            )
-            await update.effective_message.reply_photo(url)
-            sent += 1
+                    url = await asyncio.to_thread(
+                        generate_from_finetune,
+                        model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
+                    )
+                    await update.effective_message.reply_photo(url)
+                    sent += 1
 
-        except Exception as e:
-            logger.exception("gen failed for comp=%s", comp)
-            await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
+                except Exception as e:
+                    logger.exception("gen failed for comp=%s", comp)
+                    await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
 
-    if sent == 0:
-        await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
+            if sent == 0:
+                await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
 
 
 # --- Toggles (пер-юзер) ---
