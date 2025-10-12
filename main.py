@@ -580,40 +580,35 @@ def extract_face_embedding(image_path: Path) -> Optional[str]:
     return None
 
 def prepare_face_embedding(uid: int, avatar: str) -> Optional[str]:
-    """Подготавливает Face ID embedding для аватара"""
-    prof = load_profile(uid)
-    av = get_avatar(prof, avatar)
+        """Сохраняем в профиль HTTPS-ссылку на лучшую реф-фотку (presigned URL) — её и используем как face_image."""
+        refs = list_ref_images(uid, avatar)
+        if not refs:
+            return None
 
-    # Если эмбеддинг уже есть, возвращаем его
-    if av.get("face_embedding"):
-        return av["face_embedding"]
+        # берём первую (самую раннюю/лучшую) – при желании можно выбрать по размеру/EXIF
+        key = refs[0]
 
-    # Ищем лучшее референсное изображение для извлечения эмбеддинга
-    refs = list_ref_images(uid, avatar)
-    if not refs:
-        return None
+        # если S3 — делаем presigned URL
+        if key.startswith("s3://"):
+            if not s3_client or not S3_BUCKET:
+                return None
+            _, _, bucket_and_key = key.partition("s3://")
+            bucket, _, obj_key = bucket_and_key.partition("/")
+            url = s3_client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": bucket, "Key": obj_key},
+                ExpiresIn=int(os.getenv("FACE_ID_URL_TTL", "86400"))  # 24h
+            )
+        else:
+            # FS-бэкенд: даём прямой file-path — ниже обработаем как локальный файл
+            url = key  # путь на диск
 
-    # Используем первое изображение (предполагаем, что оно наиболее качественное)
-    face_key = refs[0]
-    local_path = STORAGE.get_local_copy(face_key)
+        prof = load_profile(uid)
+        av = get_avatar(prof, avatar)
+        av["face_embedding"] = url
+        save_profile(uid, prof)
+        return url
 
-    try:
-        embedding_url = extract_face_embedding(local_path)
-        if embedding_url:
-            # Сохраняем embedding в профиль
-            av["face_embedding"] = embedding_url
-            save_profile(uid, prof)
-            logger.info("Face ID embedding extracted for avatar %s", avatar)
-            return embedding_url
-    except Exception as e:
-        logger.error("Failed to extract Face ID embedding: %s", e)
-    finally:
-        # Очищаем временный файл
-        with contextlib.suppress(Exception):
-            if local_path.exists() and str(local_path).startswith(tempfile.gettempdir()):
-                local_path.unlink()
-
-    return None
 
 # ---------- Промпт-замки ----------
 def _beauty_guardrail() -> str:
@@ -801,29 +796,39 @@ def _identity_safe_tune(preset_key:str, guidance:float, comps:List[str]) -> Tupl
 
 # ---------- Инференс/генерация ----------
 def generate_with_face_id_adapter(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, 
-                                w:int, h:int, negative_prompt:str, face_embedding_url:str) -> str:
-    """Генерация с использованием Face ID adapter"""
+          w:int, h:int, negative_prompt:str, face_embedding_url:str) -> str:
     mv = resolve_model_version(model_slug)
+
+    def _input_face():
+    # Если это presigned HTTPS — отдаём строку; если локальный путь — откроем файл
+        if isinstance(face_embedding_url, str) and face_embedding_url.startswith("http"):
+            return face_embedding_url
+        try:
+            return open(face_embedding_url, "rb")
+        except Exception:
+            return face_embedding_url  # на всякий случай
 
     def _run():
         return replicate.run(mv, input={
-            "prompt": prompt + AESTHETIC_SUFFIX,
-            "negative_prompt": negative_prompt,
-            "width": w,
-            "height": h,
-            "num_inference_steps": min(MAX_STEPS, steps),
-            "guidance_scale": guidance,
-            "seed": seed,
-            "ip_adapter_scale": FACE_ID_WEIGHT,
-            "face_image": face_embedding_url,  # Используем Face ID embedding
-            "face_id_noise": FACE_ID_NOISE,
-        })
+    "prompt": prompt + AESTHETIC_SUFFIX,
+    "negative_prompt": negative_prompt,
+    "width": w,
+    "height": h,
+    "num_inference_steps": min(MAX_STEPS, steps),
+    "guidance_scale": guidance,
+    "seed": seed,
+    # ключи как в IP-Adapter FaceID-пайплайне
+    "ip_adapter_scale": FACE_ID_WEIGHT,
+    "face_image": _input_face(),
+    "face_id_noise": FACE_ID_NOISE,
+    })
 
     out = _retry(_run, label="replicate_gen_faceid")
     url = extract_any_url(out)
     if not url:
         raise RuntimeError("Empty output from Face ID generation")
     return url
+
 
 def generate_from_finetune(model_slug:str, prompt:str, steps:int, guidance:float, seed:int, 
                           w:int, h:int, negative_prompt:str, face_embedding_url:Optional[str]=None) -> str:
