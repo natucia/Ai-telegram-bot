@@ -1714,8 +1714,17 @@ async def natural_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _post_init(app):
     await app.bot.delete_webhook(drop_pending_updates=True)
 
+async def _poller_job(context: ContextTypes.DEFAULT_TYPE):
+    await training_poller_tick(
+        load_all_profiles, save_profile,
+        get_current_avatar_name, get_avatar,
+        check_lora_training_status
+    )
+
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(_post_init).build()
+    assert app.job_queue is not None
+    app.job_queue.run_repeating(_poller_job, interval=300, first=15)
 
     # Команды (оставлены для совместимости; UX — кнопками)
     app.add_handler(CommandHandler("start", start))
@@ -1748,22 +1757,7 @@ def main():
         LORA_TRAINER_SLUG, f"{DEST_OWNER}/{DEST_MODEL}", GEN_WIDTH, GEN_HEIGHT, GEN_STEPS, GEN_GUIDANCE,
         CONSISTENT_SCALE, FORCE_WAIST_UP, "S3" if USE_S3 else "FS", FACE_ID_ADAPTER_ENABLED
     )
-    import asyncio
-
-async def poll_training_loop():
-        while True:
-            try:
-                await training_poller_tick(
-                    load_all_profiles, save_profile,
-                    get_current_avatar_name, get_avatar,
-                    check_lora_training_status
-                )
-            except Exception as e:
-                print("Ошибка в training_poller_tick:", e)
-            await asyncio.sleep(300)  # каждые 5 минут
-
-asyncio.create_task(poll_training_loop())
-app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
