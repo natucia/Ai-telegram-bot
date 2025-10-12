@@ -9,7 +9,6 @@
 
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 from typing import Union, IO
-Style = Dict[str, Any]
 from faceid_workflow_integration import (
     start_generation_for_preset as start_generation_faceid,
     on_user_upload_photo as on_user_upload_face,
@@ -18,6 +17,8 @@ from faceid_workflow_integration import (
 from styles import (
     STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST, SCENE_GUIDANCE, RISKY_PRESETS
 )
+
+Style = Dict[str, Any]
 import os, re, io, json, time, asyncio, logging, shutil, random, contextlib, tempfile, hashlib, base64
 from pathlib import Path
 from zipfile import ZipFile, ZIP_STORED
