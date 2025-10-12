@@ -354,37 +354,40 @@ STYLE_PRESETS: Dict[str, Style] = {
 
     # ===== КИНО / КОМИКСЫ / ПОП-КУЛЬТУРА (вдохновение) =====
     "Готэм-ночь (Бэтмен-вайб)": {
-        "desc": "Кинематографичный герой в стиле Бэтмена — мощная энергия, глянцевая броня, неоновые отблески и легендарный бэтмобиль на фоне. Атмосфера — дорогой комикс с глубокой контрастной цветокоррекцией.",
-        "role": "dark hero standing by the batmobile in cinematic night scene",
+        "desc": "Кинематографичный образ Бэтмена: герой в бронекостюме на фоне неонового Готэма. Атмосфера — мощь, глянец и энергия ночного города.",
+        "role": "cinematic Batman hero portrait in neon Gotham city",
         "outfit": (
-            "black armored batsuit with matte and glossy carbon sections, "
-            "bat symbol on the chest, armored gauntlets, utility belt with gold accents, "
-            "flowing dark cape catching backlight"
+            "high-tech armored batsuit with raised bat emblem on chest, "
+            "sleek matte-black armor plates with subtle blue reflections, "
+            "short tactical cape, cowl with pointed ears, armored gloves"
         ),
         "props": (
-            "batmobile with glowing blue and red LED lines, "
-            "mist swirling around wheels, reflections on wet asphalt, "
-            "neon lights from skyscrapers, lens flares, cinematic rain"
+            "Batmobile in background with glowing blue headlights and wet reflections, "
+            "rain mist and cinematic rim lighting, "
+            "batarang in hand or attached to utility belt"
         ),
         "bg": (
-            "night cityscape with glowing signs and rain reflections, "
-            "gotham skyline, thunderclouds and spotlight beams cutting through mist"
+            "neon-lit Gotham skyline at night, skyscrapers, holographic ads, "
+            "wet asphalt, steam, bat-signal on low clouds, "
+            "blue-orange cinematic contrast light"
         ),
-        "comp": "full",
-        "tone": "dramatic neon contrast",
+        "comp": "waistup",  # только по пояс
+        "tone": "cinematic vibrant",
         "required_attributes": [
-            "bat armor suit",
-            "bat symbol visible",
-            "batmobile in background",
-            "cinematic lighting"
+            "bat emblem on chest",
+            "batmobile visible in background",
+            "black armored batsuit",
+            "cape and cowl with ears",
+            "neon night Gotham city",
+            "waist-up composition only"
         ],
         "force_keywords": [
-            "cinematic batman armor suit with cape",
-            "sleek futuristic batmobile behind",
-            "dramatic night lighting",
-            "wet city street reflections",
-            "intense comic-book atmosphere"
-        ]
+            "waist-up shot, no full body, focus on upper body and chest emblem",
+            "armored batsuit, detailed bat emblem",
+            "Batmobile behind, glowing lights and rain reflections",
+            "cinematic close-up, neon lighting, Gotham night"
+        ],
+        "negative": "no full body, no wide shot, no distant view, no standing full figure"
     },
     "Халк-эффект": {
         "desc": "Мощная зеленая трансформация: огромное мускулистое тело, зеленная кожа, разорванная одежда.",
