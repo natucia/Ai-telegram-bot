@@ -800,6 +800,52 @@ def _identity_safe_tune(preset_key:str, guidance:float, comps:List[str]) -> Tupl
     return g, cc, IDENTITY_SAFE_NEG
 
     # ---------- Инференс/генерация (исправлено) ----------
+def _resolve_face_ref(uid: int, avatar: str) -> Optional[Union[str, IO[bytes]]]:
+        """
+        Возвращает ИЛИ presigned HTTPS URL (для S3), ИЛИ локальный путь (FS).
+        Никаких bytes. Никаких "s3://".
+        """
+        prof = load_profile(uid)
+        av = get_avatar(prof, avatar)
+
+        # 1) Если ранее подготовили embedding — используем его (там уже presigned https или локальный путь)
+        ref = av.get("face_embedding")
+        if isinstance(ref, str):
+            if ref.startswith(("http://", "https://")) and "X-Amz-Signature" in ref:
+                return ref
+            if os.path.exists(ref):
+                return ref
+
+        # 2) Иначе берём первое реф-фото из набора
+        refs = list_ref_images(uid, avatar)
+        if not refs:
+            return None
+        key = refs[0]
+
+        # FS — путь
+        if os.path.exists(key):
+            return key
+
+        # S3 — делаем presigned HTTPS
+        if isinstance(key, str) and key.startswith("s3://"):
+            if not s3_client:
+                return None
+            _, _, bucket_and_key = key.partition("s3://")
+            bucket, _, obj_key = bucket_and_key.partition("/")
+            return s3_client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": bucket, "Key": obj_key},
+                ExpiresIn=int(os.getenv("FACE_ID_URL_TTL", "86400"))
+            )
+
+        # Уже HTTPS (редкий случай) — прокатывает
+        if isinstance(key, str) and key.startswith(("http://","https://")):
+            return key
+
+        return None
+
+
+    # ---------- Инференс с FaceID (без bytes в JSON) ----------
 def generate_with_face_id_adapter(
         model_slug: str,
         prompt: str,
@@ -809,47 +855,33 @@ def generate_with_face_id_adapter(
         w: int,
         h: int,
         negative_prompt: str,
-        face_embedding_url: Union[str, bytes, IO[bytes]],
+        face_embedding_url: Union[str, IO[bytes]],
     ) -> str:
         """
-        Генерация c IP-Adapter FaceID.
-        В Replicate в input нельзя класть сырые bytes в JSON — только файловые объекты или HTTPS-URL.
+        Replicate принимает либо файловый хендл (rb), либо HTTPS URL.
+        Никаких сырых bytes — иначе «Object of type bytes is not JSON serializable».
         """
         mv = resolve_model_version(model_slug)
 
-        # Готовим источник лица: file-like или URL
-        face_source: Any = None
-        try:
-            # Локальный путь?
-            if isinstance(face_embedding_url, (str, Path)) and os.path.exists(str(face_embedding_url)):
-                face_source = open(str(face_embedding_url), "rb")  # file handle
-            # HTTPS/HTTP (включая presigned S3)?
-            elif isinstance(face_embedding_url, str) and face_embedding_url.startswith(("http://", "https://")):
-                face_source = face_embedding_url                      # URL строка
-            # Уже bytes?
-            elif isinstance(face_embedding_url, (bytes, bytearray)):
-                bio = io.BytesIO(bytes(face_embedding_url))
-                bio.name = "face.jpg"
-                face_source = bio                                     # file-like
-            # Уже file-like?
-            elif hasattr(face_embedding_url, "read"):
-                face_source = face_embedding_url                      # IO[bytes]
+        # подготавливаем корректный источник
+        face_source: Any
+        if isinstance(face_embedding_url, str):
+            if os.path.exists(face_embedding_url):
+                face_source = open(face_embedding_url, "rb")          # file handle
+            elif face_embedding_url.startswith(("http://", "https://")):
+                face_source = face_embedding_url                      # URL
             else:
-                raise RuntimeError("FACE-ID: не удалось подготовить источник лица")
-        except Exception as e:
-            logger.warning("FACE-ID: подготовка входа не удалась: %s", e)
-            raise
+                raise RuntimeError(f"FACE-ID: неподдерживаемый ref: {face_embedding_url!r}")
+        elif hasattr(face_embedding_url, "read"):
+            face_source = face_embedding_url                          # IO[bytes]
+        else:
+            raise RuntimeError("FACE-ID: нужен путь/URL/файловый объект")
 
         extra_inputs = {
             "face_image": face_source,
             "ip_adapter_scale": FACE_ID_WEIGHT,
             "face_id_noise": FACE_ID_NOISE,
         }
-
-        logger.info(
-            "FACE-ID RUN mv=%s prompt_len=%d w=%d h=%d scale=%.2f noise=%.2f",
-            mv, len(prompt), w, h, FACE_ID_WEIGHT, FACE_ID_NOISE
-        )
 
         try:
             out = _retry(
@@ -869,7 +901,6 @@ def generate_with_face_id_adapter(
                 label="replicate_gen_faceid",
             )
         finally:
-            # Закрываем хендл, если открывали файл
             try:
                 if hasattr(face_source, "close"):
                     face_source.close()
@@ -879,10 +910,10 @@ def generate_with_face_id_adapter(
         url = extract_any_url(out)
         if not url:
             raise RuntimeError(f"Empty output with FACE-ID (model={model_slug})")
-        logger.info("FACE-ID OK; keys=%s", list(extra_inputs.keys()))
         return url
 
 
+    # ---------- Диспетчер генерации ----------
 def generate_from_finetune(
         model_slug: str,
         prompt: str,
@@ -892,11 +923,8 @@ def generate_from_finetune(
         w: int,
         h: int,
         negative_prompt: str,
-        face_embedding_url: Optional[Union[str, bytes, IO[bytes]]] = None,
+        face_embedding_url: Optional[Union[str, IO[bytes]]] = None,
     ) -> str:
-        """
-        Если FaceID включён и есть ref — идём через адаптер, иначе — чистая LoRA.
-        """
         use_faceid = bool(FACE_ID_ADAPTER_ENABLED and face_embedding_url)
         logger.info("GEN DISPATCH: model=%s use_faceid=%s", model_slug, use_faceid)
 
@@ -910,10 +938,9 @@ def generate_from_finetune(
                 w=w,
                 h=h,
                 negative_prompt=negative_prompt,
-                face_embedding_url=face_embedding_url  # URL/путь/BytesIO/IO[bytes]
+                face_embedding_url=face_embedding_url,  # URL/путь/IO[bytes]
             )
 
-        # --- Plain LoRA (без FaceID)
         mv = resolve_model_version(model_slug)
         out = _retry(
             lambda: replicate.run(
@@ -934,6 +961,7 @@ def generate_from_finetune(
         if not url:
             raise RuntimeError("Empty output (plain)")
         return url
+
 
 
 # ---------- UI/KB ----------
@@ -1649,126 +1677,108 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start_generation_for_preset(update, context, preset)
 
 async def start_generation_for_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, preset: str):
-                    uid = update.effective_user.id
-                    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                    av_name = get_current_avatar_name(prof)
-                    av = get_avatar(prof, av_name)
+                            uid = update.effective_user.id
+                            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+                            av_name = get_current_avatar_name(prof)
+                            av = get_avatar(prof, av_name)
 
-                    if av.get("status") != "succeeded":
-                        await update.effective_message.reply_text(
-                            f"Модель «{av_name}» ещё не готова. Нажми «🧪 Обучение», затем проверяй статус."
-                        )
-                        return
+                            if av.get("status") != "succeeded":
+                                await update.effective_message.reply_text(
+                                    f"Модель «{av_name}» ещё не готова. Нажми «🧪 Обучение», затем проверяй статус."
+                                )
+                                return
 
-                    # --- Метаданные стиля
-                    meta = STYLE_PRESETS[preset]
-                    if FORCE_WAIST_UP:
-                        meta = dict(meta)
-                        meta["comps"] = [("half" if c == "full" else c) for c in meta.get("comps", []) if c in ("half", "closeup")]
-                        if not meta["comps"]:
-                            meta["comps"] = ["half", "half", "closeup"]
+                            # стиль и параметры
+                            meta = STYLE_PRESETS[preset]
+                            if FORCE_WAIST_UP:
+                                meta = dict(meta)
+                                meta["comps"] = [("half" if c == "full" else c) for c in meta.get("comps", []) if c in ("half","closeup")]
+                                if not meta["comps"]:
+                                    meta["comps"] = ["half","half","closeup"]
 
-                    gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-                    natural = prof.get("natural", True)
-                    pretty  = prof.get("pretty", False)
+                            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+                            natural = prof.get("natural", True)
+                            pretty  = prof.get("pretty", False)
 
-                    preset_key  = str(preset)
-                    tone_text   = _tone_text(meta.get("tone", "daylight"))
-                    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset_key, ""))
+                            preset_key  = str(preset)
+                            tone_text   = _tone_text(meta.get("tone", "daylight"))
+                            theme_boost = _safe_theme_boost(THEME_BOOST.get(preset_key, ""))
 
-                    model_slug = _pinned_slug(av)
+                            model_slug = _pinned_slug(av)
 
-                    guidance_val   = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
-                    guidance       = float(max(3.8, min(4.2, float(guidance_val))))
-                    steps          = 40
-                    variant_comps  = _variants_for_preset(meta)
-                    guidance, variant_comps, extra_neg = _identity_safe_tune(preset_key, guidance, variant_comps)
+                            guidance_val   = SCENE_GUIDANCE.get(preset_key, GEN_GUIDANCE)
+                            guidance       = float(max(3.8, min(4.2, float(guidance_val))))
+                            steps          = 40
+                            variant_comps  = _variants_for_preset(meta)
+                            guidance, variant_comps, extra_neg = _identity_safe_tune(preset_key, guidance, variant_comps)
 
-                    # --- FaceID reference (НЕ грузим bytes; хранится URL/путь)
-                    face_ref = None
-                    if FACE_ID_ADAPTER_ENABLED:
-                        refs = list_ref_images(uid, av_name)
-                        if refs:
+                            # >>> FaceID: берём уже HTTPS/путь через хелпер (никаких bytes!)
+                            face_ref = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
+                            logger.info("FACEID FLAGS: enabled=%s, ref=%s", FACE_ID_ADAPTER_ENABLED, "SET" if face_ref else "NONE")
+
+                            await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
+                            await update.effective_message.reply_text(
+                                f"🎬 {preset}\nАватар: {av_name}\n{meta.get('desc', preset)}\n\nВарианты: {', '.join(variant_comps)}…"
+                            )
+
+                            lockface_on = av.get("lockface", True)
+                            token = av.get("token")
+                            base_seed = _stable_seed(token or "notoken", preset_key)
+
                             try:
-                                # если S3 — у тебя в профиле уже хранится presigned https; иначе это локальный путь
-                                face_ref = refs[0]
+                                async with GEN_SEMAPHORE:
+                                    for idx, comp_kind in enumerate(variant_comps, 1):
+                                        seed = (base_seed + idx) if lockface_on else random.randrange(2**32)
+                                        comp_text, (w, h) = _comp_text_and_size(comp_kind)
+
+                                        prompt_core, gender_negative = build_prompt(
+                                            meta, gender, comp_text, tone_text, theme_boost, natural, pretty, avatar_token=token
+                                        )
+
+                                        neg_base = _neg_with_gender(
+                                            NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind),
+                                            gender_negative
+                                        )
+                                        if FORCE_WAIST_UP:
+                                            neg_base = (neg_base + ", " + NO_FULL_BODY_NEG).strip(", ")
+                                        if extra_neg:
+                                            neg_base = (neg_base + ", " + extra_neg).strip(", ")
+
+                                        url = await asyncio.to_thread(
+                                            generate_from_finetune,
+                                            model_slug=model_slug,
+                                            prompt=prompt_core,
+                                            steps=steps,
+                                            guidance=guidance,
+                                            seed=seed,
+                                            w=w,
+                                            h=h,
+                                            negative_prompt=neg_base,
+                                            face_embedding_url=face_ref,  # <— ВАЖНО: URL/путь, не bytes
+                                        )
+
+                                        img_bytes = await asyncio.to_thread(_download_image_bytes, url)
+                                        bio = io.BytesIO(img_bytes)
+                                        im = Image.open(bio).convert("RGB")
+                                        im = _photo_look(im)
+                                        out_io = io.BytesIO()
+                                        im.save(out_io, "JPEG", quality=92)
+                                        out_io.seek(0); out_io.name = "image.jpg"
+
+                                        tag = "👤" if comp_kind == "closeup" else "🧍"
+                                        lock = "🔒" if lockface_on else "◻️"
+                                        faceid_flag = "👤" if (FACE_ID_ADAPTER_ENABLED and face_ref) else ""
+                                        caption = f"{preset} • {av_name} • {lock} {tag} {comp_kind} {faceid_flag} • {w}×{h}"
+                                        await update.effective_message.reply_photo(photo=out_io, caption=caption)
+
+                                await update.effective_message.reply_text(
+                                    f"✅ Готово! Face ID: {'ON' if (FACE_ID_ADAPTER_ENABLED and face_ref) else 'OFF/нет ref'}"
+                                )
+
                             except Exception as e:
-                                logger.warning("FACEID ref pick failed: %s", e)
-                                face_ref = None
-                    logger.info("FACEID FLAGS: enabled=%s, ref=%s",
-                                FACE_ID_ADAPTER_ENABLED, ("SET" if face_ref else "NONE"))
+                                logging.exception("generation failed")
+                                await update.effective_message.reply_text(f"Ошибка генерации: {e}")
 
-                    await update.effective_message.chat.send_action(ChatAction.UPLOAD_PHOTO)
-                    desc = meta.get("desc", preset)
-                    await update.effective_message.reply_text(
-                        f"🎬 {preset}\nАватар: {av_name}\n{desc}\n\nВарианты: {', '.join(variant_comps)}…"
-                    )
-
-                    lockface_on = av.get("lockface", True)
-                    token = av.get("token")
-                    base_seed = _stable_seed(token or "notoken", preset_key)
-
-                    try:
-                        async with GEN_SEMAPHORE:
-                            for idx, comp_kind in enumerate(variant_comps, 1):
-                                seed = (base_seed + idx) if lockface_on else random.randrange(2**32)
-
-                                comp_text, (w, h) = _comp_text_and_size(comp_kind)
-                                prompt_core, gender_negative = build_prompt(
-                                    meta, gender, comp_text, tone_text, theme_boost, natural, pretty, avatar_token=token
-                                )
-
-                                neg_base = _neg_with_gender(
-                                    NEGATIVE_PROMPT_BASE + ", " + _comp_negatives(comp_kind),
-                                    gender_negative
-                                )
-                                if FORCE_WAIST_UP:
-                                    neg_base = (neg_base + ", " + NO_FULL_BODY_NEG).strip(", ")
-                                if extra_neg:
-                                    neg_base = (neg_base + ", " + extra_neg).strip(", ")
-
-                                url = await asyncio.to_thread(
-                                    generate_from_finetune,
-                                    model_slug=model_slug,
-                                    prompt=prompt_core,
-                                    steps=steps,
-                                    guidance=guidance,
-                                    seed=seed,
-                                    w=w,
-                                    h=h,
-                                    negative_prompt=neg_base,
-                                    face_embedding_url=face_ref,   # <-- передаём URL/путь, не bytes
-                                )
-
-                                # отправка картинки
-                                tag = "👤" if comp_kind == "closeup" else "🧍"
-                                lock = "🔒" if lockface_on else "◻️"
-                                faceid_flag = "👤" if (FACE_ID_ADAPTER_ENABLED and face_ref) else ""
-                                caption = f"{preset} • {av_name} • {lock} {tag} {comp_kind} {faceid_flag} • {w}×{h}"
-
-                                img_bytes = await asyncio.to_thread(_download_image_bytes, url)
-                                bio = io.BytesIO(img_bytes)
-                                im = Image.open(bio).convert("RGB")
-                                im = _photo_look(im)
-                                out_io = io.BytesIO()
-                                im.save(out_io, "JPEG", quality=92)
-                                out_io.seek(0); out_io.name = "image.jpg"
-                                await update.effective_message.reply_photo(photo=out_io, caption=caption)
-
-                        if FACE_ID_ADAPTER_ENABLED and face_ref:
-                            await update.effective_message.reply_text(
-                                f"✅ Готово! Все {len(variant_comps)} изображения сгенерированы с Face ID адаптером.\n"
-                                f"Вес: {FACE_ID_WEIGHT} • Шум: {FACE_ID_NOISE}"
-                            )
-                        else:
-                            await update.effective_message.reply_text(
-                                f"✅ Готово! Все {len(variant_comps)} изображения сгенерированы.\n"
-                                f"Face ID: {'выключен' if not FACE_ID_ADAPTER_ENABLED else 'нет ref-фото'}"
-                            )
-
-                    except Exception as e:
-                        logging.exception("generation failed")
-                        await update.effective_message.reply_text(f"Ошибка генерации: {e}")
 
 
 
