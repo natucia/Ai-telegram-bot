@@ -418,15 +418,28 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "cool"
     },
     "Киборг": {
-        "desc": "Половина лица — биомеханика, половина — человек",
-        "role": "cinematic portrait with subtle sci-fi set dressing",
-        "props": "futuristic lab vibe, soft rim light",
-        "bg": "dark neutral background with faint tech bokeh",
+        "desc": "Футуристический портрет: половина лица скрыта изящной механической маской с шестерёнками и голографическими элементами. Атмосфера — будущее, свет неоновых ламп и отражения металла.",
+        "role": "half-cybernetic portrait in futuristic sci-fi setting",
+        "outfit": (
+            "sleek minimalistic outfit or lab uniform with metallic accents, "
+            "thin fiber-optic strands woven into collar"
+        ),
+        "props": (
+            "detachable half-face cyber mask on the {cy_side} side with tiny screws, "
+            "visible brass gears, chrome plates, faint blue circuit glow, "
+            "micro holographic display near the temple, thin straps behind the ear"
+        ),
+        "bg": (
+            "dark futuristic laboratory interior with holographic interfaces, "
+            "transparent display panels, cold blue and violet backlight, "
+            "faint sparks of electricity and lens flares, volumetric light haze"
+        ),
         "comp": "closeup",
         "tone": "cool",
-        "cyborg_split": True,        # <— ключ-метка
-        "cyborg_side": "left",       # left/right (можешь сделать кнопкой позже)
-        "cyborg_feather": 72         # ширина мягкого шва
+        "cyborg_split": True,
+        "cyborg_mode": "mask",
+        "cyborg_side": "left",
+        "cyborg_feather": 72,
     },
 
     # ===== НОЧНЫЕ / УЖАСЫ / ГОТИКА =====

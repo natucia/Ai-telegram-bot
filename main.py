@@ -24,7 +24,7 @@ from zipfile import ZipFile, ZIP_STORED
 import requests
 import replicate
 from replicate import Client
-from PIL import Image, ImageOps, ImageChops, ImageFilter
+from PIL import Image, ImageOps, ImageFilter
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -230,44 +230,6 @@ def _photo_look(im: Image.Image) -> Image.Image:
     noise = Image.effect_noise(im.size, 3).convert("L").point(lambda p: int(p*0.08))
     im = Image.blend(im, Image.merge("RGB", (noise, noise, noise)), 0.08)
     return im
-
-def _make_half_mask(size: Tuple[int,int], side: str = "left", feather: int = 64) -> Image.Image:
-    """
-    Делает вертикальную маску: одна половина белая, другая чёрная, по центру мягкое перо.
-    side='left' означает, что ЛЕВАЯ половина берётся из img_left (белая часть маски).
-    """
-    w, h = size
-    mask = Image.new("L", (w, h), 0)
-    draw = ImageDraw.Draw(mask)
-    mid = w // 2
-
-    # Жёсткие полуплоскости
-    if side == "left":
-        draw.rectangle([0, 0, mid, h], fill=255)
-    else:  # right
-        draw.rectangle([mid, 0, w, h], fill=255)
-
-    # Перо по центру
-    if feather > 0:
-        ramp = Image.new("L", (feather*2, 1))
-        for x in range(feather*2):
-            # плавный градиент 0..255..0
-            val = int(255 * (1.0 - abs(x - feather) / feather))
-            ramp.putpixel((x, 0), val)
-        ramp = ramp.resize((feather*2, h))
-        # вставляем градиент на границе
-        x0 = mid - feather
-        mask.paste(ramp, (x0, 0))
-    return mask
-
-def _blend_half(img_left: Image.Image, img_right: Image.Image, side: str = "left", feather: int = 64) -> Image.Image:
-    """
-    Склеивает два кадра половинками с мягким швом.
-    """
-    if img_left.size != img_right.size:
-        img_right = img_right.resize(img_left.size, Image.Resampling.LANCZOS)
-    mask = _make_half_mask(img_left.size, side=side, feather=feather)
-    return Image.composite(img_left, img_right, mask)
 
 # --- FS utils (локальный fallback) ---
 def user_dir(uid:int) -> Path:
@@ -1057,109 +1019,6 @@ def generate_from_finetune(
             raise RuntimeError("Empty output (plain)")
         return url
 
-async def _generate_cyborg_split(
-    uid: int,
-    av_name: str,
-    model_slug: str,
-    meta: Style,
-    gender: str,
-    natural: bool,
-    pretty: bool,
-    avatar_token: str,
-    comp: str,
-    idx: int,
-    face_ref: Optional[Union[str, IO[bytes]]],
-    side: str = "left",           # какая сторона будет КИБОРГОМ: left | right
-    feather: int = 72,            # ширина мягкого шва
-) -> Optional[str]:
-    """
-    Делает два рендера с одним и тем же сидом и склеивает пополам.
-    Возвращает URL уже загруженной картинки (или None при ошибке).
-    """
-    # 1) Подготовим одинаковую композицию и сид
-    comp_text, (w, h) = _comp_text_and_size(comp)
-    if comp == "half" and idx % 2 == 1:
-        comp_text += ", camera slightly closer, gentle 5° head turn"
-    elif comp == "closeup" and idx % 2 == 1:
-        comp_text += ", micro-reframe, eyes focus a touch brighter"
-
-    tone_text   = _tone_text(meta.get("tone", ""))
-    theme_boost = _safe_theme_boost(THEME_BOOST.get("Киборг", "") or THEME_BOOST.get(meta.get("name",""), ""))
-
-    # 2) Базовый «человеческий» промпт
-    base_prompt, base_neg = build_prompt(
-        meta, gender, comp_text, tone_text, theme_boost, natural, pretty, avatar_token
-    )
-
-    # 3) Кибер-оверлей (только половина лица)
-    #    NB: мы не ломаем овал/идентичность: оставляем твои лока и негатива.
-    cy_side = "left" if side == "left" else "right"
-    human_side = "right" if side == "left" else "left"
-
-    cyborg_overlay = (
-        f"seamless half-face cyborg augmentation on the {cy_side} side, "
-        f"chrome biomechatronic plates under skin, cables, micro-vents, "
-        f"subdermal light strips, subtle glow in the {cy_side} eye, "
-        f"precise vertical split line at the face midline, "
-        f"the {human_side} side remains entirely human and untouched"
-    )
-    cyborg_anti = (
-        "no full cyborg face, no helmet, no mask, "
-        "no covering both eyes, no entire head replacement, "
-        "no heavy battle damage"
-    )
-
-    cy_prompt = f"{base_prompt}, {cyborg_overlay}"
-    cy_neg    = _neg_with_gender(base_neg, cyborg_anti)
-
-    # 4) Одинаковый сид для совпадения композиции
-    seed = _stable_seed(str(uid), av_name, "Киборг", f"{comp}:{idx}")
-
-    # 5) Рендерим две версии
-    try:
-        human_url = await asyncio.to_thread(
-            generate_from_finetune,
-            model_slug, base_prompt, GEN_STEPS, GEN_GUIDANCE, seed, w, h, base_neg, face_ref
-        )
-        cyborg_url = await asyncio.to_thread(
-            generate_from_finetune,
-            model_slug, cy_prompt, GEN_STEPS, GEN_GUIDANCE, seed, w, h, cy_neg, face_ref
-        )
-    except Exception as e:
-        logger.exception("cyborg split: generation failed: %s", e)
-        return None
-
-    # 6) Скачиваем и склеиваем
-    try:
-        hb = _download_image_bytes(human_url)
-        cb = _download_image_bytes(cyborg_url)
-        himg = Image.open(io.BytesIO(hb)).convert("RGB")
-        cimg = Image.open(io.BytesIO(cb)).convert("RGB")
-
-        # какая половина «киборг»?
-        if side == "left":
-            mixed = _blend_half(cimg, himg, side="left", feather=feather)
-        else:
-            mixed = _blend_half(himg, cimg, side="right", feather=feather)
-
-        # 7) Сохраняем временно и отдаем
-        out_path = tmp_path(".jpg")
-        mixed.save(out_path, "JPEG", quality=92)
-
-        # поднимаем в S3 если включён, иначе отдаём как файл (Telegram умеет)
-        if USE_S3 and s3_client and S3_BUCKET:
-            key = _s3_key("generated", str(uid), f"cyborg_{int(time.time()*1000)}.jpg")
-            with open(out_path, "rb") as f:
-                _retry(s3_client.put_object, Bucket=S3_BUCKET, Key=key, Body=f, ContentType="image/jpeg", label="s3_put_gen")
-            url = s3_client.generate_presigned_url("get_object", Params={"Bucket": S3_BUCKET, "Key": key}, ExpiresIn=86400)
-            return url
-        else:
-            # локально — вернём путь, Telegram отправит как файл
-            return str(out_path)
-
-    except Exception as e:
-        logger.exception("cyborg split: compose failed: %s", e)
-        return None
 
 
 # ---------- UI/KB ----------
@@ -1995,217 +1854,86 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ===
 async def start_generation_for_preset(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    preset: str,
-    show_intro: bool = True
-):
-    from PIL import ImageDraw  # локально, чтобы не трогать шапку импорта
+            update: Update,
+            context: ContextTypes.DEFAULT_TYPE,
+            preset: str,
+            show_intro: bool = True
+        ):
+            uid = update.effective_user.id
+            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+            av_name = get_current_avatar_name(prof)
+            av = get_avatar(prof, av_name)
 
-    uid = update.effective_user.id
-    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-    av_name = get_current_avatar_name(prof)
-    av = get_avatar(prof, av_name)
-
-    # 1) готовность модели
-    if av.get("status") != "succeeded":
-        await update.effective_message.reply_text(
-            f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
-        )
-        return
-
-    # 2) слаг финетюна
-    model_slug = _pinned_slug(av) or av.get("finetuned_model")
-    if not model_slug:
-        await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
-        return
-
-    # 3) стиль
-    if preset not in STYLE_PRESETS:
-        await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
-        return
-    meta = STYLE_PRESETS[preset]
-
-    gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-    natural = bool(prof.get("natural", True))
-    pretty  = bool(prof.get("pretty", False))
-    avatar_token = av.get("token", "")
-
-    # 4) композиции и твики
-    comps = _variants_for_preset(meta)
-    guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
-
-    # 5) FaceID reference (если включён)
-    face_ref_base = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
-
-    if show_intro:
-        await update.effective_message.reply_text(f"Генерирую «{preset}»…")
-
-    # ====== спец-режим «Киборг-сплит» (пол-лица робот) ======
-    is_cyborg = (preset.lower() == "киборг") or bool(meta.get("cyborg_split"))
-    cy_side   = (meta.get("cyborg_side") or "left").lower()   # left|right
-    feather   = int(meta.get("cyborg_feather", 72))
-
-    sent = 0
-
-    if is_cyborg:
-        for i, comp in enumerate(comps):
-            try:
-                # --- общая композиция и сид
-                comp_text, (w, h) = _comp_text_and_size(comp)
-                if comp == "half" and i % 2 == 1:
-                    comp_text += ", camera slightly closer, gentle 5° head turn"
-                elif comp == "closeup" and i % 2 == 1:
-                    comp_text += ", micro-reframe, eyes focus a touch brighter"
-
-                tone_text   = _tone_text(meta.get("tone", ""))
-                theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
-
-                base_prompt, base_neg = build_prompt(
-                    meta, gender, comp_text, tone_text, theme_boost,
-                    natural, pretty, avatar_token
+            # проверка готовности модели
+            if av.get("status") != "succeeded":
+                await update.effective_message.reply_text(
+                    f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
                 )
-                if extra_neg:
-                    base_neg = _neg_with_gender(base_neg, extra_neg)
+                return
 
-                # --- Ключевой трюк:
-                # человеческий проход — с FaceID (сохраняем тебя),
-                # киборг-проход — БЕЗ FaceID, чтобы дать модели «сломать» половину лица.
-                human_face_ref  = face_ref_base
-                cyborg_face_ref = None   # <— вот это и пробивало металл
+            # закреплённый слаг версии
+            model_slug = _pinned_slug(av) or av.get("finetuned_model")
+            if not model_slug:
+                await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
+                return
 
-                # усиливаем оверлей для киборга и слегка поднимаем guidance
-                human_side = "right" if cy_side == "left" else "left"
-                cyborg_overlay = (
-                    f"EXACTLY half of the face (the {cy_side} side) is cybernetic, "
-                    f"metallic plates, visible inner circuits, cable traces, micro-vents, "
-                    f"glowing {cy_side} eye, perfect vertical split along the facial midline, "
-                    f"the {human_side} side stays 100% human"
-                )
-                cyborg_anti = (
-                    "no full cyborg face, no mask, no helmet, "
-                    "no both eyes glowing, no entire head replacement"
-                )
+            # метаданные стиля
+            if preset not in STYLE_PRESETS:
+                await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
+                return
+            meta = STYLE_PRESETS[preset]
 
-                cy_prompt = f"{base_prompt}, {cyborg_overlay}"
-                cy_neg    = _neg_with_gender(base_neg, cyborg_anti)
+            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+            natural = bool(prof.get("natural", True))
+            pretty  = bool(prof.get("pretty", False))
+            avatar_token = av.get("token", "")
 
-                # одинаковый сид для совпадения позы/кадра
-                seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
+            # композиции и identity-safe твики
+            comps = _variants_for_preset(meta)           # например ["half","half","closeup"]
+            guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
 
-                # --- генерим оба кадра
-                human_url = await asyncio.to_thread(
-                    generate_from_finetune,
-                    model_slug,
-                    base_prompt,
-                    GEN_STEPS,
-                    guidance,
-                    seed, w, h,
-                    base_neg,
-                    face_embedding_url=human_face_ref
-                )
+            # FaceID: ссылка/путь; если нет — сгеним без него
+            face_ref = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
 
-                cyborg_url = await asyncio.to_thread(
-                    generate_from_finetune,
-                    model_slug,
-                    cy_prompt,
-                    GEN_STEPS,
-                    max(guidance, 6.2),
-                    seed, w, h,
-                    cy_neg,
-                    face_embedding_url=cyborg_face_ref
-                )
+            if show_intro:
+                await update.effective_message.reply_text(f"Генерирую «{preset}»…")
 
+            sent = 0
+            for i, comp in enumerate(comps):
+                try:
+                    comp_text, (w, h) = _comp_text_and_size(comp)
 
-                # --- качаем и склеиваем
-                hb = _download_image_bytes(human_url)
-                cb = _download_image_bytes(cyborg_url)
-                himg = Image.open(io.BytesIO(hb)).convert("RGB")
-                cimg = Image.open(io.BytesIO(cb)).convert("RGB")
-                if himg.size != cimg.size:
-                    cimg = cimg.resize(himg.size, Image.Resampling.LANCZOS)
+                    # лёгкая вариация кадра, чтобы не триггерить кэш/дубликаты
+                    if comp == "half" and i % 2 == 1:
+                        comp_text += ", camera slightly closer, gentle 5° head turn"
+                    elif comp == "closeup" and i % 2 == 1:
+                        comp_text += ", micro-reframe, eyes focus a touch brighter"
 
-                w0, h0 = himg.size
-                mask = Image.new("L", (w0, h0), 0)
-                draw = ImageDraw.Draw(mask)
-                mid = w0 // 2
+                    tone_text   = _tone_text(meta.get("tone", ""))
+                    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
 
-                # белое = берём cyborg, чёрное = human
-                if cy_side == "left":
-                    draw.rectangle([0, 0, mid, h0], fill=255)
-                else:
-                    draw.rectangle([mid, 0, w0, h0], fill=255)
+                    prompt, neg = build_prompt(
+                        meta, gender, comp_text, tone_text, theme_boost,
+                        natural, pretty, avatar_token
+                    )
+                    if extra_neg:
+                        neg = _neg_with_gender(neg, extra_neg)
 
-                # мягкий шов
-                fw = max(0, feather)
-                if fw > 0:
-                    ramp = Image.new("L", (fw * 2, 1))
-                    for x in range(fw * 2):
-                        val = int(255 * (1.0 - abs(x - fw) / max(1, fw)))
-                        ramp.putpixel((x, 0), val)
-                    ramp = ramp.resize((fw * 2, h0))
-                    mask.paste(ramp, (mid - fw, 0))
+                    seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
 
-                mixed = Image.composite(cimg, himg, mask)
-
-                # --- сохраняем/шлём
-                out_path = tmp_path(".jpg")
-                mixed.save(out_path, "JPEG", quality=92)
-
-                if USE_S3 and s3_client and S3_BUCKET:
-                    key = _s3_key("generated", str(uid), f"cyborg_{int(time.time()*1000)}.jpg")
-                    with open(out_path, "rb") as f:
-                        _retry(s3_client.put_object, Bucket=S3_BUCKET, Key=key, Body=f, ContentType="image/jpeg", label="s3_put_gen")
-                    url = s3_client.generate_presigned_url("get_object", Params={"Bucket": S3_BUCKET, "Key": key}, ExpiresIn=86400)
+                    url = await asyncio.to_thread(
+                        generate_from_finetune,
+                        model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
+                    )
                     await update.effective_message.reply_photo(url)
-                else:
-                    await update.effective_message.reply_photo(photo=open(out_path, "rb"))
+                    sent += 1
 
-                sent += 1
+                except Exception as e:
+                    logger.exception("gen failed for comp=%s", comp)
+                    await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
 
-            except Exception as e:
-                logger.exception("cyborg gen failed for comp=%s", comp)
-                await update.effective_message.reply_text(f"⚠️ Киборг-генерация ({comp}) упала: {e}")
-
-        if sent == 0:
-            await update.effective_message.reply_text("Не удалось сгенерировать ни одного «Киборг» кадра.")
-        return  # выходим: обычную ветку не запускаем
-
-    # ===== обычная генерация для остальных стилей =====
-    for i, comp in enumerate(comps):
-        try:
-            comp_text, (w, h) = _comp_text_and_size(comp)
-            if comp == "half" and i % 2 == 1:
-                comp_text += ", camera slightly closer, gentle 5° head turn"
-            elif comp == "closeup" and i % 2 == 1:
-                comp_text += ", micro-reframe, eyes focus a touch brighter"
-
-            tone_text   = _tone_text(meta.get("tone", ""))
-            theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
-
-            prompt, neg = build_prompt(
-                meta, gender, comp_text, tone_text, theme_boost,
-                natural, pretty, avatar_token
-            )
-            if extra_neg:
-                neg = _neg_with_gender(neg, extra_neg)
-
-            seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
-
-            url = await asyncio.to_thread(
-                generate_from_finetune,
-                model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref_base
-            )
-            await update.effective_message.reply_photo(url)
-            sent += 1
-
-        except Exception as e:
-            logger.exception("gen failed for comp=%s", comp)
-            await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
-
-    if sent == 0:
-        await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
-
+            if sent == 0:
+                await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
 
 
 # --- Toggles (пер-юзер) ---
