@@ -1711,16 +1711,24 @@ async def natural_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Natural: {'ON' if prof['natural'] else 'OFF'} (Pretty: {'ON' if prof.get('pretty', False) else 'OFF'})")
 
 # ---------- System ----------
+# --- ФОНОВЫЙ ПОЛЛЕР БЕЗ JobQueue ---
+async def _poller_loop(app):
+    while True:
+        try:
+            await training_poller_tick(
+                load_all_profiles, save_profile,
+                get_current_avatar_name, get_avatar,
+                check_training_status   # <-- проверь имя именно такое
+            )
+        except Exception as e:
+            logger.warning("poller tick failed: %s", e)
+        await asyncio.sleep(300)  # 5 минут
+
 async def _post_init(app):
     await app.bot.delete_webhook(drop_pending_updates=True)
-    app.job_queue.run_repeating(_poller_job, interval=300, first=15)
-
-async def _poller_job(context: ContextTypes.DEFAULT_TYPE):
-    await training_poller_tick(
-        load_all_profiles, save_profile,
-        get_current_avatar_name, get_avatar,
-        check_training_status
-    )
+    # запускаем фоновую корутину вместо job_queue
+    app.create_task(_poller_loop(app))
+    
 
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(_post_init).build()
