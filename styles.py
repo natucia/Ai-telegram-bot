@@ -354,12 +354,37 @@ STYLE_PRESETS: Dict[str, Style] = {
 
     # ===== КИНО / КОМИКСЫ / ПОП-КУЛЬТУРА (вдохновение) =====
     "Готэм-ночь (Бэтмен-вайб)": {
-        "desc": "Ночной мегаполис, прожектора, готическая крыша.",
-        "role": "dark vigilante silhouette style",
-        "outfit": "matte suit vibe (no logos)",
-        "props": "dramatic cape motion, rooftop gargoyles, signal in clouds",
-        "bg": "gothic city skyline in rain",
-        "comp": "half", "tone": "noir"
+        "desc": "Кинематографичный герой в стиле Бэтмена — мощная энергия, глянцевая броня, неоновые отблески и легендарный бэтмобиль на фоне. Атмосфера — дорогой комикс с глубокой контрастной цветокоррекцией.",
+        "role": "dark hero standing by the batmobile in cinematic night scene",
+        "outfit": (
+            "black armored batsuit with matte and glossy carbon sections, "
+            "bat symbol on the chest, armored gauntlets, utility belt with gold accents, "
+            "flowing dark cape catching backlight"
+        ),
+        "props": (
+            "batmobile with glowing blue and red LED lines, "
+            "mist swirling around wheels, reflections on wet asphalt, "
+            "neon lights from skyscrapers, lens flares, cinematic rain"
+        ),
+        "bg": (
+            "night cityscape with glowing signs and rain reflections, "
+            "gotham skyline, thunderclouds and spotlight beams cutting through mist"
+        ),
+        "comp": "full",
+        "tone": "dramatic neon contrast",
+        "required_attributes": [
+            "bat armor suit",
+            "bat symbol visible",
+            "batmobile in background",
+            "cinematic lighting"
+        ],
+        "force_keywords": [
+            "cinematic batman armor suit with cape",
+            "sleek futuristic batmobile behind",
+            "dramatic night lighting",
+            "wet city street reflections",
+            "intense comic-book atmosphere"
+        ]
     },
     "Халк-эффект": {
         "desc": "Мощная зеленая трансформация: огромное мускулистое тело, зеленная кожа, разорванная одежда.",
