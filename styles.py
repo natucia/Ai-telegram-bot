@@ -418,29 +418,39 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "cool"
     },
     "Киборг": {
-        "desc": "Половина лица разрушена, под кожей виден металлический эндоскелет, красное свечение глаза. Атмосфера — пост-апокалиптический футуризм, холодный стальной блеск и технологичность.",
-        "role": "realistic half-terminator portrait, cinematic sci-fi destruction aesthetic",
+        "desc": "Половина лица повреждена — под кожей блестящий металлический эндоскелет, красный кибер-глаз, детали из титана и проводов. Атмосфера фильма о будущем: дым, холодный свет, напряжение.",
+        "role": "half-terminator portrait, realistic cinematic sci-fi",
         "outfit": (
-            "damaged tactical uniform or scientist lab coat partly torn, "
-            "exposed metallic collar and spine elements"
+            "tactical or futuristic outfit with metallic seams, "
+            "visible armored collar and cable harness on the neck"
         ),
         "props": (
-            "half-face destroyed skin revealing titanium skull structure, "
-            "glowing red cybernetic eye, micro hydraulic pistons, cables and servos, "
-            "burnt edges around the wound, steam and sparks, "
-            "inner mechanical details illuminated with red light"
+            "mandatory detailed half-face endoskeleton visible under torn skin, "
+            "metallic skull structure, hydraulic pistons and micro servos, "
+            "chrome cheekbones, glowing red cybernetic eye, "
+            "thin steel cables along the jawline, exposed neck wiring, "
+            "small bolts and seams in the skin, steam coming from the wound, "
+            "soft sparks and reflections on the metal surface"
         ),
         "bg": (
-            "dark futuristic laboratory corridor with smoke and debris, "
-            "flickering emergency lights, broken holographic panels, "
-            "cold cinematic contrast lighting with red reflections"
+            "futuristic research corridor or destroyed lab, "
+            "flickering red lights, smoke haze, volumetric backlight, "
+            "broken glass, scattered sparks and glowing wires"
         ),
         "comp": "closeup",
         "tone": "dramatic",
         "cyborg_split": True,
         "cyborg_mode": "mask",
         "cyborg_side": "right",
-        "cyborg_feather": 64
+        "cyborg_feather": 64,
+        "force_keywords": [
+            "metal on the face", 
+            "cybernetic implants visible", 
+            "half mechanical skull", 
+            "glowing red eye", 
+            "exposed circuits", 
+            "chrome cheek and jaw"
+        ]
     },
 
     # ===== НОЧНЫЕ / УЖАСЫ / ГОТИКА =====
