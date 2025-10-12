@@ -454,24 +454,70 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     # ===== НОЧНЫЕ / УЖАСЫ / ГОТИКА =====
-                                   "Вампирский бал": {
-                                       "desc": "Готическая элегантность с вампирскими атрибутами: острые клыки, красные глаза, бледная кожа.",
-                                       "role": "vampire aristocrat at gothic ball",
-                                       "outfit_f": "velvet gown with lace (modest)",
-                                       "outfit": "tailcoat with cravat",
-                                       "props": "goblet with red liquid, candelabra, rose thorns",
-                                       "bg": "neo-gothic hall with stained glass",
-                                       "comp": "half", "tone": "noir",
-                                       "required_attributes": ["visible fangs", "red eyes", "pale skin", "vampire aesthetic"]
-                                   },
+    "Вампирский бал": {
+        "desc": "Готическая элегантность с обязательными вампирскими чертами: острые клыки, сияющие красные глаза, аристократическая бледность. Атмосфера — таинственный бал под лунным светом и свечами.",
+        "role": "vampire aristocrat attending a gothic masquerade ball",
+        "outfit_f": (
+            "dark velvet or lace gown with corset, "
+            "gothic jewelry, subtle shimmer, "
+            "deep neckline with silver pendant shaped like a cross or rose"
+        ),
+        "outfit": (
+            "black or crimson tailcoat with embroidered collar, "
+            "high cravat, gloves, gothic brooch"
+        ),
+        "props": (
+            "clearly visible sharp fangs slightly revealed in half-smile, "
+            "crimson glowing eyes reflecting candlelight, "
+            "ornate goblet with mysterious red drink, "
+            "silver candelabra, dark roses, scattered petals, "
+            "mist swirling on the marble floor"
+        ),
+        "bg": (
+            "lavish gothic ballroom with chandeliers, "
+            "stained glass windows, candlelight flicker, "
+            "moonlight streaming through tall arches, "
+            "soft fog and golden dust particles in the air"
+        ),
+        "comp": "half",
+        "tone": "noir",
+        "required_attributes": [
+            "sharp fangs",
+            "crimson glowing eyes",
+            "pale aristocratic skin",
+            "gothic elegance",
+            "candlelight reflections"
+        ],
+        "force_keywords": [
+            "visible vampire fangs",
+            "glowing red eyes",
+            "pale luminous skin"
+        ]
+    },
     "Зомби-апокалипсис (кино)": {
-        "desc": "Вы в роли зомби: бледная кожа, раны, кровоподтеки, стеклянный взгляд, потрепанная одежда.",
-        "role": "zombie in apocalypse setting",
-        "outfit": "tattered, dirty clothes with bloodstains",
-        "props": "wounds, bruises, maybe missing flesh, dragging leg",
-        "bg": "post-apocalyptic street with debris, smoke, abandoned cars",
-        "comp": "half", "tone": "noir",
-        "required_attributes": ["pale skin", "zombie eyes", "wounds", "undead appearance"]
+        "desc": "Выжженный мир после катастрофы. Вы — заражённый человек: бледная кожа, стеклянный взгляд, следы деградации, разорванная одежда. Атмосфера — киношный хоррор, напряжение и пыль.",
+        "role": "infected survivor in cinematic apocalypse setting",
+        "outfit": (
+            "tattered, dirty, weathered clothing with faded stains, "
+            "rough texture, survival accessories, worn boots"
+        ),
+        "props": (
+            "pale uneven skin tone, dark eye shadows, cracked lips, "
+            "slow posture, empty eyes, dust and grime on the face, "
+            "fog and smoke in the background, cinematic debris"
+        ),
+        "bg": (
+            "destroyed city street with dust clouds, abandoned vehicles, "
+            "dim orange light through smoke, cinematic haze"
+        ),
+        "comp": "half",
+        "tone": "noir",
+        "required_attributes": [
+            "pale skin", 
+            "dark eye circles", 
+            "lifeless gaze", 
+            "weathered clothing"
+        ]
     },
     "Ведьма — чары и луна": {
         "desc": "Травы, чары, ночная поляна и огромная луна.",
