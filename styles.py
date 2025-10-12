@@ -418,30 +418,29 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "cool"
     },
     "Киборг": {
-        "desc": "Полу-киборг из будущего: половина лица из полированного металла, с микро-шестерёнками и неоновой подсветкой. Атмосфера — футуризм и технология, холодный блеск стали и синего света.",
-        "role": "half-cyborg portrait, cinematic sci-fi style",
+        "desc": "Половина лица разрушена, под кожей виден металлический эндоскелет, красное свечение глаза. Атмосфера — пост-апокалиптический футуризм, холодный стальной блеск и технологичность.",
+        "role": "realistic half-terminator portrait, cinematic sci-fi destruction aesthetic",
         "outfit": (
-            "fitted futuristic bodysuit or tactical uniform with metallic seams, "
-            "micro-LED threads along the collar, subtle armor texture"
+            "damaged tactical uniform or scientist lab coat partly torn, "
+            "exposed metallic collar and spine elements"
         ),
         "props": (
-            "half-face biomechanical shell with titanium plates, "
-            "small mechanical joints and bolts, visible servo seams, "
-            "thin glowing lines running under the skin, "
-            "fiber-optic implants and chrome cheek plates, "
-            "blue and violet reflections, cold light bounce on the metal"
+            "half-face destroyed skin revealing titanium skull structure, "
+            "glowing red cybernetic eye, micro hydraulic pistons, cables and servos, "
+            "burnt edges around the wound, steam and sparks, "
+            "inner mechanical details illuminated with red light"
         ),
         "bg": (
-            "dark high-tech corridor or research lab, "
-            "faint steam, holographic screens with schematics, "
-            "lens flares and neon reflections, volumetric light beams in mist"
+            "dark futuristic laboratory corridor with smoke and debris, "
+            "flickering emergency lights, broken holographic panels, "
+            "cold cinematic contrast lighting with red reflections"
         ),
         "comp": "closeup",
-        "tone": "cool",
+        "tone": "dramatic",
         "cyborg_split": True,
         "cyborg_mode": "mask",
-        "cyborg_side": "left",
-        "cyborg_feather": 72
+        "cyborg_side": "right",
+        "cyborg_feather": 64
     },
 
     # ===== НОЧНЫЕ / УЖАСЫ / ГОТИКА =====
