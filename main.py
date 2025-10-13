@@ -1233,7 +1233,7 @@ async def face_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------- Handlers ----------
-    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = update.effective_user.id
         prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
 
