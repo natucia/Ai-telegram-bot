@@ -813,42 +813,34 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "full", "tone": "warm"
     },
     "Хаос-кинематограф": {
-        "desc": "Всё летит, но герой спокоен — драматический эпик.",
-        "role": "hero in cinematic disaster scene",
-        "outfit_f": "modern streetwear with dust marks",
-        "outfit": "modern streetwear with dust marks",
-        "props": "embers, flying papers, cracked glass",
-        "bg": "burning house and collapsing structures",
-        "comp": "full", "tone": "noir"
-    },
-    "Контакт НЛО — лучи и пыль": {
-        "desc": "Парящие тарелки, лучи и загадочная пыль.",
-        "role": "person confronted by hovering UFOs",
-        "outfit_f": "sleek sci-fi coat",
-        "outfit": "sleek sci-fi coat",
-        "props": "tractor beams, floating debris",
-        "bg": "night field with moody clouds",
-        "comp": "full", "tone": "cool"
+    "desc": "Мир в огне: герой с автоматом пробивается через стену пламени, вокруг рушатся небоскребы, небо кроваво-красное.",
+        "role": "survivor fighting through urban apocalypse",
+        "outfit": "combat gear with soot, gas mask, tactical vest",
+        "props": "assault rifle, ammo pouches, flames licking close, intense heat haze",
+        "bg": "completely burning city, collapsing bridges, red apocalyptic sky, chaos everywhere",
+        "comp": "full", 
+        "tone": "noir",
+        "force_keywords": [
+            "wall of fire", "assault rifle ready", "urban destruction", 
+            "krasiviy пожар", "apocalyptic wasteland", "action combat stance"
+        ]
     },
     "Фридайвер — синие бездны": {
-        "desc": "Голубая толща, лучи сверху, пузыри.",
-        "role_f": "freediver underwater",
-        "role": "freediver underwater",
-        "outfit_f": "apnea wetsuit without tank, long fins, mask",
-        "outfit": "apnea wetsuit without tank, long fins, mask",
-        "props": "air bubbles, sunbeams, small fish",
-        "bg": "deep blue water with rocky arch or reef",
-        "comp": "full", "tone": "cool"
-    },
-
-    # ===== КОСТЮМНЫЕ / ОБРАЗЫ =====
-    "Кукла в коробке": {
-        "desc": "Ты — кукла в бренд-коробке: прозрачное окно, стикеры, аксессуары.",
-        "role": "boxed doll character",
-        "outfit": "theme outfit matching box art (modest)",
-        "props": "plastic-like gloss, accessory tray, printed slogans",
-        "bg": "toy store display box interior",
-        "comp": "half", "tone": "daylight"
+        "desc": "Полное погружение в подводный мир: фридайвер в маске и гидрокостюме с моноластой парит среди коралловых рифов, окруженный дельфинами, китами и тропическими рыбками. На спине - дайвингские баллоны для глубоких погружений.",
+        "role": "freediver and scuba diver exploring underwater world",
+        "outfit_f": "wetsuit with scuba tanks, diving mask clearly visible, monofin or long fins",
+        "outfit": "wetsuit with scuba tanks, diving mask clearly visible, monofin or long fins", 
+        "props": "diving mask on face, scuba tanks on back, regulator with bubbles, monofin movement, schools of tropical fish, dolphins swimming nearby",
+        "bg": "vibrant coral reef ecosystem, whales in distance, sunbeams penetrating water, underwater cave or wreck",
+        "comp": "full", 
+        "tone": "cool",
+        "force_keywords": [
+            "underwater diving", "diving mask clearly visible", "scuba tanks on back", 
+            "monofin or long fins", "wetsuit", "coral reef", "tropical fish",
+            "dolphins swimming", "whales in background", "sunbeams through water",
+            "underwater bubbles", "graceful swimming motion"
+        ],
+        "negative": "chair, sitting, sitting on chair, stool, bench, seat, furniture, indoor, room, house, building, land, ground, floor"
     },
     "Рок-звезда 80-х": {
         "desc": "Взрывная энергия 80-х: кожа, неон, электрогитара, сумасшедшая прическа и толпа фанатов.",
@@ -926,9 +918,12 @@ THEME_BOOST = {
     "Джунгли — Тарзан-вайб": "god rays through canopy, wet leaf speculars, ground mist",
     "Детство": "soft pastel garlands, shallow dof sparkles, gentle vignette",
     "Свадьба": "fairy lights bokeh, soft veil translucency",
-    "Хаос-кинематограф": "embers, paper scraps, dramatic smoke, slight camera shake feel",
+    "Хаос-кинематограф": "extreme heat waves, spark showers, structural collapse moments, blood red sky",
     "Контакт НЛО — лучи и пыль": "volumetric beams, dust motes, faint radio-glitch halation",
-    "Фридайвер — синие бездны": "caustic light patterns, particulate backscatter, gentle blue gradient",
+    "Фридайвер — синие бездны": (
+        "water caustics patterns, fish scale reflections, coral texture details, "
+        "dolphin silhouette elegance, whale majesty, equipment details, bubble trails"
+    ),
     "Деревня — тёплый уют": "warm wood patina, sun dust in air, linen texture details",
     "Россия — зимняя сказка": "crisp breath vapor, snow sparkle, frosty window details",
     "Теннис — динамика корта": "chalk dust from lines, motion blur of ball strings",
@@ -958,8 +953,8 @@ THEME_BOOST = {
 SCENE_GUIDANCE = {
     "Джунгли — Тарзан-вайб": 3.2,
     "Контакт НЛО — лучи и пыль": 3.2,
-    "Хаос-кинематограф": 3.2,
-    "Фридайвер — синие бездны": 3.0,
+    "Хаос-кинематограф": 3.6,
+    "Фридайвер — синие бездны": 3.5,
     "Арктика — сияние и айсберги": 3.2,
     "Детство": 3.0,
     "Самурай в храме": 3.0,
