@@ -1110,181 +1110,198 @@ async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "set":
         name = parts[2] if len(parts) > 2 else None
         if not name or name not in prof["avatars"]:
-            await q.message.reply_text("Аватар не найден.", reply_markup=avatars_kb(uid)); return
+            await _replace_with_new_below(q.message, "Аватар не найден.", reply_markup=avatars_kb(uid))
+            return
         set_current_avatar(uid, name)
         av = get_avatar(prof, name)
-        # если пола нет — спросим
         if not av.get("gender"):
-            await q.message.reply_text(f"Выбран «{name}». Укажи пол:", reply_markup=avatar_gender_kb(name))
+            await _replace_with_new_below(q.message, f"Выбран «{name}». Укажи пол:", reply_markup=avatar_gender_kb(name))
         else:
-            await q.message.reply_text(f"Активный аватар: {name} • Пол: {av['gender']}", reply_markup=avatars_kb(uid))
+            await _replace_with_new_below(q.message, f"Активный аватар: {name} • Пол: {av['gender']}", reply_markup=avatars_kb(uid))
 
     elif action == "new":
-        # ждём имя аватара текстом (без команд)
         PENDING_NEW_AVATAR[uid] = True
-        await q.message.reply_text("Введи имя нового аватара одним сообщением (например: travel, work, glam).")
+        await _replace_with_new_below(q.message, "Введи имя нового аватара одним сообщением (например: travel, work, glam).")
 
-    elif action == "gender": # avatar:gender:<name>:female|male
+    elif action == "gender":
         if len(parts) >= 4:
             name, g = parts[2], parts[3]
             prof = load_profile(uid)
             if name in prof["avatars"]:
                 prof["avatars"][name]["gender"] = "female" if g == "female" else "male"
                 save_profile(uid, prof)
-                await q.message.reply_text(f"Пол для «{name}»: {prof['avatars'][name]['gender']}", reply_markup=avatars_kb(uid))
+                await _replace_with_new_below(q.message, f"Пол для «{name}»: {prof['avatars'][name]['gender']}", reply_markup=avatars_kb(uid))
             else:
-                await q.message.reply_text("Аватар не найден.", reply_markup=avatars_kb(uid))
+                await _replace_with_new_below(q.message, "Аватар не найден.", reply_markup=avatars_kb(uid))
 
     elif action == "del":
-        await q.message.reply_text("Выбери, что удалить:", reply_markup=delete_pick_kb(uid))
+        await _replace_with_new_below(q.message, "Выбери, что удалить:", reply_markup=delete_pick_kb(uid))
 
-    elif action == "delpick": # выбор конкретного аватара на удаление
+    elif action == "delpick":
         name = parts[2] if len(parts) > 2 else None
         if not name:
-            await q.message.reply_text("Не понял, что удалять.", reply_markup=avatars_kb(uid)); return
+            await _replace_with_new_below(q.message, "Не понял, что удалять.", reply_markup=avatars_kb(uid))
+            return
         PENDING_DELETE_AVATAR[uid] = name
-        await q.message.reply_text(f"Удалить «{name}» безвозвратно?", reply_markup=delete_confirm_kb(name))
+        await _replace_with_new_below(q.message, f"Удалить «{name}» безвозвратно?", reply_markup=delete_confirm_kb(name))
 
     elif action == "delyes":
         name = parts[2] if len(parts) > 2 else None
         if not name:
-            await q.message.reply_text("Не указан аватар.", reply_markup=avatars_kb(uid)); return
+            await _replace_with_new_below(q.message, "Не указан аватар.", reply_markup=avatars_kb(uid))
+            return
         try:
             del_avatar(uid, name)
             PENDING_DELETE_AVATAR.pop(uid, None)
-            await q.message.reply_text(f"«{name}» удалён.", reply_markup=avatars_kb(uid))
+            await _replace_with_new_below(q.message, f"«{name}» удалён.", reply_markup=avatars_kb(uid))
         except Exception as e:
-            await q.message.reply_text(f"Не удалось удалить: {e}", reply_markup=avatars_kb(uid))
+            await _replace_with_new_below(q.message, f"Не удалось удалить: {e}", reply_markup=avatars_kb(uid))
 
     else:
-        await q.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
-
+        await _replace_with_new_below(q.message, "Аватары:", reply_markup=avatars_kb(uid))
 # ---------- Face ID Callback ---------   
 async def face_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                    q = update.callback_query
-                    await q.answer()
-                    uid = update.effective_user.id
-                    prof = load_profile(uid)
-                    av_name = get_current_avatar_name(prof)
-                    av = get_avatar(prof, av_name)
+                            q = update.callback_query
+                            await q.answer()
+                            uid = update.effective_user.id
+                            prof = load_profile(uid)
+                            av_name = get_current_avatar_name(prof)
+                            av = get_avatar(prof, av_name)
 
-                    parts = q.data.split(":")
-                    action = parts[1] if len(parts) > 1 else ""
+                            parts = q.data.split(":")
+                            action = parts[1] if len(parts) > 1 else ""
 
-                    if action == "enable":
-                        global FACE_ID_ADAPTER_ENABLED
-                        FACE_ID_ADAPTER_ENABLED = True
-                        await _replace_with_new_below(q.message, "✅ Face ID adapter включен", reply_markup=face_id_toggle_kb())
+                            if action == "enable":
+                                global FACE_ID_ADAPTER_ENABLED
+                                FACE_ID_ADAPTER_ENABLED = True
+                                await _replace_with_new_below(q.message, "✅ Face ID adapter включен", reply_markup=face_id_toggle_kb())
 
-                    elif action == "disable":
-                        FACE_ID_ADAPTER_ENABLED = False
-                        await _replace_with_new_below(q.message, "❌ Face ID adapter выключен", reply_markup=face_id_toggle_kb())
+                            elif action == "disable":
+                                FACE_ID_ADAPTER_ENABLED = False
+                                await _replace_with_new_below(q.message, "❌ Face ID adapter выключен", reply_markup=face_id_toggle_kb())
 
-                    elif action == "refresh":
-                        msg = await _replace_with_new_below(q.message, "🔄 Обновляю Face ID embedding…", reply_markup=None)
-                        try:
-                            embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
-                            text = "✅ Face ID embedding обновлён" if embedding else "❌ Не удалось обновить Face ID embedding"
-                            # обновлённый статус выводим НОВЫМ сообщением снизу, без редактирования
-                            await msg.reply_text(text, reply_markup=face_id_toggle_kb(), disable_web_page_preview=True)
-                        except Exception as e:
-                            await msg.reply_text(f"❌ Ошибка: {e}", reply_markup=face_id_toggle_kb(), disable_web_page_preview=True)
+                            elif action == "refresh":
+                                msg = await _replace_with_new_below(q.message, "🔄 Обновляю Face ID embedding…", reply_markup=None)
+                                try:
+                                    embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
+                                    text = "✅ Face ID embedding обновлён" if embedding else "❌ Не удалось обновить Face ID embedding"
+                                    await _replace_with_new_below(msg, text, reply_markup=face_id_toggle_kb())
+                                except Exception as e:
+                                    await _replace_with_new_below(msg, f"❌ Ошибка: {e}", reply_markup=face_id_toggle_kb())
 
-                    else:
-                        status = "включен" if FACE_ID_ADAPTER_ENABLED else "выключен"
-                        has_embedding = "есть" if av.get("face_embedding") else "нет"
-                        text = (
-                            "👤 Face ID Adapter\n\n"
-                            f"Статус: {status}\n"
-                            f"Embedding: {has_embedding}\n"
-                            f"Вес: {FACE_ID_WEIGHT}\n"
-                            f"Шум: {FACE_ID_NOISE}\n"
-                            f"Масштаб: {FACE_ID_SCALE}"
-                        )
-                        await _replace_with_new_below(q.message, text, reply_markup=face_id_toggle_kb())
+                            else:
+                                status = "включен" if FACE_ID_ADAPTER_ENABLED else "выключен"
+                                has_embedding = "есть" if av.get("face_embedding") else "нет"
+                                text = (
+                                    "👤 Face ID Adapter\n\n"
+                                    f"Статус: {status}\n"
+                                    f"Embedding: {has_embedding}\n"
+                                    f"Вес: {FACE_ID_WEIGHT}\n"
+                                    f"Шум: {FACE_ID_NOISE}\n"
+                                    f"Масштаб: {FACE_ID_SCALE}"
+                                )
+                                await _replace_with_new_below(q.message, text, reply_markup=face_id_toggle_kb())
 
 
 
 # ---------- Handlers ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-    await update.message.reply_text(
-        "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя в узнаваемых сценах.\n\n"
-        "— «📸 Набор фото» — загрузи до 10 снимков.\n"
-        "— «🧪 Обучение» — тренируем твою LoRA.\n" 
-        "— «🧭 Выбрать стиль» — сцены и жанры.\n"
-        "— «🤖 Аватары» — несколько моделей с отдельным полом.\n"
-        "— «👤 Face ID» — улучшенное сохранение идентичности лица.\n",
-        reply_markup=main_menu_kb()
-    )
+        uid = update.effective_user.id
+        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+
+        # При старте просто отправляем главное меню без удаления предыдущих сообщений
+        await update.message.reply_text(
+            "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя в узнаваемых сценах.\n\n"
+            "— «📸 Набор фото» — загрузи до 10 снимков.\n"
+            "— «🧪 Обучение» — тренируем твою LoRA.\n" 
+            "— «🧭 Выбрать стиль» — сцены и жанры.\n"
+            "— «🤖 Аватары» — несколько моделей с отдельным полом.\n"
+            "— «👤 Face ID» — улучшенное сохранение идентичности лица.\n",
+            reply_markup=main_menu_kb()
+        )
 # ---------- UI utils ----------
 
         # ---------- UI utils: удалить старое, прислать новое снизу ----------
-async def _replace_with_new_below(qmsg, text: str, reply_markup=None):
-            """
-            Отправляет НОВОЕ сообщение внизу и удаляет старое меню.
-            Возвращает объект нового сообщения.
-            """
-            new_msg = await qmsg.reply_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+async def _replace_with_new_below(qmsg, text: str, reply_markup=None, keep_for_main_menu: bool = False):
+        """
+        Отправляет НОВОЕ сообщение внизу и удаляет старое меню.
+        Если keep_for_main_menu=True, то НЕ удаляет главное меню.
+        """
+        new_msg = await qmsg.reply_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+
+        # НЕ удаляем если это главное меню или флаг указан
+        if not keep_for_main_menu:
             with contextlib.suppress(Exception):
                 await qmsg.delete()
-            return new_msg
+
+        return new_msg
 
 
 async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                    q = update.callback_query
-                    await q.answer()
-                    uid = update.effective_user.id
-                    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                    key = q.data.split(":", 1)[1]
+                            q = update.callback_query
+                            await q.answer()
+                            uid = update.effective_user.id
+                            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+                            key = q.data.split(":", 1)[1]
 
-                    if key == "styles":
-                        await _replace_with_new_below(q.message, "Выбери категорию:", reply_markup=categories_kb())
+                            if key == "styles":
+                                await _replace_with_new_below(q.message, "Выбери категорию:", reply_markup=categories_kb())
 
-                    elif key == "menu":
-                        await _replace_with_new_below(q.message, "Главное меню:", reply_markup=main_menu_kb())
+                            elif key == "menu":
+                                # ГЛАВНОЕ МЕНЮ - остается, не удаляем предыдущее сообщение
+                                await _replace_with_new_below(q.message, "Главное меню:", reply_markup=main_menu_kb(), keep_for_main_menu=True)
 
-                    elif key == "enroll":
-                        await _replace_with_new_below(q.message, "📸 Набор фото…", reply_markup=None)
-                        await id_enroll(update, context)
+                            elif key == "enroll":
+                                await _replace_with_new_below(q.message, "📸 Набор фото…", reply_markup=None)
+                                await id_enroll(update, context)
 
-                    elif key == "train":
-                        await _replace_with_new_below(q.message, "🧪 Обучение…", reply_markup=None)
-                        await trainid_cmd(update, context)
+                            elif key == "train":
+                                await _replace_with_new_below(q.message, "🧪 Обучение…", reply_markup=None)
+                                await trainid_cmd(update, context)
 
-                    elif key == "status":
-                        await _replace_with_new_below(q.message, "ℹ️ Обновляю статус…", reply_markup=None)
-                        await id_status(update, context)
+                            elif key == "status":
+                                await _replace_with_new_below(q.message, "ℹ️ Обновляю статус…", reply_markup=None)
+                                await id_status(update, context)
 
-                    elif key == "avatars":
-                        await _replace_with_new_below(q.message, "Аватары:", reply_markup=avatars_kb(uid))
+                            elif key == "avatars":
+                                await _replace_with_new_below(q.message, "Аватары:", reply_markup=avatars_kb(uid))
 
-                    elif key == "beauty":
-                        prof = load_profile(uid)
-                        prof["pretty"] = not prof.get("pretty", False)
-                        if prof["pretty"]:
-                            prof["natural"] = True
-                        save_profile(uid, prof)
-                        await _replace_with_new_below(
-                            q.message,
-                            f"Pretty: {'ON' if prof['pretty'] else 'OFF'} • Natural: {'ON' if prof['natural'] else 'OFF'}",
-                            reply_markup=main_menu_kb()
-                        )
+                            elif key == "beauty":
+                                prof = load_profile(uid)
+                                prof["pretty"] = not prof.get("pretty", False)
+                                if prof["pretty"]:
+                                    prof["natural"] = True
+                                save_profile(uid, prof)
+                                await _replace_with_new_below(
+                                    q.message,
+                                    f"Pretty: {'ON' if prof['pretty'] else 'OFF'} • Natural: {'ON' if prof['natural'] else 'OFF'}",
+                                    reply_markup=main_menu_kb(),
+                                    keep_for_main_menu=True  # Возврат в главное меню - остается
+                                )
 
-                    elif key == "lockface":
-                        prof = load_profile(uid)
-                        av = get_avatar(prof)
-                        av["lockface"] = not av.get("lockface", True)
-                        save_profile(uid, prof)
-                        state = "включён" if av["lockface"] else "выключен"
-                        await _replace_with_new_below(q.message, f"LOCKFACE {state}", reply_markup=main_menu_kb())
+                            elif key == "lockface":
+                                prof = load_profile(uid)
+                                av = get_avatar(prof)
+                                av["lockface"] = not av.get("lockface", True)
+                                save_profile(uid, prof)
+                                state = "включён" if av["lockface"] else "выключен"
+                                await _replace_with_new_below(
+                                    q.message, 
+                                    f"LOCKFACE {state}", 
+                                    reply_markup=main_menu_kb(),
+                                    keep_for_main_menu=True  # Возврат в главное меню - остается
+                                )
 
-                    elif key == "faceid":
-                        await face_id_cb(update, context)
+                            elif key == "faceid":
+                                await face_id_cb(update, context)
 
-                    else:
-                        await _replace_with_new_below(q.message, "Главное меню:", reply_markup=main_menu_kb())
+                            else:
+                                await _replace_with_new_below(
+                                    q.message, 
+                                    "Главное меню:", 
+                                    reply_markup=main_menu_kb(),
+                                    keep_for_main_menu=True  # Возврат в главное меню - остается
+                                )
 
 
 
@@ -1297,7 +1314,6 @@ async def cb_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     cat = q.data.split(":", 1)[1]
     await _replace_with_new_below(q.message, f"Стиль — {cat}. Выбери сцену:", reply_markup=styles_kb_for_category(cat))
-
 
 async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
