@@ -1027,9 +1027,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🧭 Выбрать стиль", callback_data="nav:styles")],
             [InlineKeyboardButton("📸 Набор фото", callback_data="nav:enroll"),
              InlineKeyboardButton("🧪 Обучение", callback_data="nav:train")],
-            [InlineKeyboardButton("ℹ️ Мой статус", callback_data="nav:status")],
             [InlineKeyboardButton("🤖 Аватары", callback_data="nav:avatars")],
-            # (удалены: Natural/Pretty, LOCKFACE, Face ID)
         ]
         return InlineKeyboardMarkup(rows)
 
@@ -1874,50 +1872,56 @@ async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(f"Не удалось запустить обучение: {e}")
 
 async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    prof = load_profile(uid)
-    av_name = get_current_avatar_name(prof)
-    status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
-    prof = load_profile(uid) # перечитаем после обновления
-    av = get_avatar(prof, av_name)
-    tid = av.get("training_id")
+        uid = update.effective_user.id
+        prof = load_profile(uid)
+        av_name = get_current_avatar_name(prof)
+        status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
+        prof = load_profile(uid)  # перечитаем после обновления
+        av = get_avatar(prof, av_name)
+        tid = av.get("training_id")
 
-    # человекочитаемая строка статуса
-    display = {
-        "starting": "starting (готовится к запуску)",
-        "queued": "queued (в очереди)", 
-        "running": "running (обучается)",
-        "processing": "processing (публикую версию)",
-        "succeeded": "succeeded",
-        "failed": "failed",
-        "canceled": "canceled",
-        "unknown": "unknown"
-    }.get(status, status)
+        # человекочитаемая строка статуса
+        display = {
+            "starting": "starting (готовится к запуску)",
+            "queued": "queued (в очереди)", 
+            "running": "running (обучается)",
+            "processing": "processing (публикую версию)",
+            "succeeded": "succeeded",
+            "failed": "failed",
+            "canceled": "canceled",
+            "unknown": "unknown"
+        }.get(status, status)
 
-    train_url = f"https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{tid}" if (DEST_OWNER and DEST_MODEL and tid) else None
+        train_url = f"https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{tid}" if (DEST_OWNER and DEST_MODEL and tid) else None
 
-    if status == "succeeded" and slug_with_ver:
-        await update.effective_message.reply_text(
-            f"Готово ✅\nАватар: {av_name}\nМодель: {slug_with_ver}\nТеперь — «🧭 Выбрать стиль».",
-            reply_markup=categories_kb()
-        )
-        return
+        # === УСПЕХ ===
+        if status == "succeeded" and slug_with_ver:
+            await update.effective_message.reply_text(
+                f"✅ Обучение завершено!\nАватар: {av_name}\nМодель: {slug_with_ver}\nТеперь можешь выбрать стиль👇"
+            )
+            # Показываем главное меню СНИЗУ
+            await spawn_main_menu_below(context.bot, update.effective_chat.id, uid, "Главное меню:")
+            return
 
-    if status in ("starting", "queued", "running", "processing"):
-        extra = f"\nЛоги: {train_url}" if train_url else ""
-        await update.effective_message.reply_text(f"Статус «{av_name}»: {display}{extra}")
-        return
+        # === ИДЁТ ===
+        if status in ("starting", "queued", "running", "processing"):
+            extra = f"\nЛоги: {train_url}" if train_url else ""
+            await update.effective_message.reply_text(f"Статус «{av_name}»: {display}{extra}")
+            return
 
-    if status in ("failed", "canceled"):
-        msg = f"⚠️ Тренировка «{av_name}»: {status.upper()}."
-        if err:
-            msg += f"\nПричина: {err}"
-        if train_url:
-            msg += f"\nЛоги: {train_url}"
-        await update.effective_message.reply_text(msg)
-        return
+        # === НЕУДАЧА ===
+        if status in ("failed", "canceled"):
+            msg = f"⚠️ Тренировка «{av_name}»: {status.upper()}."
+            if err:
+                msg += f"\nПричина: {err}"
+            if train_url:
+                msg += f"\nЛоги: {train_url}"
+            await update.effective_message.reply_text(msg)
+            return
 
-    await update.effective_message.reply_text(f"Статус «{av_name}»: {display}.")
+        # === ОСТАЛЬНОЕ ===
+        await update.effective_message.reply_text(f"Статус «{av_name}»: {display}.")
+
 
 # === Принудительное обновление статуса с Replicate ===
 async def refreshstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
