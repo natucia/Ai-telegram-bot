@@ -1033,6 +1033,18 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         ]
         return InlineKeyboardMarkup(rows)
 
+def categories_kb() -> InlineKeyboardMarkup:
+    names = list(STYLE_CATEGORIES.keys())
+    rows, row = [], []
+    for i, name in enumerate(names, 1):
+        row.append(InlineKeyboardButton(name, callback_data=f"cat:{name}"))
+        if i % 2 == 0:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="nav:menu")])
+    return InlineKeyboardMarkup(rows)
+
 
 def styles_kb_for_category(cat: str) -> InlineKeyboardMarkup:
     names = STYLE_CATEGORIES.get(cat, [])
