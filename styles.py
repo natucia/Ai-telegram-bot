@@ -826,21 +826,37 @@ STYLE_PRESETS: Dict[str, Style] = {
         ]
     },
     "Фридайвер — синие бездны": {
-        "desc": "Полное погружение в подводный мир: фридайвер в маске и гидрокостюме с моноластой парит среди коралловых рифов, окруженный дельфинами, китами и тропическими рыбками. На спине - дайвингские баллоны для глубоких погружений.",
-        "role": "freediver and scuba diver exploring underwater world",
-        "outfit_f": "wetsuit with scuba tanks, diving mask clearly visible, monofin or long fins",
-        "outfit": "wetsuit with scuba tanks, diving mask clearly visible, monofin or long fins", 
-        "props": "diving mask on face, scuba tanks on back, regulator with bubbles, monofin movement, schools of tropical fish, dolphins swimming nearby",
-        "bg": "vibrant coral reef ecosystem, whales in distance, sunbeams penetrating water, underwater cave or wreck",
+        "desc": "Фридайвер в ПОДВОДНОЙ МАСКЕ на лице и ГИДРОКОСТЮМЕ с МОНОЛАСТОЙ плавает среди ЯРКИХ КОРАЛЛОВ, окруженный СТАЯМИ ТРОПИЧЕСКИХ РЫБ, дельфинами и китами. На спине - дайвингские баллоны.",
+        "role": "freediver swimming actively in coral reef",
+        "outfit_f": "FULL WETSUIT, DIVING MASK CLEARLY COVERING EYES AND NOSE, MONOFIN OR LONG FINS VISIBLE",
+        "outfit": "FULL WETSUIT, DIVING MASK CLEARLY COVERING EYES AND NOSE, MONOFIN OR LONG FINS VISIBLE", 
+        "props": "DIVING MASK ON FACE SHOWING GLASS AND STRAP, SCUBA TANKS ON BACK, REGULATOR WITH BUBBLES, MONOFIN MOVEMENT, SCHOOLS OF TROPICAL FISH SWARMING AROUND",
+        "bg": "VIBRANT COLORFUL CORAL REEF WITH SEA ANEMONES, DOLPHINS SWIMMING CLOSE, WHALES IN DISTANCE, SUNBEAMS PENETRATING WATER",
         "comp": "full", 
         "tone": "cool",
-        "force_keywords": [
-            "underwater diving", "diving mask clearly visible", "scuba tanks on back", 
-            "monofin or long fins", "wetsuit", "coral reef", "tropical fish",
-            "dolphins swimming", "whales in background", "sunbeams through water",
-            "underwater bubbles", "graceful swimming motion"
+
+        # ЖЕСТКИЕ ТРЕБОВАНИЯ
+        "required_attributes": [
+            "diving mask on face", "wetsuit", "monofin or swim fins", 
+            "coral reef", "school of tropical fish", "underwater"
         ],
-        "negative": "chair, sitting, sitting on chair, stool, bench, seat, furniture, indoor, room, house, building, land, ground, floor"
+
+        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
+        "force_keywords": [
+            "UNDERWATER DIVING", "DIVING MASK CLEARLY VISIBLE ON FACE", "SCUBA TANKS ON BACK", 
+            "MONOFIN OR SWIM FINS VISIBLE", "FULL WETSUIT", "VIBRANT CORAL REEF",
+            "SCHOOL OF TROPICAL FISH SWARMING", "DOLPHINS SWIMMING", "WHALES IN BACKGROUND",
+            "SUNBEAMS THROUGH WATER", "UNDERWATER BUBBLES", "SWIMMING MOTION",
+            "OCEAN DEPTH", "MARINE LIFE", "REEF ECOSYSTEM"
+        ],
+
+        # ЗАПРЕТЫ
+        "negative": (
+            "chair, sitting, sitting on chair, stool, bench, seat, furniture, "
+            "indoor, room, house, building, land, ground, floor, beach, shore, "
+            "boat, surface, above water, no mask, no fins, no coral, no fish, "
+            "empty water, swimming pool"
+        )
     },
     "Рок-звезда 80-х": {
         "desc": "Взрывная энергия 80-х: кожа, неон, электрогитара, сумасшедшая прическа и толпа фанатов.",
@@ -921,8 +937,10 @@ THEME_BOOST = {
     "Хаос-кинематограф": "extreme heat waves, spark showers, structural collapse moments, blood red sky",
     "Контакт НЛО — лучи и пыль": "volumetric beams, dust motes, faint radio-glitch halation",
     "Фридайвер — синие бездны": (
-        "water caustics patterns, fish scale reflections, coral texture details, "
-        "dolphin silhouette elegance, whale majesty, equipment details, bubble trails"
+        "DETAILED DIVING MASK SHOWING GLASS AND STRAP, CLEARLY VISIBLE MONOFIN/FINS, "
+        "VIBRANT COLORFUL CORALS WITH DETAILED TEXTURES, DENSE SCHOOLS OF TROPICAL FISH, "
+        "WATER CAUSTICS PATTERNS, FISH SCALE REFLECTIONS, DOLPHIN SILHOUETTES, "
+        "WHALE DETAILS, EQUIPMENT DETAILS, BUBBLE TRAILS, SUNBEAM RAYS"
     ),
     "Деревня — тёплый уют": "warm wood patina, sun dust in air, linen texture details",
     "Россия — зимняя сказка": "crisp breath vapor, snow sparkle, frosty window details",
