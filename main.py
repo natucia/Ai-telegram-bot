@@ -1556,13 +1556,6 @@ async def _resolve_direct_photo_url(update, context) -> str:
         url = STORAGE.save_ref_image(uid, av_name, data)
         return url
     
-await on_user_upload_face(
-        update, context,
-        load_profile, save_profile,
-        get_current_avatar_name, get_avatar,
-        _resolve_direct_photo_url,
-        start_lora_training
-    )
 
 
 # ---- Аватарные команды/утилиты ----
