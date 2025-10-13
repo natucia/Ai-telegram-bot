@@ -1917,45 +1917,15 @@ async def start_generation_for_preset(
                         natural, pretty, avatar_token
                     )
                     # === Спецлогика для Харли Квинн / Джокера ===
-                    # --- HARLEY/JOKER OVERRIDES (после сборки prompt/neg, до generate_from_finetune) ---
                     if preset == "Харли-Квинн":
-                        g = (av.get("gender") or prof.get("gender") or "female").lower()
+                        gender = (av.get("gender") or prof.get("gender") or "female").lower()
+                        if gender.startswith("f"):  # женщина
+                            prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
+                        else:  # мужчина
+                            prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
 
-                        # 1) Разрешаем менять лицо: снимаем «не трогать facial features»
-                        #   (этот текст приходит из _beauty_guardrail()).
-                        prompt = prompt.replace(
-                            "style must only affect clothing, background and lighting, not facial features",
-                            "facial styling allowed for makeup and face paint"
-                        )
-
-                        # 2) Для обеих версий разрешаем макияж
-                        prompt += ", allow makeup change, allow face paint"
-
-                        # 3) FaceID мешает гриму — отключаем его только для этой сцены
-                        face_ref = None  # <— ПЕРЕОПРЕДЕЛЯЕМ переменную, которую потом передаёшь в generate_from_finetune
-
-                        if g.startswith("f"):
-                            # Харли Квинн: подчёркиваем макияж и биту
-                            prompt += (
-                                ", Harley Quinn style, harlequin clown makeup, "
-                                "bold red and black color scheme, baseball bat clearly visible"
-                            )
-                            # легкий запрет на «натуральное лицо»
-                            neg += ", no natural bare face, no clean lips"
-                        else:
-                            # Джокер: ЖЁСТКО прописываем грим, как на референсе
-                            prompt += (
-                                ", Joker style, white painted clown face base"
-                                ", dark blue eye paint in triangle shapes above and below eyes"
-                                ", thick bright red lipstick painted in a wide grin extending across cheeks"
-                                ", clearly visible, smudged and messy"
-                                ", green hair, purple suit"
-                            )
-                            # подстраховка, чтобы не прилетело «натуральное лицо»
-                            neg += ", no natural skin tone on face, no bare lips, no clean mouth"
-
-                        # необязательно, но помогает «продавить» мелкие детали
-                        guidance = max(guidance, 6.6)
+                    if extra_neg:
+                        neg = _neg_with_gender(neg, extra_neg)
 
                     seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
 
