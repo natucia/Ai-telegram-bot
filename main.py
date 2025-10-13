@@ -1234,6 +1234,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = update.effective_user.id
         prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
 
+        # Описание бота — обычное сообщение
         await update.message.reply_text(
             "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя в узнаваемых сценах.\n\n"
             "— «📸 Набор фото» — загрузи до 10 снимков.\n"
@@ -1242,115 +1243,158 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "— «🤖 Аватары» — несколько моделей с отдельным полом.\n"
             "— «👤 Face ID» — улучшенное сохранение идентичности лица.\n"
         )
-        # «Вечное» главное меню (не удаляем, только редактируем)
-        await show_main_menu(context.bot, update.effective_chat.id, uid, "Главное меню:")
+
+        # «Вечное» главное меню — создаём один раз и больше не трогаем
+        await ensure_main_menu(context.bot, update.effective_chat.id, uid, "Главное меню:")
+
 
 # ---------- UI utils ----------
 
         # ---------- UI utils: удалить старое, прислать новое снизу ----------
 # --- Persistent main menu (не удаляем) ---
+    # --- "Вечное" Главное меню ---
 MAIN_MENU_MSG_ID: Dict[int, int] = {}  # uid -> message_id
 
-async def show_main_menu(bot, chat_id: int, uid: int, text: str = "Главное меню:"):
-    """
-    «Вечное» главное меню: если уже есть — ПРАВИМ его; если нет — создаём и запоминаем message_id.
-    """
-    kb = main_menu_kb()
-    msg_id = MAIN_MENU_MSG_ID.get(uid)
+def _is_main_menu_msg(uid: int, msg_id: Optional[int]) -> bool:
+        return msg_id is not None and MAIN_MENU_MSG_ID.get(uid) == msg_id
 
-    if msg_id:
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=msg_id,
-                text=text,
-                reply_markup=kb,
-                disable_web_page_preview=True
-            )
+async def ensure_main_menu(bot, chat_id: int, uid: int, text: str = "Главное меню:"):
+        """
+        Гарантирует, что у пользователя есть ОДНО "вечное" главное меню.
+        Если уже есть — НИЧЕГО НЕ ДЕЛАЕМ (не редактируем).
+        Если нет — отправляем и запоминаем message_id.
+        """
+        if MAIN_MENU_MSG_ID.get(uid):
             return
-        except Exception:
-            # не смогли отредактировать (удалено/устарело) — пришлём новое
-            pass
+        new_msg = await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=main_menu_kb(),
+            disable_web_page_preview=True
+        )
+        MAIN_MENU_MSG_ID[uid] = new_msg.message_id
 
-    new_msg = await bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        reply_markup=kb,
-        disable_web_page_preview=True
-    )
-    MAIN_MENU_MSG_ID[uid] = new_msg.message_id
+async def _send_below_preserving(qmsg, text: str, reply_markup=None):
+        """
+        Всегда отправляет НОВОЕ сообщение ниже (НЕ удаляя источник).
+        Нужно, чтобы кнопки в Главном меню просто "рожали" новое сообщение.
+        """
+        return await qmsg.reply_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
 
 
 async def _replace_with_new_below(qmsg, text: str, reply_markup=None):
-            """
-            Отправляет НОВОЕ сообщение внизу и удаляет старое меню.
-            Возвращает объект нового сообщения.
-            """
-            new_msg = await qmsg.reply_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
-            with contextlib.suppress(Exception):
-                await qmsg.delete()
-            return new_msg
+        """
+        Твой старый хелпер: отправляет НОВОЕ сообщение и удаляет старое.
+        Оставляем для эфемерных меню (аватары и т.п.).
+        """
+        new_msg = await qmsg.reply_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+        with contextlib.suppress(Exception):
+            await qmsg.delete()
+        return new_msg
+
 
 
 async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                            q = update.callback_query
-                            await q.answer()
-                            uid = update.effective_user.id
-                            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                            key = q.data.split(":", 1)[1]
+                                    q = update.callback_query
+                                    await q.answer()
+                                    uid = update.effective_user.id
+                                    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+                                    key = q.data.split(":", 1)[1]
 
-                            if key == "styles":
-                                await _replace_with_new_below(q.message, "Выбери категорию:", reply_markup=categories_kb())
+                                    # откуда клик?
+                                    clicked_is_main = _is_main_menu_msg(uid, getattr(q.message, "message_id", None))
 
-                            elif key == "menu":
-                                # Показать/обновить «вечное» главное меню; ТЕКУЩЕЕ временное сообщение — удалить
-                                await show_main_menu(context.bot, q.message.chat.id, uid, "Главное меню:")
-                                with contextlib.suppress(Exception):
-                                    await q.message.delete()
+                                    # helper: показать ниже, не удаляя (для кликов из главного)
+                                    async def show_below(text, kb=None):
+                                        await _send_below_preserving(q.message, text, reply_markup=kb)
 
-                            elif key == "enroll":
-                                await _replace_with_new_below(q.message, "📸 Набор фото…", reply_markup=None)
-                                await id_enroll(update, context)
+                                    # helper: заменить карточку (для эфемерных экранов)
+                                    async def replace_card(text, kb=None):
+                                        await _replace_with_new_below(q.message, text, reply_markup=kb)
 
-                            elif key == "train":
-                                await _replace_with_new_below(q.message, "🧪 Обучение…", reply_markup=None)
-                                await trainid_cmd(update, context)
+                                    if key == "styles":
+                                        if clicked_is_main:
+                                            await show_below("Выбери категорию:", categories_kb())
+                                        else:
+                                            await replace_card("Выбери категорию:", categories_kb())
 
-                            elif key == "status":
-                                await _replace_with_new_below(q.message, "ℹ️ Обновляю статус…", reply_markup=None)
-                                await id_status(update, context)
+                                    elif key == "menu":
+                                        # Главного меню НЕ касаемся. Если пришло из эфемерной карточки — просто удалим её.
+                                        if not clicked_is_main:
+                                            with contextlib.suppress(Exception):
+                                                await q.message.delete()
+                                        # ничего не отправляем: "вечное" главное уже висит в истории
 
-                            elif key == "avatars":
-                                await _replace_with_new_below(q.message, "Аватары:", reply_markup=avatars_kb(uid))
+                                    elif key == "enroll":
+                                        if clicked_is_main:
+                                            await show_below("📸 Набор фото…", None)
+                                            await id_enroll(update, context)
+                                        else:
+                                            await replace_card("📸 Набор фото…", None)
+                                            await id_enroll(update, context)
 
-                            elif key == "beauty":
-                                prof = load_profile(uid)
-                                prof["pretty"] = not prof.get("pretty", False)
-                                if prof["pretty"]:
-                                    prof["natural"] = True
-                                save_profile(uid, prof)
-                                # Обновим «вечное» главное меню (чтобы оно «жило» вверху)
-                                await show_main_menu(context.bot, q.message.chat.id, uid,
-                                                     f"Главное меню:\nNatural: {'ON' if prof['natural'] else 'OFF'} • Pretty: {'ON' if prof['pretty'] else 'OFF'}")
-                                # И удалим кликнутую временную карточку
-                                with contextlib.suppress(Exception):
-                                    await q.message.delete()
+                                    elif key == "train":
+                                        if clicked_is_main:
+                                            await show_below("🧪 Обучение…", None)
+                                            await trainid_cmd(update, context)
+                                        else:
+                                            await replace_card("🧪 Обучение…", None)
+                                            await trainid_cmd(update, context)
 
-                            elif key == "lockface":
-                                prof = load_profile(uid)
-                                av = get_avatar(prof)
-                                av["lockface"] = not av.get("lockface", True)
-                                save_profile(uid, prof)
-                                # Обновим «вечное» главное меню статусом Lockface
-                                await show_main_menu(context.bot, q.message.chat.id, uid, f"Главное меню:\nLOCKFACE: {'on' if av['lockface'] else 'off'}")
-                                with contextlib.suppress(Exception):
-                                    await q.message.delete()
+                                    elif key == "status":
+                                        if clicked_is_main:
+                                            await show_below("ℹ️ Обновляю статус…", None)
+                                            await id_status(update, context)
+                                        else:
+                                            await replace_card("ℹ️ Обновляю статус…", None)
+                                            await id_status(update, context)
 
-                            elif key == "faceid":
-                                await face_id_cb(update, context)
+                                    elif key == "avatars":
+                                        # список аватаров — всегда эфемерный экран (если из главного — просто родим новую карточку ниже)
+                                        if clicked_is_main:
+                                            await show_below("Аватары:", avatars_kb(uid))
+                                        else:
+                                            await replace_card("Аватары:", avatars_kb(uid))
 
-                            else:
-                                await _replace_with_new_below(q.message, "Главное меню:", reply_markup=main_menu_kb())
+                                    elif key == "beauty":
+                                        prof = load_profile(uid)
+                                        prof["pretty"] = not prof.get("pretty", False)
+                                        if prof["pretty"]:
+                                            prof["natural"] = True
+                                        save_profile(uid, prof)
+                                        # Показываем маленькое подтверждение НИЖЕ, главное меню не трогаем
+                                        status = f"Pretty: {'ON' if prof['pretty'] else 'OFF'} • Natural: {'ON' if prof['natural'] else 'OFF'}"
+                                        if clicked_is_main:
+                                            await show_below(status, None)
+                                        else:
+                                            await replace_card(status, main_menu_kb())
+
+                                    elif key == "lockface":
+                                        prof = load_profile(uid)
+                                        av = get_avatar(prof)
+                                        av["lockface"] = not av.get("lockface", True)
+                                        save_profile(uid, prof)
+                                        status = f"LOCKFACE: {'on' if av['lockface'] else 'off'}"
+                                        if clicked_is_main:
+                                            await show_below(status, None)
+                                        else:
+                                            await replace_card(status, main_menu_kb())
+
+                                    elif key == "faceid":
+                                        # faceid-экран делаем как и аватары: если клик из главного — просто ниже новое сообщение
+                                        if clicked_is_main:
+                                            # внутри face_id_cb уже само решит что показать/удалять; здесь лишь "ниже сообщение"
+                                            await face_id_cb(update, context)
+                                        else:
+                                            await face_id_cb(update, context)
+
+                                    else:
+                                        # дефолт — как категории
+                                        if clicked_is_main:
+                                            await show_below("Главное меню:", main_menu_kb())
+                                        else:
+                                            await replace_card("Главное меню:", main_menu_kb())
+
 
 
 
