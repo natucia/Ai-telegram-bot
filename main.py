@@ -1345,53 +1345,74 @@ async def _replace_with_new_below(qmsg, text: str, reply_markup=None):
 
 
 async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+            q = update.callback_query
+            await q.answer()
 
-    uid = update.effective_user.id
-    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-    key = q.data.split(":", 1)[1]
+            uid = update.effective_user.id
+            prof = load_profile(uid)
+            prof["_uid_hint"] = uid
+            save_profile(uid, prof)
+            key = q.data.split(":", 1)[1]
 
-    # локальный хелпер: заменяем текущее сообщение новой «карточкой»
-    async def replace_card(text: str, kb=None):
-        return await _replace_with_new_below(q.message, text, reply_markup=kb)
+            # вспомогательный локальный хелпер
+            async def replace_card(text: str, kb=None):
+                return await _replace_with_new_below(q.message, text, reply_markup=kb)
 
-    if key == "styles":
-        # Показать список категорий (без кнопки «Назад»)
-        await replace_card("Выбери категорию:", categories_kb())
-        return
+            # определяем, откуда пришло — из главного окна или карточки
+            def _is_from_main() -> bool:
+                return bool(q.message.reply_markup and q.message.reply_markup.keyboard)
 
-    elif key == "enroll":
-        await replace_card("📸 Набор фото…")
-        await id_enroll(update, context)
-        return
+            def _show_below(text: str, kb=None):
+                return context.bot.send_message(q.message.chat_id, text, reply_markup=kb)
 
-    elif key == "train":
-        await replace_card("🧪 Обучение…")
-        await trainid_cmd(update, context)
-        return
+            # === навигация ===
+            if key == "styles":
+                await replace_card("Выбери категорию:", categories_kb())
+                return
 
-    elif key == "status":
-        # Кнопки «Статус» в меню больше нет, но обработаем на случай старых сообщений
-        await replace_card("ℹ️ Обновляю статус…")
-        await id_status(update, context)
-        return
+            elif key == "enroll":
+                if _is_from_main():
+                    await _show_below("📸 Набор фото…")
+                    await id_enroll(update, context)
+                else:
+                    await replace_card("📸 Набор фото…")
+                    await id_enroll(update, context)
+                return
 
-    elif key == "avatars":
-        await replace_card("Аватары:", avatars_kb(uid))
-        return
+            elif key == "train":
+                if _is_from_main():
+                    await _show_below("Запускаю подготовку модели…")
+                    await trainid_cmd(update, context)
+                else:
+                    await replace_card("Запускаю подготовку модели…")
+                    await trainid_cmd(update, context)
+                return
 
-    elif key == "menu":
-        # «Главного меню»-сообщения больше нет — просто дружелюбный пинг
-        with contextlib.suppress(Exception):
-            await q.message.delete()
-        await update.effective_chat.send_message("Меню всегда снизу 👇", reply_markup=bottom_reply_kb())
-        return
+            elif key == "avatars":
+                await replace_card("Аватары:", avatars_kb(uid))
+                return
 
-    else:
-        # Неизвестный ключ — безопасно перерисуем текущую карточку
-        await replace_card("Выбери категорию:", categories_kb())
-        return
+            elif key == "status":
+                # оставляем на случай старых кнопок
+                await replace_card("Обновляю статус…")
+                await id_status(update, context)
+                return
+
+            elif key == "menu":
+                # вместо «главного меню» — просто подсказка
+                with contextlib.suppress(Exception):
+                    await q.message.delete()
+                await context.bot.send_message(
+                    chat_id=q.message.chat_id,
+                    text="Меню всегда снизу 👇",
+                    reply_markup=bottom_reply_kb()
+                )
+                return
+
+            else:
+                await replace_card("Выбери категорию:", categories_kb())
+                return
+
 
 
 
@@ -1425,37 +1446,33 @@ async def cb_enroll_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            uid = update.effective_user.id
-            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-            av_name = get_current_avatar_name(prof)
-            ENROLL_FLAG[(uid, av_name)] = False
-            av = get_avatar(prof, av_name)
-            av["images"] = list_ref_images(uid, av_name)
+        uid = update.effective_user.id
+        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+        av_name = get_current_avatar_name(prof)
+        ENROLL_FLAG[(uid, av_name)] = False
+        av = get_avatar(prof, av_name)
+        av["images"] = list_ref_images(uid, av_name)
 
-            # автоопределение пола (если не задан)
-            if not av.get("gender"):
-                try:
-                    av["gender"] = auto_detect_gender(uid, av_name)
-                except Exception:
-                    av["gender"] = av.get("gender") or (prof.get("gender") or "female")
-
-            # Face ID embedding — готовим автоматически (FaceID всегда включён по умолчанию)
+        # автоопределение пола (если не задан)
+        if not av.get("gender"):
             try:
-                await update.effective_message.reply_text("🔄 Подготавливаю Face ID embedding…")
-                embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
-                if embedding:
-                    await update.effective_message.reply_text("✅ Face ID embedding готов")
-                else:
-                    await update.effective_message.reply_text("⚠️ Не удалось подготовить Face ID embedding (попробуй перезалить фото).")
-            except Exception as e:
-                logger.warning("Face ID embedding preparation failed: %s", e)
+                av["gender"] = auto_detect_gender(uid, av_name)
+            except Exception:
+                av["gender"] = av.get("gender") or (prof.get("gender") or "female")
 
-            save_profile(uid, prof)
-            g = av.get("gender") or "—"
-            await update.effective_message.reply_text(
-                f"Готово ✅ В «{av_name}» {len(av['images'])} фото.\nПол аватара: {g}\nДалее — «🧪 Обучение».",
-                reply_markup=main_menu_kb()
-            )
+        # Face ID embedding — готовим молча, без уведомлений
+        try:
+            await asyncio.to_thread(prepare_face_embedding, uid, av_name)
+        except Exception as e:
+            logger.warning("Face ID embedding preparation (silent) failed: %s", e)
+
+        save_profile(uid, prof)
+        g = av.get("gender") or "—"
+        await update.effective_message.reply_text(
+            f"Готово ✅ В «{av_name}» {len(av['images'])} фото.\nПол аватара: {g}\nДалее — запусти подготовку модели.",
+            reply_markup=main_menu_kb()
+        )
+
 
 async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -2031,25 +2048,29 @@ def _pinned_slug(av: Dict[str, Any]) -> str:
     return base or ""
 
 async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id; prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-    av_name = get_current_avatar_name(prof)
+            uid = update.effective_user.id
+            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+            av_name = get_current_avatar_name(prof)
 
-    if len(list_ref_images(uid, av_name)) < 10:
-        await update.effective_message.reply_text(f"Нужно 10 фото в «{av_name}». Сначала «📸 Набор фото», затем «Готово ✅»."); return
+            if len(list_ref_images(uid, av_name)) < 10:
+                await update.effective_message.reply_text(
+                    f"Нужно 10 фото в «{av_name}». Сначала загрузите снимки и нажмите «Готово ✅»."
+                )
+                return
 
-    await update.effective_message.reply_text(f"Запускаю обучение LoRA для «{av_name}»…")
+            await update.effective_message.reply_text("Запускаю подготовку модели…")
 
-    try:
-        async with TRAIN_SEMAPHORE:
-            training_id = await asyncio.to_thread(start_lora_training, uid, av_name)
-        await update.effective_message.reply_text(f"Стартанула. ID: {training_id}\nПроверяй «ℹ️ Мой статус».")
-        if DEST_OWNER and DEST_MODEL and training_id:
-            await update.effective_message.reply_text(
-                f"Логи: https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{training_id}"
-            )
-    except Exception as e:
-        logging.exception("trainid failed")
-        await update.effective_message.reply_text(f"Не удалось запустить обучение: {e}")
+            try:
+                async with TRAIN_SEMAPHORE:
+                    _ = await asyncio.to_thread(start_lora_training, uid, av_name)
+                # Никакого ID и ссылок — лаконично:
+                await update.effective_message.reply_text(
+                    "Отлично, подготовка модели началась. Я сообщу, когда всё будет готово."
+                )
+            except Exception as e:
+                logging.exception("trainid failed")
+                await update.effective_message.reply_text(f"Не удалось запустить подготовку: {e}")
+
 
 async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
