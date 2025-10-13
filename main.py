@@ -1023,27 +1023,16 @@ def generate_from_finetune(
 
 # ---------- UI/KB ----------
 def main_menu_kb() -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton("🧭 Выбрать стиль", callback_data="nav:styles")],
-        [InlineKeyboardButton("📸 Набор фото", callback_data="nav:enroll"), InlineKeyboardButton("🧪 Обучение", callback_data="nav:train")],
-        [InlineKeyboardButton("ℹ️ Мой статус", callback_data="nav:status")],
-        [InlineKeyboardButton("🤖 Аватары", callback_data="nav:avatars")],
-        [InlineKeyboardButton("✨ Natural/Pretty", callback_data="nav:beauty"), InlineKeyboardButton("🔒 LOCKFACE", callback_data="nav:lockface")],
-        [InlineKeyboardButton("👤 Face ID", callback_data="nav:faceid")],  # Новая кнопка для Face ID
-    ]
-    return InlineKeyboardMarkup(rows)
+        rows = [
+            [InlineKeyboardButton("🧭 Выбрать стиль", callback_data="nav:styles")],
+            [InlineKeyboardButton("📸 Набор фото", callback_data="nav:enroll"),
+             InlineKeyboardButton("🧪 Обучение", callback_data="nav:train")],
+            [InlineKeyboardButton("ℹ️ Мой статус", callback_data="nav:status")],
+            [InlineKeyboardButton("🤖 Аватары", callback_data="nav:avatars")],
+            # (удалены: Natural/Pretty, LOCKFACE, Face ID)
+        ]
+        return InlineKeyboardMarkup(rows)
 
-def categories_kb() -> InlineKeyboardMarkup:
-    names = list(STYLE_CATEGORIES.keys())
-    rows, row = [], []
-    for i, name in enumerate(names, 1):
-        row.append(InlineKeyboardButton(name, callback_data=f"cat:{name}"))
-        if i % 2 == 0:
-            rows.append(row); row=[]
-    if row:
-        rows.append(row)
-    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="nav:menu")])
-    return InlineKeyboardMarkup(rows)
 
 def styles_kb_for_category(cat: str) -> InlineKeyboardMarkup:
     names = STYLE_CATEGORIES.get(cat, [])
@@ -1234,19 +1223,19 @@ async def face_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- Handlers ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+        uid = update.effective_user.id
+        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
 
-    await update.message.reply_text(
-        "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя в узнаваемых сценах.\n\n"
-        "— «📸 Набор фото» — загрузи до 10 снимков.\n"
-        "— «🧪 Обучение» — тренируем твою LoRA.\n"
-        "— «🧭 Выбрать стиль» — сцены и жанры.\n"
-        "— «🤖 Аватары» — несколько моделей с отдельным полом.\n"
-        "— «👤 Face ID» — улучшенное сохранение идентичности лица.\n"
-    )
-    # Всегда спавним «Главное меню» СНИЗУ; прошлое (если было последним) удалится внутри
-    await spawn_main_menu_below(context.bot, update.effective_chat.id, uid, "Главное меню:")
+        await update.message.reply_text(
+            "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя в узнаваемых сценах.\n\n"
+            "— «📸 Набор фото» — загрузи до 10 снимков.\n"
+            "— «🧪 Обучение» — тренируем твою LoRA.\n"
+            "— «🧭 Выбрать стиль» — сцены и жанры.\n"
+            "— «🤖 Аватары» — несколько моделей с отдельным полом.\n"
+            "Face ID включён автоматически; Natural=ON, Pretty=OFF, LockFace=OFF."
+        )
+        # главное меню спавним снизу; предыдущее «главное» (если оно было последним) удалится внутри
+        await spawn_main_menu_below(context.bot, update.effective_chat.id, uid, "Главное меню:")
 
 
 # ---------- UI utils ----------
@@ -1321,105 +1310,71 @@ async def _replace_with_new_below(qmsg, text: str, reply_markup=None):
 
 
 async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                    q = update.callback_query
-                    await q.answer()
-                    uid = update.effective_user.id
-                    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                    key = q.data.split(":", 1)[1]
+                            q = update.callback_query
+                            await q.answer()
+                            uid = update.effective_user.id
+                            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+                            key = q.data.split(":", 1)[1]
 
-                    # локальные хелперы для лаконичности
-                    async def show_below(text, kb=None):
-                        return await q.message.reply_text(text, reply_markup=kb, disable_web_page_preview=True)
+                            async def show_below(text, kb=None):
+                                return await q.message.reply_text(text, reply_markup=kb, disable_web_page_preview=True)
 
-                    async def replace_card(text, kb=None):
-                        return await _replace_with_new_below(q.message, text, reply_markup=kb)
+                            async def replace_card(text, kb=None):
+                                return await _replace_with_new_below(q.message, text, reply_markup=kb)
 
-                    # признак, что клик пришёл из «Главного меню» (по сути — сравнение раскладки)
-                    def _is_from_main():
-                        try:
-                            return (q.message.reply_markup is not None and
-                                    q.message.reply_markup.inline_keyboard == main_menu_kb().inline_keyboard)
-                        except Exception:
-                            return False
+                            def _is_from_main():
+                                try:
+                                    return (q.message.reply_markup is not None and
+                                            q.message.reply_markup.inline_keyboard == main_menu_kb().inline_keyboard)
+                                except Exception:
+                                    return False
 
-                    if key == "styles":
-                        if _is_from_main():
-                            await show_below("Выбери категорию:", categories_kb())
-                        else:
-                            await replace_card("Выбери категорию:", categories_kb())
+                            if key == "styles":
+                                if _is_from_main():
+                                    await show_below("Выбери категорию:", categories_kb())
+                                else:
+                                    await replace_card("Выбери категорию:", categories_kb())
 
-                    elif key == "menu":
-                        # Всегда рождаем НОВОЕ главное меню СНИЗУ (старое, если оно было последним, удалится внутри)
-                        await spawn_main_menu_below(context.bot, q.message.chat.id, uid, "Главное меню:")
-                        # Если кликнули не из главного — удалим карточку-источник, чтобы не засорять
-                        if not _is_from_main():
-                            with contextlib.suppress(Exception):
-                                await q.message.delete()
+                            elif key == "menu":
+                                # спавним новое «Главное меню» снизу; предыдущее главное (если было последним) удалится внутри
+                                await spawn_main_menu_below(context.bot, q.message.chat.id, uid, "Главное меню:")
+                                if not _is_from_main():
+                                    with contextlib.suppress(Exception):
+                                        await q.message.delete()
 
-                    elif key == "enroll":
-                        if _is_from_main():
-                            await show_below("📸 Набор фото…")
-                            await id_enroll(update, context)
-                        else:
-                            await replace_card("📸 Набор фото…")
-                            await id_enroll(update, context)
+                            elif key == "enroll":
+                                if _is_from_main():
+                                    await show_below("📸 Набор фото…")
+                                    await id_enroll(update, context)
+                                else:
+                                    await replace_card("📸 Набор фото…")
+                                    await id_enroll(update, context)
 
-                    elif key == "train":
-                        if _is_from_main():
-                            await show_below("🧪 Обучение…")
-                            await trainid_cmd(update, context)
-                        else:
-                            await replace_card("🧪 Обучение…")
-                            await trainid_cmd(update, context)
+                            elif key == "train":
+                                if _is_from_main():
+                                    await show_below("🧪 Обучение…")
+                                    await trainid_cmd(update, context)
+                                else:
+                                    await replace_card("🧪 Обучение…")
+                                    await trainid_cmd(update, context)
 
-                    elif key == "status":
-                        if _is_from_main():
-                            await show_below("ℹ️ Обновляю статус…")
-                            await id_status(update, context)
-                        else:
-                            await replace_card("ℹ️ Обновляю статус…")
-                            await id_status(update, context)
+                            elif key == "status":
+                                if _is_from_main():
+                                    await show_below("ℹ️ Обновляю статус…")
+                                    await id_status(update, context)
+                                else:
+                                    await replace_card("ℹ️ Обновляю статус…")
+                                    await id_status(update, context)
 
-                    elif key == "avatars":
-                        # список аватаров — отдельная эфемерная карточка
-                        if _is_from_main():
-                            await show_below("Аватары:", avatars_kb(uid))
-                        else:
-                            await replace_card("Аватары:", avatars_kb(uid))
+                            elif key == "avatars":
+                                if _is_from_main():
+                                    await show_below("Аватары:", avatars_kb(uid))
+                                else:
+                                    await replace_card("Аватары:", avatars_kb(uid))
 
-                    elif key == "beauty":
-                        prof = load_profile(uid)
-                        prof["pretty"] = not prof.get("pretty", False)
-                        if prof["pretty"]:
-                            prof["natural"] = True
-                        save_profile(uid, prof)
-                        msg = f"Pretty: {'ON' if prof['pretty'] else 'OFF'} • Natural: {'ON' if prof['natural'] else 'OFF'}"
-                        if _is_from_main():
-                            await show_below(msg)
-                        else:
-                            await replace_card(msg, main_menu_kb())
+                            else:
+                                await spawn_main_menu_below(context.bot, q.message.chat.id, uid, "Главное меню:")
 
-                    elif key == "lockface":
-                        prof = load_profile(uid)
-                        av = get_avatar(prof)
-                        av["lockface"] = not av.get("lockface", True)
-                        save_profile(uid, prof)
-                        msg = f"LOCKFACE: {'on' if av['lockface'] else 'off'}"
-                        if _is_from_main():
-                            await show_below(msg)
-                        else:
-                            await replace_card(msg, main_menu_kb())
-
-                    elif key == "faceid":
-                        # Логику внутри face_id_cb не меняем; выводит как есть
-                        if _is_from_main():
-                            await face_id_cb(update, context)
-                        else:
-                            await face_id_cb(update, context)
-
-                    else:
-                        # дефолт: просто выкинем свежее Главное меню СНИЗУ
-                        await spawn_main_menu_below(context.bot, q.message.chat.id, uid, "Главное меню:")
 
 
 
@@ -1450,42 +1405,39 @@ async def cb_enroll_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # callback enroll:done → та же логика, что и /iddone
     await id_done(update, context)
 
+
 async def id_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-    av_name = get_current_avatar_name(prof)
-    ENROLL_FLAG[(uid, av_name)] = False
-    av = get_avatar(prof, av_name)
-    av["images"] = list_ref_images(uid, av_name)
+            uid = update.effective_user.id
+            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+            av_name = get_current_avatar_name(prof)
+            ENROLL_FLAG[(uid, av_name)] = False
+            av = get_avatar(prof, av_name)
+            av["images"] = list_ref_images(uid, av_name)
 
-    # если у аватара нет пола — попробуем определить
-    if not av.get("gender"):
-        try:
-            av["gender"] = auto_detect_gender(uid, av_name)
-        except Exception:
-            av["gender"] = av.get("gender") or (prof.get("gender") or "female")
+            # автоопределение пола (если не задан)
+            if not av.get("gender"):
+                try:
+                    av["gender"] = auto_detect_gender(uid, av_name)
+                except Exception:
+                    av["gender"] = av.get("gender") or (prof.get("gender") or "female")
 
-    # Подготавливаем Face ID embedding при включенном адаптере
-    if FACE_ID_ADAPTER_ENABLED:
-        try:
-            await update.effective_message.reply_text("🔄 Подготавливаю Face ID embedding...")
-            embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
-            if embedding:
-                await update.effective_message.reply_text("✅ Face ID embedding готов")
-        except Exception as e:
-            logger.warning("Face ID embedding preparation failed: %s", e)
+            # Face ID embedding — готовим автоматически (FaceID всегда включён по умолчанию)
+            try:
+                await update.effective_message.reply_text("🔄 Подготавливаю Face ID embedding…")
+                embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
+                if embedding:
+                    await update.effective_message.reply_text("✅ Face ID embedding готов")
+                else:
+                    await update.effective_message.reply_text("⚠️ Не удалось подготовить Face ID embedding (попробуй перезалить фото).")
+            except Exception as e:
+                logger.warning("Face ID embedding preparation failed: %s", e)
 
-    save_profile(uid, prof)
-    g = av.get("gender") or "—"
-    await update.effective_message.reply_text(
-        f"Готово ✅ В «{av_name}» {len(av['images'])} фото.\nПол аватара: {g}\nДалее — «🧪 Обучение».",
-        reply_markup=main_menu_kb()
-    )
-    if g == "—":
-        await update.effective_message.reply_text(
-            f"Укажи пол для «{av_name}»:", 
-            reply_markup=avatar_gender_kb(av_name)
-        )
+            save_profile(uid, prof)
+            g = av.get("gender") or "—"
+            await update.effective_message.reply_text(
+                f"Готово ✅ В «{av_name}» {len(av['images'])} фото.\nПол аватара: {g}\nДалее — «🧪 Обучение».",
+                reply_markup=main_menu_kb()
+            )
 
 async def id_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
