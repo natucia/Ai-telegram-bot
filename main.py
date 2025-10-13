@@ -31,6 +31,7 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 )
 import struct
+from telegram import ReplyKeyboardMarkup
 
 def _stable_seed(*parts:str) -> int:
     h = hashlib.sha1(("::".join(parts)).encode("utf-8")).digest()
@@ -1232,7 +1233,7 @@ async def face_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------- Handlers ----------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = update.effective_user.id
         prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
 
@@ -1242,9 +1243,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "— «🧪 Обучение» — тренируем твою LoRA.\n"
             "— «🧭 Выбрать стиль» — сцены и жанры.\n"
             "— «🤖 Аватары» — несколько моделей с отдельным полом.\n"
-            "Face ID включён автоматически; Natural=ON, Pretty=OFF, LockFace=OFF."
+            "Face ID включён автоматически; Natural=ON, Pretty=OFF, LockFace=OFF.",
+            reply_markup=bottom_reply_kb()   # <<< вот это даёт меню внизу
         )
-        # главное меню спавним снизу; предыдущее «главное» (если оно было последним) удалится внутри
         await spawn_main_menu_below(context.bot, update.effective_chat.id, uid, "Главное меню:")
 
 
@@ -1261,6 +1262,19 @@ def _is_main_menu_msg(uid: int, msg_id: Optional[int]) -> bool:
 # --- Трекер, чтобы не было двух «Главных меню» подряд ---
 LAST_MAIN_MENU_MSG_ID: Dict[int, int] = {}  # uid -> message_id
 
+def bottom_reply_kb() -> ReplyKeyboardMarkup:
+    rows = [
+        ["Стили", "Аватар"],
+        ["Набор фото", "Обучение"],
+        # можно добавить: ["Меню"]
+    ]
+    return ReplyKeyboardMarkup(
+        rows,
+        resize_keyboard=True,
+        is_persistent=True,       # держим всегда
+        one_time_keyboard=False,
+        selective=False
+    )
 
 async def spawn_main_menu_below(bot, chat_id: int, uid: int, text: str = "Главное меню:"):
         """
@@ -1556,22 +1570,51 @@ def del_avatar(uid:int, name:str):
 
 # ---- Текстовый обработчик для имени нового аватара (без команд) ----
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            uid = update.effective_user.id
-            text = (update.message.text or "").strip()
-            if not text:
-                return
+                    uid = update.effective_user.id
+                    text = (update.message.text or "").strip()
+                    if not text:
+                        return
 
-            if PENDING_NEW_AVATAR.get(uid):
-                name = re.sub(r"[^\w\-\.\@]+", "_", text)[:32] or "noname"
-                ensure_avatar(uid, name)
-                set_current_avatar(uid, name)
-                PENDING_NEW_AVATAR.pop(uid, None)
+                    # 1) если ждём имя нового аватара — это приоритетно
+                    if PENDING_NEW_AVATAR.get(uid):
+                        name = re.sub(r"[^\w\-\.\@]+", "_", text)[:32] or "noname"
+                        ensure_avatar(uid, name)
+                        set_current_avatar(uid, name)
+                        PENDING_NEW_AVATAR.pop(uid, None)
 
-                await update.message.reply_text(
-                    f"Создан и выбран аватар: «{name}». Укажи пол:",
-                    reply_markup=avatar_gender_kb(name)
-                )
-                return
+                        await update.message.reply_text(
+                            f"Создан и выбран аватар: «{name}». Укажи пол:",
+                            reply_markup=avatar_gender_kb(name)
+                        )
+                        return
+
+                    # 2) кнопки нижней клавиатуры:
+                    t = text.lower()
+
+                    if t in ("стили", "style", "styles"):
+                        await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
+                        return
+
+                    if t in ("аватар", "avatar", "аватары"):
+                        await update.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
+                        return
+
+                    if t in ("набор фото", "фото", "enroll"):
+                        await update.message.reply_text("📸 Набор фото…")
+                        await id_enroll(update, context)
+                        return
+
+                    if t in ("обучение", "train", "тренировка"):
+                        await update.message.reply_text("🧪 Обучение…")
+                        await trainid_cmd(update, context)
+                        return
+
+                    if t in ("меню", "главное меню", "menu"):
+                        await spawn_main_menu_below(context.bot, update.effective_chat.id, uid, "Главное меню:")
+                        return
+
+                    # иначе игнорируем, чтобы не ломать кнопочный UX
+
 
             # иначе игнорируем, чтобы не ломать кнопочный UX
 
