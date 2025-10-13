@@ -1038,10 +1038,11 @@ def categories_kb() -> InlineKeyboardMarkup:
     for i, name in enumerate(names, 1):
         row.append(InlineKeyboardButton(name, callback_data=f"cat:{name}"))
         if i % 2 == 0:
-            rows.append(row); row = []
+            rows.append(row)
+            row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="nav:menu")])
+    # ❌ убрали кнопку назад в главное меню
     return InlineKeyboardMarkup(rows)
 
 
@@ -1100,87 +1101,82 @@ def face_id_toggle_kb() -> InlineKeyboardMarkup:
 
 # ----- Callback для «Аватары» и связанных действий -----
 async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                                    q = update.callback_query
-                                    await q.answer()
-                                    uid = update.effective_user.id
-                                    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                                    parts = q.data.split(":")
-                                    action = parts[1] if len(parts) > 1 else ""
-
-                                    if action == "set":
-                                        name = parts[2] if len(parts) > 2 else None
-                                        if not name or name not in prof["avatars"]:
-                                            await _replace_with_new_below(q.message, "Аватар не найден. Выбери из списка:", reply_markup=avatars_kb(uid))
-                                            return
-
-                                        set_current_avatar(uid, name)
-                                        av = get_avatar(prof, name)
-
-                                        if not av.get("gender"):
-                                            # спрашиваем пол и ждём (ничего больше не делаем)
-                                            await _replace_with_new_below(q.message, f"Выбран «{name}». Укажи пол:", reply_markup=avatar_gender_kb(name))
-                                            return
-
-                                        # пол уже есть — закрываем карточку и спавним главное меню снизу
-                                        with contextlib.suppress(Exception):
-                                            await q.message.delete()
-                                        await spawn_main_menu_below(
-                                            context.bot, q.message.chat.id, uid,
-                                            f"Главное меню:\nАктивный аватар: {name} • Пол: {av.get('gender','—')}"
-                                        )
-                                        return
-
-                                    elif action == "new":
-                                        PENDING_NEW_AVATAR[uid] = True
-                                        await _replace_with_new_below(q.message, "Введи имя нового аватара одним сообщением (например: travel, work, glam).")
-                                        return
-
-                                    elif action == "gender":  # avatar:gender:<name>:female|male
-                                        if len(parts) >= 4:
-                                            name, g = parts[2], parts[3]
+                                            q = update.callback_query
+                                            await q.answer()
+                                            uid = update.effective_user.id
                                             prof = load_profile(uid)
-                                            if name in prof["avatars"]:
-                                                prof["avatars"][name]["gender"] = "female" if g == "female" else "male"
-                                                save_profile(uid, prof)
+                                            prof["_uid_hint"] = uid
+                                            save_profile(uid, prof)
+                                            parts = q.data.split(":")
+                                            action = parts[1] if len(parts) > 1 else ""
+
+                                            if action == "set":
+                                                name = parts[2] if len(parts) > 2 else None
+                                                if not name or name not in prof["avatars"]:
+                                                    await _replace_with_new_below(q.message, "Аватар не найден. Выбери из списка:", reply_markup=avatars_kb(uid))
+                                                    return
+
+                                                set_current_avatar(uid, name)
+                                                av = get_avatar(prof, name)
+
+                                                if not av.get("gender"):
+                                                    await _replace_with_new_below(q.message, f"Выбран «{name}». Укажи пол:", reply_markup=avatar_gender_kb(name))
+                                                    return
+
                                                 with contextlib.suppress(Exception):
                                                     await q.message.delete()
-                                                await spawn_main_menu_below(
-                                                    context.bot, q.message.chat.id, uid,
-                                                    f"Главное меню:\nАктивный аватар: {name} • Пол: {prof['avatars'][name]['gender']}"
-                                                )
+                                                await q.message.reply_text(f"✅ Активный аватар: {name} • Пол: {av.get('gender','—')}")
+                                                return
+
+                                            elif action == "new":
+                                                PENDING_NEW_AVATAR[uid] = True
+                                                await _replace_with_new_below(q.message, "Введи имя нового аватара одним сообщением (например: travel, work, glam).")
+                                                return
+
+                                            elif action == "gender":  # avatar:gender:<name>:female|male
+                                                if len(parts) >= 4:
+                                                    name, g = parts[2], parts[3]
+                                                    prof = load_profile(uid)
+                                                    if name in prof["avatars"]:
+                                                        prof["avatars"][name]["gender"] = "female" if g == "female" else "male"
+                                                        save_profile(uid, prof)
+                                                        with contextlib.suppress(Exception):
+                                                            await q.message.delete()
+                                                        await q.message.reply_text(f"✅ Активный аватар: {name} • Пол: {prof['avatars'][name]['gender']}")
+                                                    else:
+                                                        await _replace_with_new_below(q.message, "Аватар не найден.", reply_markup=avatars_kb(uid))
+                                                return
+
+                                            elif action == "del":
+                                                await _replace_with_new_below(q.message, "Выбери, что удалить:", reply_markup=delete_pick_kb(uid))
+                                                return
+
+                                            elif action == "delpick":
+                                                name = parts[2] if len(parts) > 2 else None
+                                                if not name:
+                                                    await _replace_with_new_below(q.message, "Не понял, что удалять.", reply_markup=avatars_kb(uid))
+                                                    return
+                                                await _replace_with_new_below(q.message, f"Удалить «{name}» безвозвратно?", reply_markup=delete_confirm_kb(name))
+                                                return
+
+                                            elif action == "delyes":
+                                                name = parts[2] if len(parts) > 2 else None
+                                                if not name:
+                                                    await _replace_with_new_below(q.message, "Не указан аватар.", reply_markup=avatars_kb(uid))
+                                                    return
+                                                try:
+                                                    del_avatar(uid, name)
+                                                    with contextlib.suppress(Exception):
+                                                        await q.message.delete()
+                                                    await q.message.reply_text("✅ Аватар удалён.")
+                                                except Exception as e:
+                                                    await _replace_with_new_below(q.message, f"Не удалось удалить: {e}", reply_markup=avatars_kb(uid))
+                                                return
+
                                             else:
-                                                await _replace_with_new_below(q.message, "Аватар не найден.", reply_markup=avatars_kb(uid))
-                                        return
+                                                await _replace_with_new_below(q.message, "Аватары:", reply_markup=avatars_kb(uid))
+                                                return
 
-                                    elif action == "del":
-                                        await _replace_with_new_below(q.message, "Выбери, что удалить:", reply_markup=delete_pick_kb(uid))
-                                        return
-
-                                    elif action == "delpick":
-                                        name = parts[2] if len(parts) > 2 else None
-                                        if not name:
-                                            await _replace_with_new_below(q.message, "Не понял, что удалять.", reply_markup=avatars_kb(uid))
-                                            return
-                                        await _replace_with_new_below(q.message, f"Удалить «{name}» безвозвратно?", reply_markup=delete_confirm_kb(name))
-                                        return
-
-                                    elif action == "delyes":
-                                        name = parts[2] if len(parts) > 2 else None
-                                        if not name:
-                                            await _replace_with_new_below(q.message, "Не указан аватар.", reply_markup=avatars_kb(uid))
-                                            return
-                                        try:
-                                            del_avatar(uid, name)
-                                            with contextlib.suppress(Exception):
-                                                await q.message.delete()
-                                            await spawn_main_menu_below(context.bot, q.message.chat.id, uid, "Главное меню: (аватар удалён)")
-                                        except Exception as e:
-                                            await _replace_with_new_below(q.message, f"Не удалось удалить: {e}", reply_markup=avatars_kb(uid))
-                                        return
-
-                                    else:
-                                        await _replace_with_new_below(q.message, "Аватары:", reply_markup=avatars_kb(uid))
-                                        return
 
 
 
@@ -1235,18 +1231,19 @@ async def face_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- Handlers ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = update.effective_user.id
-        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+        prof = load_profile(uid)
+        prof["_uid_hint"] = uid
+        save_profile(uid, prof)
 
         await update.message.reply_text(
             "Привет! Я создам твою персональную фотомодель из 10 фото и буду генерировать тебя в узнаваемых сценах.\n\n"
             "— «📸 Набор фото» — загрузи до 10 снимков.\n"
             "— «🧪 Обучение» — тренируем твою LoRA.\n"
-            "— «🧭 Выбрать стиль» — сцены и жанры.\n"
+            "— «🧭 Стили» — выбирай сцены и жанры.\n"
             "— «🤖 Аватары» — несколько моделей с отдельным полом.\n"
             "Face ID включён автоматически; Natural=ON, Pretty=OFF, LockFace=OFF.",
-            reply_markup=bottom_reply_kb()   # <<< вот это даёт меню внизу
+            reply_markup=bottom_reply_kb()
         )
-        await spawn_main_menu_below(context.bot, update.effective_chat.id, uid, "Главное меню:")
 
 
 # ---------- UI utils ----------
@@ -1275,26 +1272,6 @@ def bottom_reply_kb() -> ReplyKeyboardMarkup:
         one_time_keyboard=False,
         selective=False
     )
-
-async def spawn_main_menu_below(bot, chat_id: int, uid: int, text: str = "Главное меню:"):
-        """
-        Если предыдущее сообщение бота было главным меню — удаляем его.
-        Затем отправляем новое «Главное меню» СНИЗУ и запоминаем его message_id.
-        """
-        prev_id = LAST_MAIN_MENU_MSG_ID.get(uid)
-        if prev_id:
-            with contextlib.suppress(Exception):
-                await bot.delete_message(chat_id=chat_id, message_id=prev_id)
-
-        new_msg = await bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=main_menu_kb(),
-            disable_web_page_preview=True
-        )
-        LAST_MAIN_MENU_MSG_ID[uid] = new_msg.message_id
-        return new_msg
-
 
 
 async def ensure_main_menu(bot, chat_id: int, uid: int, text: str = "Главное меню:"):
@@ -1334,70 +1311,53 @@ async def _replace_with_new_below(qmsg, text: str, reply_markup=None):
 
 
 async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                            q = update.callback_query
-                            await q.answer()
-                            uid = update.effective_user.id
-                            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                            key = q.data.split(":", 1)[1]
+    q = update.callback_query
+    await q.answer()
 
-                            async def show_below(text, kb=None):
-                                return await q.message.reply_text(text, reply_markup=kb, disable_web_page_preview=True)
+    uid = update.effective_user.id
+    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+    key = q.data.split(":", 1)[1]
 
-                            async def replace_card(text, kb=None):
-                                return await _replace_with_new_below(q.message, text, reply_markup=kb)
+    # локальный хелпер: заменяем текущее сообщение новой «карточкой»
+    async def replace_card(text: str, kb=None):
+        return await _replace_with_new_below(q.message, text, reply_markup=kb)
 
-                            def _is_from_main():
-                                try:
-                                    return (q.message.reply_markup is not None and
-                                            q.message.reply_markup.inline_keyboard == main_menu_kb().inline_keyboard)
-                                except Exception:
-                                    return False
+    if key == "styles":
+        # Показать список категорий (без кнопки «Назад»)
+        await replace_card("Выбери категорию:", categories_kb())
+        return
 
-                            if key == "styles":
-                                if _is_from_main():
-                                    await show_below("Выбери категорию:", categories_kb())
-                                else:
-                                    await replace_card("Выбери категорию:", categories_kb())
+    elif key == "enroll":
+        await replace_card("📸 Набор фото…")
+        await id_enroll(update, context)
+        return
 
-                            elif key == "menu":
-                                # спавним новое «Главное меню» снизу; предыдущее главное (если было последним) удалится внутри
-                                await spawn_main_menu_below(context.bot, q.message.chat.id, uid, "Главное меню:")
-                                if not _is_from_main():
-                                    with contextlib.suppress(Exception):
-                                        await q.message.delete()
+    elif key == "train":
+        await replace_card("🧪 Обучение…")
+        await trainid_cmd(update, context)
+        return
 
-                            elif key == "enroll":
-                                if _is_from_main():
-                                    await show_below("📸 Набор фото…")
-                                    await id_enroll(update, context)
-                                else:
-                                    await replace_card("📸 Набор фото…")
-                                    await id_enroll(update, context)
+    elif key == "status":
+        # Кнопки «Статус» в меню больше нет, но обработаем на случай старых сообщений
+        await replace_card("ℹ️ Обновляю статус…")
+        await id_status(update, context)
+        return
 
-                            elif key == "train":
-                                if _is_from_main():
-                                    await show_below("🧪 Обучение…")
-                                    await trainid_cmd(update, context)
-                                else:
-                                    await replace_card("🧪 Обучение…")
-                                    await trainid_cmd(update, context)
+    elif key == "avatars":
+        await replace_card("Аватары:", avatars_kb(uid))
+        return
 
-                            elif key == "status":
-                                if _is_from_main():
-                                    await show_below("ℹ️ Обновляю статус…")
-                                    await id_status(update, context)
-                                else:
-                                    await replace_card("ℹ️ Обновляю статус…")
-                                    await id_status(update, context)
+    elif key == "menu":
+        # «Главного меню»-сообщения больше нет — просто дружелюбный пинг
+        with contextlib.suppress(Exception):
+            await q.message.delete()
+        await update.effective_chat.send_message("Меню всегда снизу 👇", reply_markup=bottom_reply_kb())
+        return
 
-                            elif key == "avatars":
-                                if _is_from_main():
-                                    await show_below("Аватары:", avatars_kb(uid))
-                                else:
-                                    await replace_card("Аватары:", avatars_kb(uid))
-
-                            else:
-                                await spawn_main_menu_below(context.bot, q.message.chat.id, uid, "Главное меню:")
+    else:
+        # Неизвестный ключ — безопасно перерисуем текущую карточку
+        await replace_card("Выбери категорию:", categories_kb())
+        return
 
 
 
@@ -1570,48 +1530,59 @@ def del_avatar(uid:int, name:str):
 
 # ---- Текстовый обработчик для имени нового аватара (без команд) ----
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                    uid = update.effective_user.id
-                    text = (update.message.text or "").strip()
-                    if not text:
-                        return
+                            uid = update.effective_user.id
+                            text = (update.message.text or "").strip()
+                            if not text:
+                                return
 
-                    # 1) если ждём имя нового аватара — это приоритетно
-                    if PENDING_NEW_AVATAR.get(uid):
-                        name = re.sub(r"[^\w\-\.\@]+", "_", text)[:32] or "noname"
-                        ensure_avatar(uid, name)
-                        set_current_avatar(uid, name)
-                        PENDING_NEW_AVATAR.pop(uid, None)
+                            # 1) Если ждём имя нового аватара — это приоритетно
+                            if PENDING_NEW_AVATAR.get(uid):
+                                name = re.sub(r"[^\w\-\.\@]+", "_", text)[:32] or "noname"
+                                ensure_avatar(uid, name)
+                                set_current_avatar(uid, name)
+                                PENDING_NEW_AVATAR.pop(uid, None)
 
-                        await update.message.reply_text(
-                            f"Создан и выбран аватар: «{name}». Укажи пол:",
-                            reply_markup=avatar_gender_kb(name)
-                        )
-                        return
+                                await update.message.reply_text(
+                                    f"Создан и выбран аватар: «{name}». Укажи пол:",
+                                    reply_markup=avatar_gender_kb(name)
+                                )
+                                return
 
-                    # 2) кнопки нижней клавиатуры:
-                    t = text.lower()
+                            # 2) Кнопки нижней Reply-клавиатуры
+                            t = text.lower()
 
-                    if t in ("стили", "style", "styles"):
-                        await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
-                        return
+                            if t in ("стили", "style", "styles"):
+                                await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
+                                return
 
-                    if t in ("аватар", "avatar", "аватары"):
-                        await update.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
-                        return
+                            if t in ("аватар", "аватары", "avatar"):
+                                await update.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
+                                return
 
-                    if t in ("набор фото", "фото", "enroll"):
-                        await update.message.reply_text("📸 Набор фото…")
-                        await id_enroll(update, context)
-                        return
+                            if t in ("набор фото", "фото", "enroll", "добавить фото"):
+                                await update.message.reply_text("📸 Набор фото…")
+                                await id_enroll(update, context)
+                                return
 
-                    if t in ("обучение", "train", "тренировка"):
-                        await update.message.reply_text("🧪 Обучение…")
-                        await trainid_cmd(update, context)
-                        return
+                            if t in ("обучение", "train", "тренировка"):
+                                await update.message.reply_text("🧪 Обучение…")
+                                await trainid_cmd(update, context)
+                                return
 
-                    if t in ("меню", "главное меню", "menu"):
-                        await spawn_main_menu_below(context.bot, update.effective_chat.id, uid, "Главное меню:")
-                        return
+                            # Кнопки «Меню» больше нет, но если пользователь напишет вручную — просто напомним
+                            if t in ("меню", "главное меню", "menu"):
+                                await update.message.reply_text("Меню всегда снизу 👇", reply_markup=bottom_reply_kb())
+                                return
+
+                            # На всякий случай поддержим ручной запрос статуса (кнопки уже нет)
+                            if t in ("статус", "мой статус", "status"):
+                                await update.message.reply_text("ℹ️ Обновляю статус…")
+                                await id_status(update, context)
+                                return
+
+                            # Иначе — ничего не отвечаем, чтобы не ломать кнопочный UX
+                            return
+
 
                     # иначе игнорируем, чтобы не ломать кнопочный UX
 
@@ -1915,55 +1886,64 @@ async def trainid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(f"Не удалось запустить обучение: {e}")
 
 async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        uid = update.effective_user.id
-        prof = load_profile(uid)
-        av_name = get_current_avatar_name(prof)
-        status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
-        prof = load_profile(uid)  # перечитаем после обновления
-        av = get_avatar(prof, av_name)
-        tid = av.get("training_id")
+    uid = update.effective_user.id
+    prof = load_profile(uid)
+    av_name = get_current_avatar_name(prof)
 
-        # человекочитаемая строка статуса
-        display = {
-            "starting": "starting (готовится к запуску)",
-            "queued": "queued (в очереди)", 
-            "running": "running (обучается)",
-            "processing": "processing (публикую версию)",
-            "succeeded": "succeeded",
-            "failed": "failed",
-            "canceled": "canceled",
-            "unknown": "unknown"
-        }.get(status, status)
+    # тянем свежий статус из Replicate
+    status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
 
-        train_url = f"https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{tid}" if (DEST_OWNER and DEST_MODEL and tid) else None
+    # перечитываем профиль на всякий
+    prof = load_profile(uid)
+    av = get_avatar(prof, av_name)
+    tid = av.get("training_id")
 
-        # === УСПЕХ ===
-        if status == "succeeded" and slug_with_ver:
-            await update.effective_message.reply_text(
-                f"✅ Обучение завершено!\nАватар: {av_name}\nМодель: {slug_with_ver}\nТеперь можешь выбрать стиль👇"
-            )
-            # Показываем главное меню СНИЗУ
-            await spawn_main_menu_below(context.bot, update.effective_chat.id, uid, "Главное меню:")
-            return
+    display = {
+        "starting":   "starting (готовится к запуску)",
+        "queued":     "queued (в очереди)",
+        "running":    "running (обучается)",
+        "processing": "processing (публикую версию)",
+        "succeeded":  "succeeded",
+        "failed":     "failed",
+        "canceled":   "canceled",
+        "unknown":    "unknown",
+        None:         "unknown",
+    }.get(status, status or "unknown")
 
-        # === ИДЁТ ===
-        if status in ("starting", "queued", "running", "processing"):
-            extra = f"\nЛоги: {train_url}" if train_url else ""
-            await update.effective_message.reply_text(f"Статус «{av_name}»: {display}{extra}")
-            return
+    train_url = (
+        f"https://replicate.com/{DEST_OWNER}/{DEST_MODEL}/trainings/{tid}"
+        if (DEST_OWNER and DEST_MODEL and tid) else None
+    )
 
-        # === НЕУДАЧА ===
-        if status in ("failed", "canceled"):
-            msg = f"⚠️ Тренировка «{av_name}»: {status.upper()}."
-            if err:
-                msg += f"\nПричина: {err}"
-            if train_url:
-                msg += f"\nЛоги: {train_url}"
-            await update.effective_message.reply_text(msg)
-            return
+    # === успех: сразу ведём в выбор стилей ===
+    if status == "succeeded" and slug_with_ver:
+        await update.effective_message.reply_text(
+            f"✅ Обучение завершено!\n"
+            f"Аватар: {av_name}\n"
+            f"Модель: {slug_with_ver}\n\n"
+            f"Выбирай категорию стилей👇"
+        )
+        await update.effective_message.reply_text("Выбери категорию:", reply_markup=categories_kb())
+        return
 
-        # === ОСТАЛЬНОЕ ===
-        await update.effective_message.reply_text(f"Статус «{av_name}»: {display}.")
+    # === всё ещё идёт ===
+    if status in ("starting", "queued", "running", "processing"):
+        extra = f"\nЛоги: {train_url}" if train_url else ""
+        await update.effective_message.reply_text(f"Статус «{av_name}»: {display}{extra}")
+        return
+
+    # === неудача/отмена ===
+    if status in ("failed", "canceled"):
+        msg = f"⚠️ Тренировка «{av_name}»: {status.upper()}."
+        if err:
+            msg += f"\nПричина: {err}"
+        if train_url:
+            msg += f"\nЛоги: {train_url}"
+        await update.effective_message.reply_text(msg)
+        return
+
+    # === прочее/неизвестно ===
+    await update.effective_message.reply_text(f"Статус «{av_name}»: {display}.")
 
 
 # === Принудительное обновление статуса с Replicate ===
