@@ -497,6 +497,39 @@ STYLE_PRESETS: Dict[str, Style] = {
             "no helmet, no spacesuit, standing, walking"
         )
     },
+    "Контакт НЛО - лучи и пыль": {
+        "desc": "Яркий контакт с НЛО: несколько летающих тарелок с разноцветными огнями, инопланетяне выходят из корабля, а герой отворачивается от ослепительного луча света.",
+        "role": "person witnessing UFO encounter with aliens",
+        "outfit": "casual modern clothing, shocked expression",
+        "props": "UFO beams of light, multiple flying saucers, visible aliens, brightness covering part of scene",
+        "bg": "night sky with stars, fields or forest, colorful UFO lights illuminating area",
+        "comp": "full", 
+        "tone": "cool",
+
+        # ЖЕСТКИЕ ТРЕБОВАНИЯ
+        "required_attributes": [
+            "flying saucer", "alien beings", "bright light beam", 
+            "person turning away from light", "UFO encounter"
+        ],
+
+        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
+        "force_keywords": [
+            "MULTIPLE UFO FLYING SAUCERS", "ALIENS VISIBLE", "BRIGHT COLORFUL LIGHT BEAMS",
+            "PERSON TURNING AWAY FROM LIGHT", "SHIELDING EYES FROM BRIGHTNESS",
+            "CLOSE ENCOUNTER", "EXTRATERRESTRIAL CONTACT", "VIBRANT UFO LIGHTS",
+            "ALIEN FIGURES CLEARLY VISIBLE", "NIGHT SKY WITH STARS",
+            "DRAMATIC LIGHTING EFFECTS", "SCI-FI BRIGHT COLORS"
+        ],
+
+        # ЗАПРЕТЫ
+        "negative": (
+            "daytime, bright sky, no UFO, no aliens, no light beams, "
+            "person looking directly at UFO, normal lighting, "
+            "earth aircraft, airplane, helicopter, drone, "
+            "blurry, dark, poorly lit"
+        )
+    }
+
     "Киборг": {
         "desc": "Половина лица повреждена — под кожей блестящий металлический эндоскелет, красный кибер-глаз, детали из титана и проводов. Атмосфера фильма о будущем: дым, холодный свет, напряжение.",
         "role": "half-terminator portrait, realistic cinematic sci-fi",
@@ -730,13 +763,39 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     # ===== ТРАНСФОРМАЦИИ =====
-    "Старость": {
-        "desc": "Деликатное «состаривание» как стилизация.",
-        "role": "same person aged up",
-        "outfit": "same wardrobe vibe",
-        "props": "soft silver hair hints, gentle wrinkles",
-        "bg": "neutral portrait backdrop",
-        "comp": "closeup", "tone": "daylight",
+    "Старость":  {
+        "desc": "Мудрый пожилой человек с седыми волосами и морщинами, окруженный типичными атрибутами старости: вязание, шахматы, очки, вставная челюсть и другие признаки возраста.",
+        "role": "elderly person showing signs of aging",
+        "outfit_f": "comfortable aged clothing, cardigan, shawl",
+        "outfit": "comfortable aged clothing, sweater, vest",
+        "props": "knitting yarn and needles, chess board, reading glasses, false teeth in glass, walking cane, old photos",
+        "bg": "cozy interior with vintage furniture, rocking chair, bookshelf, soft lighting",
+        "comp": "half", 
+        "tone": "warm",
+
+        # ЖЕСТКИЕ ТРЕБОВАНИЯ
+        "required_attributes": [
+            "gray hair", "wrinkles", "elderly face"
+        ],
+
+        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
+        "force_keywords": [
+            "SILVER GRAY HAIR", "DEEP WRINKLES ON FACE", "AGED SKIN TEXTURE",
+            "ELDERLY PERSON", "SIGNS OF AGING", "WISDOM LINES",
+            "KNITTING YARN AND NEEDLES", "CHESS SET", "READING GLASSES",
+            "FALSE TEETH IN GLASS", "WALKING CANE", "VINTAGE ITEMS",
+            "COMFORTABLE AGED CLOTHING", "GENTLE EXPRESSION"
+        ],
+
+        # ЗАПРЕТЫ - убираем всё молодое и современное
+        "negative": (
+            "young face, smooth skin, no wrinkles, dark hair, "
+            "teenager, child, baby, youthful, "
+            "modern technology, smartphone, computer, "
+            "gym, sports, athletic, muscular"
+        ),
+
+        # Включаем трансформацию возраста
         "allow_age_change": True
     },
     "Молодость": {
@@ -868,12 +927,36 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     "Дикий сафари": {
-        "desc": "Экстрим в джунглях: грязь, пот, опасные животные вдали - настоящий экшен.",
-        "role": "jungle adventurer tracking wildlife",
-        "outfit": "mud-stained khaki gear, bush hat, heavy boots",
-        "props": "machete, tracking gear, water canteen, mud splatters",
-        "bg": "dense jungle with mist, elephant or tiger in distance, vines",
-        "comp": "full", "tone": "warm"
+        "desc": "Сафари-экспедиция в африканской саванне: герой в сафари-машине наблюдает за слоном, леопардом и стервятником одновременно на фоне заката.",
+        "role": "safari adventurer in African savanna",
+        "outfit_f": "khaki safari outfit with hat, binoculars, practical clothing",
+        "outfit": "khaki safari outfit with hat, binoculars, practical clothing",
+        "props": "Safari vehicle (jeep or open-top truck), steering wheel, camera, map",
+        "bg": "African savanna at sunset, acacia trees, dry grass, dramatic sky",
+        "comp": "full", 
+        "tone": "warm",
+
+        # ЖЕСТКИЕ ТРЕБОВАНИЯ - все три животных должны быть!
+        "required_attributes": [
+            "elephant", "leopard", "vulture", "safari vehicle", "savanna"
+        ],
+
+        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
+        "force_keywords": [
+            "SAFARI VEHICLE WITH PERSON", "ELEPHANT CLEARLY VISIBLE", 
+            "LEOPARD CLEARLY VISIBLE", "VULTURE VISIBLE IN SKY OR ON TREE",
+            "AFRICAN SAVANNA LANDSCAPE", "SUNSET LIGHTING",
+            "SAFARI ADVENTURE", "WILDLIFE PHOTOGRAPHY",
+            "ACACIA TREES", "DRY GRASSLAND", "AFRICAN WILDLIFE"
+        ],
+
+        # ЗАПРЕТЫ - убираем всё, что не относится к сафари
+        "negative": (
+            "city, building, urban, indoor, room, house, "
+            "zoo, cage, fence, domestic animals, "
+            "snow, winter, forest, mountain, beach, ocean, "
+            "no animals, missing elephant, missing leopard, missing vulture"
+        )
     },
     
     "Зена-королева воинов": {
@@ -959,7 +1042,11 @@ THEME_BOOST = {
     "Харли-Квинн": "diamond pattern details, smudged makeup, weapon props, chaotic confetti bursts",
     "Зомби-апокалипсис (кино)": "decaying skin details, blood splatters, tattered clothing, post-apocalyptic debris",
     "Рок-звезда 80-х": "laser light show, crowd hands reaching, sweat sparkle",
-    "Дикий сафари": "mosquito swarm, heat haze, animal tracks",
+    "Дикий сафари": (
+        "DETAILED ELEPHANT WITH WRINKLED SKIN, LEOPARD SPOTS CLEARLY VISIBLE, "
+        "VULTURE WITH SPREAD WINGS, SAFARI VEHICLE DETAILS, DUSTY ROAD, "
+        "SUNSET GOLDEN HOUR LIGHTING, SAVANNA GRASS TEXTURE, ACACIA TREE SILHOUETTES"
+    ),
     "Атлантида": "water caustics, pearl sheen, ancient glyphs",
     "Винтажный цирк": "sawdust on floor, tent fabric texture, vintage poster art",
     "Гонщик Формулы-1": "rubber marks on track, sponsor decals, pit board details",
@@ -968,6 +1055,19 @@ THEME_BOOST = {
         "BRIGHT STARS AND CONSTELLATIONS, COLORFUL NEBULAS, PLANET DETAILS, "
         "EARTH'S ATMOSPHERE GLOW, SPACE STATION MODULES, SOLAR PANELS, "
         "ZERO GRAVITY FLOATING POSE, SPACE DARKNESS CONTRAST"
+    ),
+     "Старость":(
+        "DETAILED FACIAL WRINKLES, SILVER WHITE HAIR TEXTURE, "
+        "AGE SPOTS ON HANDS, TRANSLUCENT SKIN, VEINS VISIBLE, "
+        "VINTAGE ITEM TEXTURES, SOFT COTTON YARN, WOODEN KNITTING NEEDLES, "
+        "CHESS PIECE DETAILS, GLASS WITH FALSE TEETH, WORN FURNITURE"
+    ),
+    "Контакт НЛО - лучи и пыль":
+    (
+        "BRIGHT MULTICOLORED UFO LIGHTS, GLOWING ALIEN FIGURES, "
+        "INTENSE LIGHT BEAMS FROM SAUCERS, PERSON REACTING TO BRIGHTNESS, "
+        "VIBRANT COLOR CONTRAST, NIGHT ATMOSPHERE, STARLIT SKY, "
+        "ALIEN SHIP DETAILS, DRAMATIC SHADOWS FROM LIGHT"
     )
 }
 
