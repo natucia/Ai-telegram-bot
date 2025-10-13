@@ -466,21 +466,36 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     # ===== SCI-FI =====
-    "Космический скафандр — EVA": {
-        "desc": "Хард sci-fi: шлем с отражениями, стыковочный отсек.",
-        "role": "astronaut",
-        "outfit": "realistic EVA spacesuit",
-        "props": "helmet reflections, suit details",
-        "bg": "starfield and spaceship hangar",
-        "comp": "full", "tone": "cool"
-    },
-    "Космопилот на мостике": {
-        "desc": "Пульт, индикаторы, режим гиперпрыжка.",
-        "role": "starship pilot on the bridge",
-        "outfit": "flight suit, helmet under arm",
-        "props": "control panels with glowing indicators",
-        "bg": "spaceship bridge interior",
-        "comp": "half", "tone": "cool"
+    "Космос🚀": {
+        "desc": "Астронавт в полном скафандре для выхода в открытый космос парит на фоне бескрайнего космоса с галактиками, туманностями и далёкими звёздами. Видны Земля или другие планеты.",
+        "role": "astronaut floating in open space",
+        "outfit": "detailed EVA spacesuit with helmet, life support system, multiple layers",
+        "props": "spacesuit helmet with reflective visor, oxygen tanks, tool harness, tether cable, control panel on chest",
+        "bg": "DEEP SPACE WITH STARS, GALAXIES, NEBULAS, EARTH OR OTHER PLANETS VISIBLE, BLACK VOID OF SPACE",
+        "comp": "full", 
+        "tone": "cool",
+
+        # ЖЕСТКИЕ ТРЕБОВАНИЯ
+        "required_attributes": [
+            "spacesuit", "helmet", "open space", "stars", "zero gravity"
+        ],
+
+        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
+        "force_keywords": [
+            "OPEN SPACE", "DEEP SPACE", "ASTRONAUT FLOATING IN SPACE", 
+            "FULL SPACESUIT WITH HELMET", "STARS AND GALAXIES", 
+            "PLANETS VISIBLE", "ZERO GRAVITY", "SPACE WALK",
+            "COSMIC BACKGROUND", "SPACE ENVIRONMENT", "VOID OF SPACE",
+            "ORBITING EARTH", "SPACE STATION EXTERIOR"
+        ],
+
+        # ЗАПРЕТЫ - убираем всё земное и интерьеры
+        "negative": (
+            "ground, earth surface, land, indoor, room, building, "
+            "spaceship interior, station interior, hangar, workshop, "
+            "floor, wall, ceiling, furniture, trees, clouds, sky, "
+            "no helmet, no spacesuit, standing, walking"
+        )
     },
     "Киборг": {
         "desc": "Половина лица повреждена — под кожей блестящий металлический эндоскелет, красный кибер-глаз, детали из титана и проводов. Атмосфера фильма о будущем: дым, холодный свет, напряжение.",
@@ -783,23 +798,7 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     # ===== ДИЗНЕЕВСКИЕ ВАЙБЫ / PIXAR (стилизация) =====
-    "Светлая сказка": {
-        "desc": "Сказочная палитра, крупные выразительные глаза.",
-        "role": "fairy-tale protagonist",
-        "outfit_f": "pastel dress with subtle sparkles",
-        "outfit": "storybook outfit with cape",
-        "props": "tiny twinkles around, soft vignette",
-        "bg": "storybook castle and garden",
-        "comp": "half", "tone": "daylight"
-    },
-    "Пиксар-семья": {
-        "desc": "Мягкие формы, кинематографичный rim light.",
-        "role": "family animation character",
-        "outfit": "casual friendly clothes",
-        "props": "subsurface scattering skin hint, rim light",
-        "bg": "friendly suburban street or cozy room",
-        "comp": "half", "tone": "warm"
-    },
+
 
     # ===== ДЖУНГЛИ / ЭКШЕН =====
     "Джунгли — Тарзан-вайб": {
@@ -964,7 +963,13 @@ THEME_BOOST = {
     "Дикий сафари": "mosquito swarm, heat haze, animal tracks",
     "Атлантида": "water caustics, pearl sheen, ancient glyphs",
     "Винтажный цирк": "sawdust on floor, tent fabric texture, vintage poster art",
-    "Гонщик Формулы-1": "rubber marks on track, sponsor decals, pit board details"
+    "Гонщик Формулы-1": "rubber marks on track, sponsor decals, pit board details",
+    "Космос🚀":(
+        "DETAILED SPACESUIT TEXTURES, HELMET REFLECTIONS SHOWING SPACE, "
+        "BRIGHT STARS AND CONSTELLATIONS, COLORFUL NEBULAS, PLANET DETAILS, "
+        "EARTH'S ATMOSPHERE GLOW, SPACE STATION MODULES, SOLAR PANELS, "
+        "ZERO GRAVITY FLOATING POSE, SPACE DARKNESS CONTRAST"
+    )
 }
 
 # Настройки «сценовой» направляющей (чуть выше — меньше уводит лицо)
@@ -1048,7 +1053,7 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
         "Супергерой", "Джунгли — Тарзан-вайб"
     ],
     "Sci-Fi": [
-        "Космический скафандр — EVA", "Космопилот на мостике",
+        "Космос🚀",
         "Киборг", "Контакт НЛО — лучи и пыль"
     ],
     "Ночные / Готика / Ужасы": [
