@@ -39,6 +39,8 @@ def _stable_seed(*parts:str) -> int:
 
 # ---------- ENV ----------
 TOKEN = os.getenv("BOT_TOKEN", "")
+PHOTO_COUNTER_MSG_ID: Dict[Tuple[int, str], int] = {}  # (uid, avatar) -> msg_id последнего сообщения-счётчика
+
 os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN", "")
 
 if not TOKEN or not re.match(r"^\d+:[A-Za-z0-9_-]{20,}$", TOKEN):
@@ -1375,15 +1377,15 @@ async def cb_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _replace_with_new_below(q.message, f"Стиль — {cat}. Выбери сцену:", reply_markup=styles_kb_for_category(cat))
 
 
-async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-    av_name = get_current_avatar_name(prof)
-    ENROLL_FLAG[(uid, av_name)] = True
-    await update.effective_message.reply_text(
-        f"Набор включён для «{av_name}». Пришли подряд до 10 фронтальных фото без фильтров.", 
-        reply_markup=enroll_done_kb()
-    )
+    async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        uid = update.effective_user.id
+        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+        av_name = get_current_avatar_name(prof)
+        ENROLL_FLAG[(uid, av_name)] = True
+        await update.effective_message.reply_text(
+            f"Набор включён для «{av_name}». Пришли подряд 10 фронтальных фото без фильтров."
+        )
+
 
 async def cb_enroll_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # callback enroll:done → та же логика, что и /iddone
@@ -1474,22 +1476,87 @@ async def id_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Профиль очищен. Жми «📸 Набор фото» и загрузи снимки заново.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    prof = load_profile(uid)
-    prof["_uid_hint"] = uid
-    save_profile(uid, prof)
+        uid = update.effective_user.id
+        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+        av_name = get_current_avatar_name(prof)
 
-    av_name = get_current_avatar_name(prof)  # <— без пробелов внутри имени!
+        # если режим набора не включён — мягко включим (на случай, если юзер просто шлёт фото)
+        if not ENROLL_FLAG.get((uid, av_name), False):
+            ENROLL_FLAG[(uid, av_name)] = True
+
+        # 1) скачиваем и сохраняем фото
+        try:
+            f = await update.effective_message.photo[-1].get_file()
+            data = await f.download_as_bytearray()
+            _ = STORAGE.save_ref_image(uid, av_name, data)
+        except Exception as e:
+            await update.effective_message.reply_text(f"⚠️ Не удалось сохранить фото: {e}")
+            return
+
+        # 2) считаем, показываем прогресс (и удаляем старый счётчик)
+        count = len(list_ref_images(uid, av_name))
+        prev_id = PHOTO_COUNTER_MSG_ID.get((uid, av_name))
+        if prev_id:
+            with contextlib.suppress(Exception):
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=prev_id)
+
+        msg = await update.effective_message.reply_text(f"📸 Фото {min(count,10)}/10")
+        PHOTO_COUNTER_MSG_ID[(uid, av_name)] = msg.message_id
+
+        # 3) если ещё не 10 — ждём следующие
+        if count < 10:
+            return
+
+        # 4) ровно/более 10 — фиксируем набор и запускаем пайплайн
+        ENROLL_FLAG[(uid, av_name)] = False
+
+        av = get_avatar(prof, av_name)
+        av["images"] = list_ref_images(uid, av_name)
+
+        # если нет пола — определим
+        if not av.get("gender"):
+            try:
+                av["gender"] = auto_detect_gender(uid, av_name)
+            except Exception:
+                av["gender"] = av.get("gender") or (prof.get("gender") or "female")
+
+        save_profile(uid, prof)
+
+        # 5) готовим Face ID embedding (до обучения)
+        try:
+            await update.effective_message.reply_text("🔄 Подготавливаю Face ID embedding…")
+            embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
+            if embedding:
+                await update.effective_message.reply_text("✅ Face ID embedding готов")
+            else:
+                await update.effective_message.reply_text("⚠️ Не удалось подготовить Face ID embedding — продолжу без него.")
+        except Exception as e:
+            logger.warning("Face ID embedding preparation failed: %s", e)
+
+        # 6) стартуем обучение
+        await update.effective_message.reply_text("🚀 Запускаю обучение LoRA…")
+        try:
+            async with TRAIN_SEMAPHORE:
+                training_id = await asyncio.to_thread(start_lora_training, uid, av_name)
+            await update.effective_message.reply_text(
+                f"🧪 Создаём твою цифровую копию… это займёт немного времени.\n"
+                f"ID обучения: {training_id}"
+            )
+            # мониторим статус и сообщаем результат
+            asyncio.create_task(_wait_training_and_notify(context.bot, update.effective_chat.id, uid, av_name))
+        except Exception as e:
+            logger.exception("train start failed")
+            await update.effective_message.reply_text(f"⚠️ Не удалось запустить обучение: {e}")
 
     # резолвер: байты из TG → STORAGE.save_ref_image → HTTPS URL
-    async def _resolve_direct_photo_url(update, context) -> str:
+async def _resolve_direct_photo_url(update, context) -> str:
         global STORAGE
         f = await update.effective_message.photo[-1].get_file()
         data = await f.download_as_bytearray()
         url = STORAGE.save_ref_image(uid, av_name, data)
         return url
-
-    await on_user_upload_face(
+    
+await on_user_upload_face(
         update, context,
         load_profile, save_profile,
         get_current_avatar_name, get_avatar,
@@ -1530,66 +1597,64 @@ def del_avatar(uid:int, name:str):
 
 # ---- Текстовый обработчик для имени нового аватара (без команд) ----
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-                            uid = update.effective_user.id
-                            text = (update.message.text or "").strip()
-                            if not text:
-                                return
+    uid = update.effective_user.id
+    text = (update.message.text or "").strip()
+    if not text:
+        return
 
-                            # 1) Если ждём имя нового аватара — это приоритетно
-                            if PENDING_NEW_AVATAR.get(uid):
-                                name = re.sub(r"[^\w\-\.\@]+", "_", text)[:32] or "noname"
-                                ensure_avatar(uid, name)
-                                set_current_avatar(uid, name)
-                                PENDING_NEW_AVATAR.pop(uid, None)
+    # 1) если ждём имя нового аватара — создаём и сразу включаем режим набора фото (10 шт)
+    if PENDING_NEW_AVATAR.get(uid):
+        name = re.sub(r"[^\w\-\.\@]+", "_", text)[:32] or "noname"
+        ensure_avatar(uid, name)
+        set_current_avatar(uid, name)
+        PENDING_NEW_AVATAR.pop(uid, None)
 
-                                await update.message.reply_text(
-                                    f"Создан и выбран аватар: «{name}». Укажи пол:",
-                                    reply_markup=avatar_gender_kb(name)
-                                )
-                                return
+        # включаем набор фото для нового аватара
+        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+        ENROLL_FLAG[(uid, name)] = True
 
-                            # 2) Кнопки нижней Reply-клавиатуры
-                            t = text.lower()
+        await update.message.reply_text(
+            f"Создан и выбран аватар: «{name}». Укажи пол:",
+            reply_markup=avatar_gender_kb(name)
+        )
+        await update.message.reply_text(
+            "Теперь пришли подряд 10 фронтальных фото без фильтров (waist-up/close-up). "
+            "Кнопка «Набор фото» тоже доступна внизу."
+        )
+        return
 
-                            if t in ("стили", "style", "styles"):
-                                await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
-                                return
+    # 2) Кнопки нижней Reply-клавиатуры
+    t = text.lower()
 
-                            if t in ("аватар", "аватары", "avatar"):
-                                await update.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
-                                return
+    if t in ("стили", "style", "styles"):
+        await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
+        return
 
-                            if t in ("набор фото", "фото", "enroll", "добавить фото"):
-                                await update.message.reply_text("📸 Набор фото…")
-                                await id_enroll(update, context)
-                                return
+    if t in ("аватар", "аватары", "avatar"):
+        await update.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
+        return
 
-                            if t in ("обучение", "train", "тренировка"):
-                                await update.message.reply_text("🧪 Обучение…")
-                                await trainid_cmd(update, context)
-                                return
+    if t in ("набор фото", "фото", "enroll", "добавить фото"):
+        await update.message.reply_text("📸 Набор фото активирован. Пришли до 10 фото подряд.")
+        await id_enroll(update, context)
+        return
 
-                            # Кнопки «Меню» больше нет, но если пользователь напишет вручную — просто напомним
-                            if t in ("меню", "главное меню", "menu"):
-                                await update.message.reply_text("Меню всегда снизу 👇", reply_markup=bottom_reply_kb())
-                                return
+    if t in ("обучение", "train", "тренировка"):
+        await update.message.reply_text("🧪 Обучение…")
+        await trainid_cmd(update, context)
+        return
 
-                            # На всякий случай поддержим ручной запрос статуса (кнопки уже нет)
-                            if t in ("статус", "мой статус", "status"):
-                                await update.message.reply_text("ℹ️ Обновляю статус…")
-                                await id_status(update, context)
-                                return
+    if t in ("меню", "главное меню", "menu"):
+        await update.message.reply_text("Меню всегда снизу 👇", reply_markup=bottom_reply_kb())
+        return
 
-                            # Иначе — ничего не отвечаем, чтобы не ломать кнопочный UX
-                            return
+    if t in ("статус", "мой статус", "status"):
+        await update.message.reply_text("ℹ️ Обновляю статус…")
+        await id_status(update, context)
+        return
 
-
-                    # иначе игнорируем, чтобы не ломать кнопочный UX
-
-
-            # иначе игнорируем, чтобы не ломать кнопочный UX
-
-    # иначе игнорируем произвольный текст, чтобы не ломать кнопочный UX
+    # иначе — молчим, чтобы не ломать кнопочный UX
+    return
 
 
     # можно добавить другие «ожидания» при необходимости
@@ -1944,6 +2009,38 @@ async def trainstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # === прочее/неизвестно ===
     await update.effective_message.reply_text(f"Статус «{av_name}»: {display}.")
+
+
+async def _wait_training_and_notify(bot, chat_id: int, uid: int, av_name: str):
+    """Пулим статус до терминального и уведомляем пользователя."""
+    try:
+        while True:
+            status, slug_with_ver, err = await asyncio.to_thread(check_training_status, uid, av_name)
+            if status in ("succeeded", "failed", "canceled"):
+                break
+            await asyncio.sleep(20)  # мягкий пуллинг
+
+        if status == "succeeded" and slug_with_ver:
+            # на всякий — можно обновить/перегенерить embedding после обучения
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(prepare_face_embedding, uid, av_name)
+
+            await bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "✅ Цифровая копия создана! Можно выбирать стили.\n"
+                    "Выбери категорию:"
+                ),
+                reply_markup=categories_kb()
+            )
+        else:
+            msg = f"⚠️ Обучение «{av_name}»: {status.upper() if status else 'UNKNOWN'}."
+            if err:
+                msg += f"\nПричина: {err}"
+            await bot.send_message(chat_id=chat_id, text=msg)
+    except Exception as e:
+        await bot.send_message(chat_id=chat_id, text=f"⚠️ Ошибка мониторинга обучения: {e}")
+
 
 
 # === Принудительное обновление статуса с Replicate ===
