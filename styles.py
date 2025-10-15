@@ -848,16 +848,16 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "warm"
     },
     "Русалка": {
-        "desc": "Волшебная русалка с сияющим чешуйчатым хвостом в кристально чистой лагуне, окруженная друзьями-обитателями моря — весёлым Флаундером и заботливым Себастьяном, среди коралловых садов и солнечных лучей, пронизывающих толщу воды.",
-        "role_f": "disney style mermaid with sparkling tail",
-        "role": "merman with powerful tail",
-        "outfit_f": "seashell bikini top, flowing hair with pearls and sea flowers",
+        "desc": "Волшебная русалка с РЕАЛЬНЫМ сияющим чешуйчатым хвостом в кристально чистой лагуне, окруженная друзьями-обитателями моря — весёлым Флаундером и заботливым Себастьяном, среди коралловых садов и солнечных лучей, пронизывающих толщу воды. ОБЯЗАТЕЛЬНО: настоящий хвост, ракушки на груди (для женщин), плавающая поза.",
+        "role_f": "disney style mermaid with realistic sparkling tail and seashell top",
+        "role": "merman with realistic powerful tail",
+        "outfit_f": "SEASHELL BIKINI TOP MANDATORY, flowing hair with pearls and sea flowers",
         "outfit": "bare torso, aquatic accessories",
         "props": (
-            "DETAILED MERMAID TAIL WITH IRIDESCENT SCALES CLEARLY VISIBLE, "
+            "REALISTIC DETAILED MERMAID TAIL WITH IRIDESCENT SCALES CLEARLY VISIBLE, "
             "FLOUNDER FISH SWIMMING CLOSE, SEBASTIAN CRAB ON ROCK OR SHOULDER, "
             "SCHOOLS OF TROPICAL FISH, SEAHORSES, DOLPHINS IN DISTANCE, "
-            "PEARLS, STARFISH, BUBBLES, CORAL FRAGMENTS"
+            "PEARLS, STARFISH, BUBBLES, CORAL FRAGMENTS, SWIMMING POSE"
         ),
         "bg": (
             "SUNLIT UNDERWATER LAGOON WITH COLORFUL CORAL REEF, "
@@ -869,34 +869,38 @@ STYLE_PRESETS: Dict[str, Style] = {
 
         # ЖЕСТКИЕ ТРЕБОВАНИЯ
         "required_attributes": [
-            "mermaid tail", "underwater", "coral reef", 
-            "colorful fish", "seashell top (for female)"
+            "realistic mermaid tail", "underwater", "coral reef", 
+            "colorful fish", "seashell top (for female)", "swimming pose"
         ],
 
         # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
         "force_keywords": [
-            "DETAILED MERMAID TAIL WITH SCALES", "UNDERWATER SCENE", 
+            "REALISTIC MERMAID TAIL WITH DETAILED SCALES", "UNDERWATER SWIMMING POSE", 
             "FLOUNDER FISH VISIBLE", "SEBASTIAN CRAB VISIBLE",
-            "SHELL BIKINI TOP", "CORAL REEF ECOSYSTEM",
+            "SHELL BIKINI TOP MANDATORY", "CORAL REEF ECOSYSTEM",
             "SUNBEAMS THROUGH WATER", "TROPICAL FISH SCHOOLS",
             "MAGICAL UNDERWATER WORLD", "DISNEY-STYLE CHARACTERS",
-            "IRIDESCENT SCALES", "OCEAN LAGOON"
+            "IRIDESCENT SCALES", "OCEAN LAGOON", "FLOATING IN WATER",
+            "NO SITTING", "SWIMMING MOTION"
         ],
 
-        # ЗАПРЕТЫ
+        # ЗАПРЕТЫ - ужесточенные
         "negative": (
+            "sitting, seated, on rock, on chair, on throne, on surface, "
             "land, ground, walking, legs, feet, shoes, "
             "beach, shore, boat, surface, above water, "
-            "dark water, murky, no tail, no fish, no coral"
-        )
-    },
-    "Программист": {
-        "desc": "Код на экранах, RGB-клавиатура, ночь за окном.",
-        "role": "software engineer at desk",
-        "outfit": "hoodie or tee, headphones",
-        "props": "code on monitors, RGB keyboard",
-        "bg": "dual-monitor setup with city glow",
-        "comp": "half", "tone": "cool"
+            "dark water, murky, no tail, drawn tail, fake tail, cartoon tail, "
+            "no seashell top, bare chest without shells, "
+            "standing, standing pose"
+        ),
+
+        # Особые указания для женщин
+        "force_keywords_f": [
+            "SEASHELL BIKINI TOP CLEARLY VISIBLE AND COVERING CHEST",
+            "REALISTIC MERMAID TAIL ATTACHED TO BODY",
+            "FLOATING SWIMMING POSE IN WATER",
+            "NO SITTING POSITION"
+        ]
     },
 
     # ===== ДИЗНЕЕВСКИЕ ВАЙБЫ / PIXAR (стилизация) =====
