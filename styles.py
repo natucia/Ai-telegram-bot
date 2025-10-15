@@ -847,6 +847,49 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "hospital corridor with soft bokeh",
         "comp": "half", "tone": "warm"
     },
+    "Русалка": {
+        "desc": "Волшебная русалка с сияющим чешуйчатым хвостом в кристально чистой лагуне, окруженная друзьями-обитателями моря — весёлым Флаундером и заботливым Себастьяном, среди коралловых садов и солнечных лучей, пронизывающих толщу воды.",
+        "role_f": "disney style mermaid with sparkling tail",
+        "role": "merman with powerful tail",
+        "outfit_f": "seashell bikini top, flowing hair with pearls and sea flowers",
+        "outfit": "bare torso, aquatic accessories",
+        "props": (
+            "DETAILED MERMAID TAIL WITH IRIDESCENT SCALES CLEARLY VISIBLE, "
+            "FLOUNDER FISH SWIMMING CLOSE, SEBASTIAN CRAB ON ROCK OR SHOULDER, "
+            "SCHOOLS OF TROPICAL FISH, SEAHORSES, DOLPHINS IN DISTANCE, "
+            "PEARLS, STARFISH, BUBBLES, CORAL FRAGMENTS"
+        ),
+        "bg": (
+            "SUNLIT UNDERWATER LAGOON WITH COLORFUL CORAL REEF, "
+            "SUNBEAMS STREAKING THROUGH WATER, UNDERWATER CASTLE OR GROTTO IN DISTANCE, "
+            "VIBRANT MARINE LIFE, CLEAR TURQUOISE WATER"
+        ),
+        "comp": "full", 
+        "tone": "vibrant",
+
+        # ЖЕСТКИЕ ТРЕБОВАНИЯ
+        "required_attributes": [
+            "mermaid tail", "underwater", "coral reef", 
+            "colorful fish", "seashell top (for female)"
+        ],
+
+        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
+        "force_keywords": [
+            "DETAILED MERMAID TAIL WITH SCALES", "UNDERWATER SCENE", 
+            "FLOUNDER FISH VISIBLE", "SEBASTIAN CRAB VISIBLE",
+            "SHELL BIKINI TOP", "CORAL REEF ECOSYSTEM",
+            "SUNBEAMS THROUGH WATER", "TROPICAL FISH SCHOOLS",
+            "MAGICAL UNDERWATER WORLD", "DISNEY-STYLE CHARACTERS",
+            "IRIDESCENT SCALES", "OCEAN LAGOON"
+        ],
+
+        # ЗАПРЕТЫ
+        "negative": (
+            "land, ground, walking, legs, feet, shoes, "
+            "beach, shore, boat, surface, above water, "
+            "dark water, murky, no tail, no fish, no coral"
+        )
+    },
     "Программист": {
         "desc": "Код на экранах, RGB-клавиатура, ночь за окном.",
         "role": "software engineer at desk",
@@ -1047,6 +1090,11 @@ THEME_BOOST = {
         "VULTURE WITH SPREAD WINGS, SAFARI VEHICLE DETAILS, DUSTY ROAD, "
         "SUNSET GOLDEN HOUR LIGHTING, SAVANNA GRASS TEXTURE, ACACIA TREE SILHOUETTES"
     ),
+    "Русалка": (
+        "IRIDESCENT SCALE TEXTURES, SUNBEAM CAUSTICS PATTERNS, "
+        "WATER SURFACE GLIMMER, CORAL DETAILS, FISH SCALE REFLECTIONS, "
+        "BUBBLE TRAILS, FLOWING HAIR IN WATER, PEARL LUSTER"
+    ),
     "Атлантида": "water caustics, pearl sheen, ancient glyphs",
     "Винтажный цирк": "sawdust on floor, tent fabric texture, vintage poster art",
     "Гонщик Формулы-1": "rubber marks on track, sponsor decals, pit board details",
@@ -1106,6 +1154,7 @@ SCENE_GUIDANCE = {
     "Пиксар-семья": 3.2,
     "Гранж-сквот — рваные постеры": 3.2,
     "Тюрьма — холодный коридор": 3.2,
+    "Русалка": 3.4,
     "Дискотека — лазеры и туман": 3.2
 }
 
@@ -1144,7 +1193,7 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
         "Древняя Греция", "Матерь драконов",
         "Магическая школа", "Хоббит",
         "Красная Шапочка", "Белоснежка",
-        "Спящая красавица", "Пиксар-семья"
+        "Спящая красавица", "Русалка"
     ],
     "Кино и Комиксы (вдохновение)": [
         "Готэм-ночь (Бэтмен-вайб)", "Халк-эффект",
