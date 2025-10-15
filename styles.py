@@ -848,40 +848,40 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "warm"
     },
     "Русалка": {
-        "desc": "Волшебная русалка с РЕАЛЬНЫМ сияющим чешуйчатым хвостом в кристально чистой лагуне, окруженная друзьями-обитателями моря — весёлым Флаундером и заботливым Себастьяном, среди коралловых садов и солнечных лучей, пронизывающих толщу воды. ОБЯЗАТЕЛЬНО: настоящий хвост, ракушки на груди (для женщин), плавающая поза.",
-        "role_f": "disney style mermaid with realistic sparkling tail and seashell top",
-        "role": "merman with realistic powerful tail",
-        "outfit_f": "SEASHELL BIKINI TOP MANDATORY, flowing hair with pearls and sea flowers",
+        "desc": "РЕАЛИСТИЧНАЯ волшебная русалка с настоящим рыбьим хвостом, покрытым мелкой чешуёй, в кристально чистой лагуне. ОБЯЗАТЕЛЬНО: фиолетовые ракушки на груди, детализированный хвост с чешуёй как у реальной рыбы, плавающая поза, Флаундер и Себастьян рядом.",
+        "role_f": "realistic mermaid with fish-scale tail and purple seashells",
+        "role": "realistic merman with fish-scale tail",
+        "outfit_f": "PURPLE SEASHELLS TOP MANDATORY, flowing hair with pearls",
         "outfit": "bare torso, aquatic accessories",
         "props": (
-            "REALISTIC DETAILED MERMAID TAIL WITH IRIDESCENT SCALES CLEARLY VISIBLE, "
+            "REALISTIC FISH-LIKE MERMAID TAIL WITH DETAILED INDIVIDUAL SCALES VISIBLE, "
+            "PURPLE SEASHELLS CLEARLY VISIBLE ON CHEST, "
             "FLOUNDER FISH SWIMMING CLOSE, SEBASTIAN CRAB ON ROCK OR SHOULDER, "
-            "SCHOOLS OF TROPICAL FISH, SEAHORSES, DOLPHINS IN DISTANCE, "
-            "PEARLS, STARFISH, BUBBLES, CORAL FRAGMENTS, SWIMMING POSE"
+            "SCHOOLS OF TROPICAL FISH, BUBBLES, SWIMMING POSE IN WATER"
         ),
         "bg": (
-            "SUNLIT UNDERWATER LAGOON WITH COLORFUL CORAL REEF, "
-            "SUNBEAMS STREAKING THROUGH WATER, UNDERWATER CASTLE OR GROTTO IN DISTANCE, "
-            "VIBRANT MARINE LIFE, CLEAR TURQUOISE WATER"
+            "REALISTIC UNDERWATER LAGOON WITH CORAL REEF, "
+            "SUNBEAMS STREAKING THROUGH WATER, CLEAR TURQUOISE WATER, "
+            "NATURAL MARINE ENVIRONMENT"
         ),
         "comp": "full", 
         "tone": "vibrant",
+        "style": "realistic, photorealistic, detailed",
 
         # ЖЕСТКИЕ ТРЕБОВАНИЯ
         "required_attributes": [
-            "realistic mermaid tail", "underwater", "coral reef", 
-            "colorful fish", "seashell top (for female)", "swimming pose"
+            "realistic mermaid tail with fish scales", "underwater", 
+            "purple seashell top", "swimming pose", "detailed scales"
         ],
 
         # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
         "force_keywords": [
-            "REALISTIC MERMAID TAIL WITH DETAILED SCALES", "UNDERWATER SWIMMING POSE", 
-            "FLOUNDER FISH VISIBLE", "SEBASTIAN CRAB VISIBLE",
-            "SHELL BIKINI TOP MANDATORY", "CORAL REEF ECOSYSTEM",
-            "SUNBEAMS THROUGH WATER", "TROPICAL FISH SCHOOLS",
-            "MAGICAL UNDERWATER WORLD", "DISNEY-STYLE CHARACTERS",
-            "IRIDESCENT SCALES", "OCEAN LAGOON", "FLOATING IN WATER",
-            "NO SITTING", "SWIMMING MOTION"
+            "PHOTOREALISTIC", "REALISTIC MERMAID WITH FISH SCALES", 
+            "DETAILED INDIVIDUAL FISH SCALES ON TAIL", "PURPLE SEASHELLS BIKINI TOP", 
+            "UNDERWATER SWIMMING POSE", "FLOATING IN WATER",
+            "FLOUNDER FISH", "SEBASTIAN CRAB", "CORAL REEF",
+            "SUNBEAMS THROUGH WATER", "NATURAL MARINE LIFE",
+            "NO SITTING", "REALISTIC WATER EFFECTS"
         ],
 
         # ЗАПРЕТЫ - ужесточенные
@@ -890,16 +890,18 @@ STYLE_PRESETS: Dict[str, Style] = {
             "land, ground, walking, legs, feet, shoes, "
             "beach, shore, boat, surface, above water, "
             "dark water, murky, no tail, drawn tail, fake tail, cartoon tail, "
-            "no seashell top, bare chest without shells, "
-            "standing, standing pose"
+            "no seashell top, bare chest without shells, wrong color shells, "
+            "standing, standing pose, anime, cartoon, drawing, painting, "
+            "smooth tail, no scales, plastic look"
         ),
 
         # Особые указания для женщин
         "force_keywords_f": [
-            "SEASHELL BIKINI TOP CLEARLY VISIBLE AND COVERING CHEST",
-            "REALISTIC MERMAID TAIL ATTACHED TO BODY",
+            "PURPLE SEASHELLS TOP CLEARLY VISIBLE AND COVERING CHEST",
+            "REALISTIC FISH-SCALE TAIL WITH INDIVIDUAL SCALES DETAIL",
             "FLOATING SWIMMING POSE IN WATER",
-            "NO SITTING POSITION"
+            "PHOTOREALISTIC DETAILS",
+            "NATURAL LIGHTING UNDERWATER"
         ]
     },
 
