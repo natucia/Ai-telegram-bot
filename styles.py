@@ -847,7 +847,7 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "hospital corridor with soft bokeh",
         "comp": "half", "tone": "warm"
     },
-    "Русалка": "Русалка": {
+    "Русалка": {
         "desc": "Фотореалистичная подводная сцена: настоящая русалка в прозрачной лагуне с детализированным рыбьим хвостом, парит в воде, вокруг кораллы и рыбы. Полный рост, без сидячих поз.",
         "role_f": "realistic mermaid swimming underwater, full body, tasteful and elegant",
         "role": "realistic merman swimming underwater, full body, tasteful and elegant",
