@@ -6,42 +6,28 @@
       "id": 9001,
       "type": "node",
       "class_type": "LoadImage",
-      "_meta": {
-        "title": "Face Image (input_images.face_image)"
-      },
-      "inputs": {
-        "image": "face_image"
-      }
+      "_meta": { "title": "Face Image (input_images.face_image)" },
+      "inputs": { "image": "face_image" }
     },
     {
       "id": 9002,
       "type": "node",
       "class_type": "CLIPTextEncode (Flux)",
-      "_meta": {
-        "title": "Positive Text (inputs.prompt)"
-      },
-      "inputs": {
-        "text": "@@INPUT:prompt"
-      }
+      "_meta": { "title": "Positive Text (inputs.prompt)" },
+      "inputs": { "text": "@@INPUT:prompt" }
     },
     {
       "id": 9003,
       "type": "node",
       "class_type": "CLIPTextEncode (Flux)",
-      "_meta": {
-        "title": "Negative Text (inputs.negative)"
-      },
-      "inputs": {
-        "text": "@@INPUT:negative"
-      }
+      "_meta": { "title": "Negative Text (inputs.negative)" },
+      "inputs": { "text": "@@INPUT:negative" }
     },
     {
       "id": 9004,
       "type": "node",
       "class_type": "EmptyLatentImage",
-      "_meta": {
-        "title": "EmptyLatent (inputs.width/height)"
-      },
+      "_meta": { "title": "EmptyLatent (inputs.width/height)" },
       "inputs": {
         "width": "@@INPUT:width",
         "height": "@@INPUT:height",
@@ -52,25 +38,16 @@
       "id": 9005,
       "type": "node",
       "class_type": "FluxLoader",
-      "_meta": {
-        "title": "FLUX.1-dev Loader"
-      },
-      "inputs": {
-        "model_name": "FLUX.1-dev"
-      }
+      "_meta": { "title": "FLUX.1-dev Loader" },
+      "inputs": { "model_name": "FLUX.1-dev" }
     },
     {
       "id": 9006,
       "type": "node",
       "class_type": "FluxLoRALoader",
-      "_meta": {
-        "title": "Flux LoRA Loader (inputs.lora_url)"
-      },
+      "_meta": { "title": "Flux LoRA Loader (inputs.lora_url)" },
       "inputs": {
-        "model": [
-          9005,
-          0
-        ],
+        "model": [9005, 0],
         "lora_url": "@@INPUT:lora_url",
         "strength": "@@INPUT:lora_strength"
       }
@@ -79,18 +56,10 @@
       "id": 9007,
       "type": "node",
       "class_type": "ApplyPulidFlux",
-      "_meta": {
-        "title": "Apply PuLID (inputs.pulid_*)"
-      },
+      "_meta": { "title": "Apply PuLID (inputs.pulid_*)" },
       "inputs": {
-        "model": [
-          9006,
-          0
-        ],
-        "face_image": [
-          9001,
-          0
-        ],
+        "model": [9006, 0],
+        "face_image": [9001, 0],
         "weight": "@@INPUT:pulid_weight",
         "start_at": "@@INPUT:pulid_start",
         "end_at": 1.0
@@ -100,26 +69,12 @@
       "id": 9008,
       "type": "node",
       "class_type": "KSampler (Flux)",
-      "_meta": {
-        "title": "KSampler (Flux)"
-      },
+      "_meta": { "title": "KSampler (Flux)" },
       "inputs": {
-        "model": [
-          9007,
-          0
-        ],
-        "positive": [
-          9002,
-          0
-        ],
-        "negative": [
-          9003,
-          0
-        ],
-        "latent_image": [
-          9004,
-          0
-        ],
+        "model": [9007, 0],
+        "positive": [9002, 0],
+        "negative": [9003, 0],
+        "latent_image": [9004, 0],
         "seed": "@@INPUT:seed",
         "steps": "@@INPUT:steps",
         "cfg": 4.5,
@@ -131,80 +86,42 @@
       "id": 9009,
       "type": "node",
       "class_type": "VAEDecode (Flux)",
-      "_meta": {
-        "title": "VAE Decode (Flux)"
-      },
+      "_meta": { "title": "VAE Decode (Flux)" },
       "inputs": {
-        "samples": [
-          9008,
-          0
-        ],
-        "vae": [
-          9005,
-          1
-        ]
+        "samples": [9008, 0],
+        "vae": [9005, 1]
       }
     },
     {
       "id": 9010,
       "type": "node",
       "class_type": "SaveImage",
-      "_meta": {
-        "title": "Save Image"
-      },
-      "inputs": {
-        "images": [
-          9009,
-          0
-        ]
-      }
+      "_meta": { "title": "Save Image" },
+      "inputs": { "images": [9009, 0] }
     }
   ],
   "extra": {
     "inputs_schema": {
-      "prompt": {
+      "prompt": { "type": "string", "default": "professional portrait, waist-up, looking at camera, studio light" },
+      "negative": { "type": "string", "default": "lowres, blurry, deformed, extra limbs, full body, cropped head" },
+      "seed": { "type": "integer", "default": 123456789 },
+      "steps": { "type": "integer", "default": 28 },
+      "width": { "type": "integer", "default": 1024 },
+      "height": { "type": "integer", "default": 1536 },
+
+      "lora_url": { "type": "string", "default": "https://your-s3-bucket/path/to/flux-lora.safetensors" },
+      "lora_strength": { "type": "number", "default": 0.8 },
+
+      "pulid_weight": { "type": "number", "default": 0.8 },
+      "pulid_start": { "type": "number", "default": 4.0 },
+
+      /* ---- новый альтернативный вход (для совместимости) ---- */
+      "model_slug": {
         "type": "string",
-        "default": "professional portrait, waist-up, looking at camera, studio light"
-      },
-      "negative": {
-        "type": "string",
-        "default": "lowres, blurry, deformed, extra limbs, full body, cropped head"
-      },
-      "seed": {
-        "type": "integer",
-        "default": 123456789
-      },
-      "steps": {
-        "type": "integer",
-        "default": 28
-      },
-      "width": {
-        "type": "integer",
-        "default": 1024
-      },
-      "height": {
-        "type": "integer",
-        "default": 1536
-      },
-      "lora_url": {
-        "type": "string",
-        "default": "https://your-s3-bucket/path/to/flux-lora.safetensors"
-      },
-      "lora_strength": {
-        "type": "number",
-        "default": 0.8
-      },
-      "pulid_weight": {
-        "type": "number",
-        "default": 0.8
-      },
-      "pulid_start": {
-        "type": "number",
-        "default": 4.0
+        "default": "",
+        "description": "Альтернатива для кода: owner/model:version. Сам workflow эту строку не использует; Python-слой должен резолвить slug → lora_url."
       }
     },
-    "input_images_expected": [
-      "face_image"
-    ]
+    "input_images_expected": ["face_image"]
   }
 }
