@@ -1128,99 +1128,110 @@ def face_id_toggle_kb() -> InlineKeyboardMarkup:
     # ожидание переименования
 PENDING_RENAME_AVATAR: Dict[int, Optional[str]] = {}
 
+            # ----- Callback для «Аватары» и связанных действий -----
+PENDING_RENAME_AVATAR: Dict[int, Optional[str]] = {}
+
+def _enroll_instructions(name: str) -> str:
+                return (
+                    "📸 Готово! Для аватара «{name}» выбрали пол.\n\n"
+                    "Пришли подряд 10 фото лица — вот как сделать их максимально качественными:\n"
+                    "• Свет: дневной или мягкий искусственный, без жёстких теней и пересветов.\n"
+                    "• Угол: фронтально, 2–3 под небольшим поворотом (±15°), 1–2 чуть сверху/снизу.\n"
+                    "• Кадр: по грудь/по пояс, лицо крупно, без полного роста и без дальнего плана.\n"
+                    "• Выражение: нейтральное/мягкая улыбка. Без гримас.\n"
+                    "• Без фильтров/ретуши, без очков/кепок/масок. Волосы не закрывают лицо.\n"
+                    "• Разнообразие: 2–3 разных фона, разная одежда. Не больше 3–4 фото в одном луге.\n"
+                    "• Избегай: селфи с широкоугольными искажениям (слишком близко), сильного макияжа, размытия.\n\n"
+                    "Просто отправляй снимки один за другим — я посчитаю. "
+                    "Как только будет 10/10, автоматически запущу подготовку модели и напишу тебе, когда всё будет готово. 🚀"
+                ).format(name=name)
+
 async def avatar_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        q = update.callback_query
-        await q.answer()
+                q = update.callback_query
+                await q.answer()
 
-        uid = update.effective_user.id
-        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-        parts = q.data.split(":")
-        action = parts[1] if len(parts) > 1 else ""
+                uid = update.effective_user.id
+                prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+                parts = q.data.split(":")
+                action = parts[1] if len(parts) > 1 else ""
 
-        if action == "set":
-            name = parts[2] if len(parts) > 2 else None
-            if not name or name not in prof["avatars"]:
-                await _replace_with_new_below(q.message, "Аватар не найден. Выбери из списка:", reply_markup=avatars_kb(uid))
-                return
-            set_current_avatar(uid, name)
-            av = get_avatar(prof, name)
+                if action == "set":
+                    name = parts[2] if len(parts) > 2 else None
+                    if not name or name not in prof["avatars"]:
+                        await _replace_with_new_below(q.message, "Аватар не найден. Выбери из списка:", reply_markup=avatars_kb(uid))
+                        return
+                    set_current_avatar(uid, name)
+                    av = get_avatar(prof, name)
 
-            if not av.get("gender"):
-                await _replace_with_new_below(q.message, f"Выбран «{name}». Укажи пол:", reply_markup=avatar_gender_kb(name))
-                return
+                    if not av.get("gender"):
+                        await _replace_with_new_below(q.message, f"Выбран «{name}». Укажи пол:", reply_markup=avatar_gender_kb(name))
+                        return
 
-            # пол есть — просто обновим меню аватаров (галочка переедет)
-            await _replace_with_new_below(q.message, f"Активный: «{name}» • Пол: {av.get('gender','—')}", reply_markup=avatars_kb(uid))
-            return
+                    await _replace_with_new_below(q.message, f"Активный: «{name}» • Пол: {av.get('gender','—')}", reply_markup=avatars_kb(uid))
+                    return
 
-        elif action == "gender":  # avatar:gender:<name>:female|male
-            if len(parts) >= 4:
-                name, g = parts[2], parts[3]
-                prof = load_profile(uid)
-                if name in prof["avatars"]:
-                    prof["avatars"][name]["gender"] = "female" if g == "female" else "male"
-                    save_profile(uid, prof)
+                elif action == "gender":  # avatar:gender:<name>:female|male
+                    if len(parts) >= 4:
+                        name, g = parts[2], parts[3]
+                        prof = load_profile(uid)
+                        if name in prof["avatars"]:
+                            prof["avatars"][name]["gender"] = "female" if g == "female" else "male"
+                            save_profile(uid, prof)
 
-                    # после выбора пола — просим 10 фото и включаем набор
-                    with contextlib.suppress(Exception):
-                        await q.message.delete()
-                    await update.effective_chat.send_message(
-                        f"Пол для «{name}»: {prof['avatars'][name]['gender']}. "
-                        "Теперь пришли подряд 10 фронтальных фото без фильтров."
-                    )
-                    # включаем режим набора и показываем кнопку «Готово» на всякий случай
-                    av_name = name
-                    ENROLL_FLAG[(uid, av_name)] = True
-                    await update.effective_chat.send_message("📸 Набор фото активирован.", reply_markup=enroll_done_kb())
+                            # Включаем набор фото ТИХО (без «набор активирован»)
+                            av_name = name
+                            ENROLL_FLAG[(uid, av_name)] = True
+
+                            # Показываем подробную «памятку на 10 фото»
+                            await _replace_with_new_below(q.message, _enroll_instructions(av_name), reply_markup=enroll_done_kb())
+                        else:
+                            await _replace_with_new_below(q.message, "Аватар не найден.", reply_markup=avatars_kb(uid))
+                    return
+
+                elif action == "genderchange":
+                    cur = get_current_avatar_name(prof)
+                    await _replace_with_new_below(q.message, f"Сменить пол для «{cur}». Выбери:", reply_markup=avatar_gender_kb(cur))
+                    return
+
+                elif action == "rename":
+                    cur = get_current_avatar_name(prof)
+                    PENDING_RENAME_AVATAR[uid] = cur
+                    await _replace_with_new_below(q.message, f"Переименование «{cur}». Введи новое имя одним сообщением:")
+                    return
+
+                elif action == "new":
+                    PENDING_NEW_AVATAR[uid] = True
+                    await _replace_with_new_below(q.message, "Введи имя нового аватара одним сообщением (например: travel, work, glam).")
+                    return
+
+                elif action == "del":
+                    await _replace_with_new_below(q.message, "Выбери, что удалить:", reply_markup=delete_pick_kb(uid))
+                    return
+
+                elif action == "delpick":
+                    name = parts[2] if len(parts) > 2 else None
+                    if not name:
+                        await _replace_with_new_below(q.message, "Не понял, что удалять.", reply_markup=avatars_kb(uid))
+                        return
+                    await _replace_with_new_below(q.message, f"Удалить «{name}» безвозвратно?", reply_markup=delete_confirm_kb(name))
+                    return
+
+                elif action == "delyes":
+                    name = parts[2] if len(parts) > 2 else None
+                    if not name:
+                        await _replace_with_new_below(q.message, "Не указан аватар.", reply_markup=avatars_kb(uid))
+                        return
+                    try:
+                        del_avatar(uid, name)
+                        await _replace_with_new_below(q.message, f"«{name}» удалён.", reply_markup=avatars_kb(uid))
+                    except Exception as e:
+                        await _replace_with_new_below(q.message, f"Не удалось удалить: {e}", reply_markup=avatars_kb(uid))
+                    return
+
                 else:
-                    await _replace_with_new_below(q.message, "Аватар не найден.", reply_markup=avatars_kb(uid))
-            return
+                    await _replace_with_new_below(q.message, "Аватары:", reply_markup=avatars_kb(uid))
+                    return
 
-        elif action == "genderchange":
-            # смена пола для ТЕКУЩЕГО
-            cur = get_current_avatar_name(prof)
-            await _replace_with_new_below(q.message, f"Сменить пол для «{cur}». Выбери:", reply_markup=avatar_gender_kb(cur))
-            return
-
-        elif action == "rename":
-            # ждём новое имя для текущего
-            cur = get_current_avatar_name(prof)
-            PENDING_RENAME_AVATAR[uid] = cur
-            await _replace_with_new_below(q.message, f"Переименование «{cur}». Введи новое имя одним сообщением:")
-            return
-
-        elif action == "new":
-            PENDING_NEW_AVATAR[uid] = True
-            await _replace_with_new_below(q.message, "Введи имя нового аватара одним сообщением (например: travel, work, glam).")
-            return
-
-        elif action == "del":
-            await _replace_with_new_below(q.message, "Выбери, что удалить:", reply_markup=delete_pick_kb(uid))
-            return
-
-        elif action == "delpick":
-            name = parts[2] if len(parts) > 2 else None
-            if not name:
-                await _replace_with_new_below(q.message, "Не понял, что удалять.", reply_markup=avatars_kb(uid))
-                return
-            await _replace_with_new_below(q.message, f"Удалить «{name}» безвозвратно?", reply_markup=delete_confirm_kb(name))
-            return
-
-        elif action == "delyes":
-            name = parts[2] if len(parts) > 2 else None
-            if not name:
-                await _replace_with_new_below(q.message, "Не указан аватар.", reply_markup=avatars_kb(uid))
-                return
-            try:
-                del_avatar(uid, name)
-                await _replace_with_new_below(q.message, f"«{name}» удалён.", reply_markup=avatars_kb(uid))
-            except Exception as e:
-                await _replace_with_new_below(q.message, f"Не удалось удалить: {e}", reply_markup=avatars_kb(uid))
-            return
-
-        else:
-            await _replace_with_new_below(q.message, "Аватары:", reply_markup=avatars_kb(uid))
-            return
 
 
 
@@ -1443,14 +1454,27 @@ async def cb_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _replace_with_new_below(q.message, f"Стиль — {cat}. Выбери сцену:", reply_markup=styles_kb_for_category(cat))
 
 
-    async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        uid = update.effective_user.id
-        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-        av_name = get_current_avatar_name(prof)
-        ENROLL_FLAG[(uid, av_name)] = True
-        await update.effective_message.reply_text(
-            f"Набор включён для «{av_name}». Пришли подряд 10 фронтальных фото без фильтров."
-        )
+async def id_enroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+            av_name = get_current_avatar_name(prof)
+
+            # тихо включаем флаг набора
+            ENROLL_FLAG[(uid, av_name)] = True
+
+            text = (
+                "📸 Поехали собирать фото для «{name}»!\n\n"
+                "Нужно 10 снимков. Чтобы модель была максимально похожей, придерживайся правил:\n"
+                "• Свет мягкий/естественный, без жёстких теней и пересветов.\n"
+                "• Ракурс фронтально, добавь 2–3 снимка с небольшим поворотом головы.\n"
+                "• Кадр по грудь/по пояс, лицо крупно. Не полный рост.\n"
+                "• Без фильтров/ретуши/очков/кепок. Волосы не закрывают лицо.\n"
+                "• 2–3 разных фона и несколько образов. Не спамим дублями.\n\n"
+                "Отправляй фото одно за другим — я считаю. После 10-го автоматически запущу подготовку модели. 🚀"
+            ).format(name=av_name)
+
+            await update.effective_message.reply_text(text, reply_markup=enroll_done_kb())
+
 
 
 async def cb_enroll_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1542,11 +1566,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
         av_name = get_current_avatar_name(prof)
 
-        # если режим набора не включён — мягко включим (на случай, если юзер просто шлёт фото)
+        # если режим набора не включён — включим молча
         if not ENROLL_FLAG.get((uid, av_name), False):
             ENROLL_FLAG[(uid, av_name)] = True
 
-        # 1) скачиваем и сохраняем фото
+        # 1) сохраняем фото
         try:
             f = await update.effective_message.photo[-1].get_file()
             data = await f.download_as_bytearray()
@@ -1555,7 +1579,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text(f"⚠️ Не удалось сохранить фото: {e}")
             return
 
-        # 2) считаем, показываем прогресс (и удаляем старый счётчик)
+        # 2) прогресс-счётчик (удалим предыдущий)
         count = len(list_ref_images(uid, av_name))
         prev_id = PHOTO_COUNTER_MSG_ID.get((uid, av_name))
         if prev_id:
@@ -1565,17 +1589,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = await update.effective_message.reply_text(f"📸 Фото {min(count,10)}/10")
         PHOTO_COUNTER_MSG_ID[(uid, av_name)] = msg.message_id
 
-        # 3) если ещё не 10 — ждём следующие
+        # 3) ждём до 10
         if count < 10:
             return
 
-        # 4) ровно/более 10 — фиксируем набор и запускаем пайплайн
+        # 4) есть 10 — фиксируем и запускаем пайплайн
         ENROLL_FLAG[(uid, av_name)] = False
-
         av = get_avatar(prof, av_name)
         av["images"] = list_ref_images(uid, av_name)
 
-        # если нет пола — определим
+        # автоопределение пола (если вдруг не задан)
         if not av.get("gender"):
             try:
                 av["gender"] = auto_detect_gender(uid, av_name)
@@ -1584,39 +1607,26 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         save_profile(uid, prof)
 
-        # 5) готовим Face ID embedding (до обучения)
+        # 5) Face ID embedding — ТИХО, без сообщений пользователю
         try:
-            await update.effective_message.reply_text("🔄 Подготавливаю Face ID embedding…")
-            embedding = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
-            if embedding:
-                await update.effective_message.reply_text("✅ Face ID embedding готов")
-            else:
-                await update.effective_message.reply_text("⚠️ Не удалось подготовить Face ID embedding — продолжу без него.")
+            await asyncio.to_thread(prepare_face_embedding, uid, av_name)
         except Exception as e:
-            logger.warning("Face ID embedding preparation failed: %s", e)
+            logger.warning("Face ID embedding (silent) failed: %s", e)
 
-        # 6) стартуем обучение
-        await update.effective_message.reply_text("🚀 Запускаю обучение LoRA…")
+        # 6) Старт обучения — без ID и без тех. деталей
+        await update.effective_message.reply_text("🚀 Запускаю подготовку модели…")
         try:
             async with TRAIN_SEMAPHORE:
-                training_id = await asyncio.to_thread(start_lora_training, uid, av_name)
+                _ = await asyncio.to_thread(start_lora_training, uid, av_name)
             await update.effective_message.reply_text(
-                f"🧪 Создаём твою цифровую копию… это займёт немного времени.\n"
-                f"ID обучения: {training_id}"
+                "Отлично! Подготовка модели началась. Я сообщу, когда всё будет готово. "
+                "Пока можно выбрать стили — они появятся сразу после завершения. ✨"
             )
-            # мониторим статус и сообщаем результат
             asyncio.create_task(_wait_training_and_notify(context.bot, update.effective_chat.id, uid, av_name))
         except Exception as e:
             logger.exception("train start failed")
             await update.effective_message.reply_text(f"⚠️ Не удалось запустить обучение: {e}")
 
-    # резолвер: байты из TG → STORAGE.save_ref_image → HTTPS URL
-async def _resolve_direct_photo_url(update, context) -> str:
-        global STORAGE
-        f = await update.effective_message.photo[-1].get_file()
-        data = await f.download_as_bytearray()
-        url = STORAGE.save_ref_image(uid, av_name, data)
-        return url
     
 
 # === Хелпер переименования аватара (FS / S3) ===
@@ -1739,7 +1749,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"⚠️ Не удалось переименовать: {e}", reply_markup=avatars_kb(uid))
             return
 
-        # --- создание нового аватара (теперь фото просим ПОСЛЕ выбора пола) ---
+        # --- создание нового аватара: сначала имя → тут же спросим пол ---
         if PENDING_NEW_AVATAR.get(uid):
             name = re.sub(r"[^\w\-\.\@]+", "_", text)[:32] or "noname"
             ensure_avatar(uid, name)
@@ -1750,41 +1760,35 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Создан и выбран аватар: «{name}». Укажи пол:",
                 reply_markup=avatar_gender_kb(name)
             )
-            # фото НЕ просим здесь — дождёмся выбора пола
             return
 
-        # --- reply-клавиатура ---
+        # --- reply-клавиатура / короткие команды ---
         t = text.lower()
 
         if t in ("стили", "style", "styles"):
-            await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb())
-            return
+            await update.message.reply_text("Выбери категорию:", reply_markup=categories_kb()); return
 
         if t in ("аватар", "аватары", "avatar"):
-            await update.message.reply_text("Аватары:", reply_markup=avatars_kb(uid))
-            return
+            await update.message.reply_text("Аватары:", reply_markup=avatars_kb(uid)); return
 
         if t in ("набор фото", "фото", "enroll", "добавить фото"):
-            await update.message.reply_text("📸 Набор фото активирован. Пришли до 10 фото подряд.")
-            await id_enroll(update, context)
-            return
+            # вместо «Набор фото активирован» сразу показываем памятку
+            await id_enroll(update, context); return
 
         if t in ("обучение", "train", "тренировка"):
             await update.message.reply_text("🧪 Обучение…")
-            await trainid_cmd(update, context)
-            return
+            await trainid_cmd(update, context); return
 
         if t in ("меню", "главное меню", "menu"):
-            await update.message.reply_text("Меню всегда снизу 👇", reply_markup=bottom_reply_kb())
-            return
+            await update.message.reply_text("Меню всегда снизу 👇", reply_markup=bottom_reply_kb()); return
 
         if t in ("статус", "мой статус", "status"):
             await update.message.reply_text("ℹ️ Обновляю статус…")
-            await id_status(update, context)
-            return
+            await id_status(update, context); return
 
-        # иначе — молчим, чтобы не ломать UX
+        # молчим, чтобы не ломать UX
         return
+
 
 
 
@@ -1882,7 +1886,7 @@ def start_lora_training(uid: int, avatar: str) -> str:
             "caption_model": "none",
             "use_llava": False,
             "use_blip": False,
-            "network_rank": int(os.getenv("LORA_RANK", "16")),
+            "network_rank": int(os.getenv("LORA_RANK", "32")),
             "network_alpha": int(os.getenv("LORA_ALPHA", "16")),
             "lora_lr": LORA_LR,
         })
