@@ -46,26 +46,52 @@ async def start_generation_via_workflow(
         context: ContextTypes.DEFAULT_TYPE,
         preset: str,
         show_intro: bool = False,
-        avatar_name: Optional[str] = None,
+        avatar_name: Optional[str] = None,   # можно не передавать; если передали — фиксируем аватар
     ):
+        """
+        Workflow-ветка с шимом lora_url:
+        - если у аватара нет HTTPS .safetensors, но есть slug версии модели,
+          кладём в av['lora_url'] строку 'slug:<owner/model:version>' и считаем это валидным.
+        - face_ref (presigned HTTPS / локальный путь) обновляем при необходимости.
+        - при желании можно фиксировать конкретный аватар через avatar_name.
+        """
+        # 0) наличие WF
         if not (_wf_start_generation_for_preset and FACEID_WORKFLOW_AVAILABLE):
             raise RuntimeError("FaceID workflow не подключён или не экспортирует start_generation_for_preset")
 
         uid = update.effective_user.id
         prof = load_profile(uid)
-        av_name = avatar_name or get_current_avatar_name(prof)  # ← приоритет у переданного имени
+        av_name = avatar_name or get_current_avatar_name(prof)
 
-        # 1) ссылки на веса и face-ref для ИМЕННО этого аватара
+        # 1) подтянем lora_url/face_url из профиля/Replicate
         lora_url, face_url = await asyncio.to_thread(recover_lora_and_face_urls, uid, av_name)
 
+        # 1a) ШИМ: если нет валидного .safetensors, но есть slug -> записываем 'slug:<...>'
+        prof2 = load_profile(uid)
+        av = get_avatar(prof2, av_name)
+
+        def _has_https_weights(u: Optional[str]) -> bool:
+            return isinstance(u, str) and u.startswith(("http://", "https://")) and u.endswith(".safetensors")
+
+        if not _has_https_weights(av.get("lora_url")):
+            base = av.get("finetuned_model") or ""
+            ver  = av.get("finetuned_version")
+            # аккуратно соберём slug (если ver уже в формате <model:ver-id> — не дублируем двоеточие)
+            model_slug = f"{base}:{ver}" if (base and ver and ":" not in (ver or "")) else (base or "")
+            if model_slug:
+                av["lora_url"] = f"slug:{model_slug}"
+                save_profile(uid, prof2)  # сохраним, чтобы WF увидел
+
+        # 2) если face_url пуст/протух — обновим
         def _is_https(u: str) -> bool:
             return isinstance(u, str) and u.startswith(("http://", "https://"))
 
         def _alive(u: str) -> bool:
             try:
                 r = requests.head(u, timeout=8, allow_redirects=True)
-                if r.status_code == 200: return True
-                if r.status_code in (401,403,405):
+                if r.status_code == 200:
+                    return True
+                if r.status_code in (401, 403, 405):
                     r2 = requests.get(u, timeout=8, stream=True)
                     return r2.status_code == 200
             except Exception:
@@ -75,36 +101,43 @@ async def start_generation_via_workflow(
         if not face_url or (_is_https(face_url) and not _alive(face_url)):
             try:
                 face_url = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
-                prof = load_profile(uid)
+                prof = load_profile(uid)  # перечитаем профиль на всякий
             except Exception as e:
                 logger.warning("refresh face embedding failed: %s", e)
 
+        # 3) финальная валидация источников для WF
+        av = get_avatar(load_profile(uid), av_name)
+        lu = av.get("lora_url") or ""
+        lora_source = (
+            "weights" if _has_https_weights(lu)
+            else ("slug" if (isinstance(lu, str) and lu.startswith("slug:")) else "none")
+        )
         face_kind = (
-            "https" if _is_https(face_url)
-            else ("file" if (isinstance(face_url, str) and os.path.exists(face_url)) else "none")
+            "https" if (_is_https(face_url or "")) else
+            ("file" if (isinstance(face_url, str) and os.path.exists(face_url)) else "none")
+        )
+        ok_lora = lora_source in ("weights", "slug")
+        ok_face = face_kind in ("https", "file")
+
+        logger.info(
+            "WORKFLOW DISPATCH: preset=%s avatar=%s lora_ok=%s(%s) face_ref=%s",
+            preset, av_name, ok_lora, lora_source, face_kind
         )
 
-        # Считаем ок и .safetensors-URL, и закреплённый slug версии
-        prof = load_profile(uid); av = get_avatar(prof, av_name)
-        model_slug = _pinned_slug(av) or av.get("finetuned_model")
-        ok_weights = bool(lora_url and lora_url.endswith(".safetensors") and _is_https(lora_url))
-        ok_slug    = bool(model_slug)
-        ok_lora    = ok_weights or ok_slug
-
-        logger.info("WORKFLOW DISPATCH: preset=%s avatar=%s lora_ok=%s (%s) face_ref=%s",
-                    preset, av_name, ok_lora, ("weights" if ok_weights else ("slug" if ok_slug else "none")), face_kind)
-
         if not ok_lora:
-            raise RuntimeError("Нет ни .safetensors URL, ни закреплённого слуга версии для LoRA (этого аватара).")
+            raise RuntimeError("Не найдена LoRA: ни HTTPS .safetensors, ни slug версии модели.")
+        if not ok_face:
+            raise RuntimeError("Нет валидного FaceID-референса (ни presigned HTTPS, ни локального файла).")
 
-        # Передаём в workflow ИМЕННО этот аватар через колбэки профиля
+        # 4) запуск WF — передаём колбэки профиля; фиксируем аватар, если его передали в аргумент
         return await _wf_start_generation_for_preset(
             update, context, preset,
             STYLE_PRESETS,
             load_profile,
-            lambda p: av_name,   # ← замораживаем выбор аватара
+            (lambda _prof: av_name) if avatar_name else get_current_avatar_name,
             get_avatar,
         )
+
 
 
 
