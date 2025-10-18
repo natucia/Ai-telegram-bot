@@ -2349,102 +2349,105 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ===
 async def start_generation_for_preset(
-                    update: Update,
-                    context: ContextTypes.DEFAULT_TYPE,
-                    preset: str,
-                    show_intro: bool = True
-                ):
-                uid = update.effective_user.id
-                prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                av_name = get_current_avatar_name(prof)
-                av = get_avatar(prof, av_name)
+            update: Update,
+            context: ContextTypes.DEFAULT_TYPE,
+            preset: str,
+            show_intro: bool = True
+        ):
+            uid = update.effective_user.id
+            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+            av_name = get_current_avatar_name(prof)
+            av = get_avatar(prof, av_name)
 
-                # ----- Делегирование в workflow, если он включён и доступен -----
-                if FACE_ID_ADAPTER_ENABLED and FACEID_WORKFLOW_AVAILABLE:
-                    try:
-                        await start_generation_via_workflow(update, context, preset, show_intro=show_intro)
-                        return
-                    except Exception as e:
-                        logger.warning("FaceID workflow path failed inside start_generation_for_preset: %s", e)
-                        # падаем в plain-путь ниже
+            # 1) если есть workflow — пробуем его первыми
+            if FACE_ID_ADAPTER_ENABLED and FACEID_WORKFLOW_AVAILABLE:
+                try:
+                    await start_generation_via_workflow(update, context, preset, show_intro=show_intro)
+                    return
+                except Exception as e:
+                    logger.warning("FaceID workflow path failed; fallback to direct: %s", e)
 
-                # ----- Дальше — прямой путь (финетюн без workflow) -----
+            # 2) прямой путь (финетюн)
+            if av.get("status") != "succeeded":
+                await update.effective_message.reply_text(
+                    f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+                )
+                return
 
-                # проверка готовности модели
-                if av.get("status") != "succeeded":
-                    await update.effective_message.reply_text(
-                        f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+            model_slug = _pinned_slug(av) or av.get("finetuned_model")
+            if not model_slug:
+                await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
+                return
+
+            if preset not in STYLE_PRESETS:
+                await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
+                return
+            meta = STYLE_PRESETS[preset]
+
+            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+            natural = bool(prof.get("natural", True))
+            pretty  = bool(prof.get("pretty", False))
+            avatar_token = av.get("token", "")
+
+            # --- ВАЖНО: берём референс лица (HTTPS presigned или локальный путь)
+            face_ref = None
+            if FACE_ID_ADAPTER_ENABLED:
+                try:
+                    face_ref = _resolve_face_ref(uid, av_name)
+                except Exception as e:
+                    logger.warning("resolve face ref failed: %s", e)
+                    face_ref = None
+            logger.info("GEN PREP: avatar=%s preset=%s face_ref=%r", av_name, preset, bool(face_ref))
+
+            comps = _variants_for_preset(meta)
+            guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
+
+            if show_intro:
+                await update.effective_message.reply_text(f"Генерирую «{preset}»…")
+
+            sent = 0
+            for i, comp in enumerate(comps):
+                try:
+                    comp_text, (w, h) = _comp_text_and_size(comp)
+                    if comp == "half" and i % 2 == 1:
+                        comp_text += ", camera slightly closer, gentle 5° head turn"
+                    elif comp == "closeup" and i % 2 == 1:
+                        comp_text += ", micro-reframe, eyes focus a touch brighter"
+
+                    tone_text   = _tone_text(meta.get("tone", ""))
+                    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
+
+                    prompt, neg = build_prompt(
+                        meta, gender, comp_text, tone_text, theme_boost,
+                        natural, pretty, avatar_token
                     )
-                    return
 
-                # закреплённый слаг версии
-                model_slug = _pinned_slug(av) or av.get("finetuned_model")
-                if not model_slug:
-                    await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
-                    return
+                    if preset == "Харли-Квинн":
+                        if gender.startswith("f"):
+                            prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
+                        else:
+                            prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
 
-                # метаданные стиля
-                if preset not in STYLE_PRESETS:
-                    await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
-                    return
-                meta = STYLE_PRESETS[preset]
+                    if extra_neg:
+                        neg = _neg_with_gender(neg, extra_neg)
 
-                gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-                natural = bool(prof.get("natural", True))
-                pretty  = bool(prof.get("pretty", False))
-                avatar_token = av.get("token", "")
+                    seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
 
-                # композиции и identity-safe твики
-                comps = _variants_for_preset(meta)
-                guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
+                    # --- ПЕРЕДАЁМ face_ref внутрь — это включает FaceID адаптер
+                    url = await asyncio.to_thread(
+                        generate_from_finetune,
+                        model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
+                    )
+                    await update.effective_message.reply_photo(url)
+                    sent += 1
 
-                if show_intro:
-                    await update.effective_message.reply_text(f"Генерирую «{preset}»…")
+                except Exception as e:
+                    logger.exception("gen failed for comp=%s", comp)
+                    await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
 
-                sent = 0
-                for i, comp in enumerate(comps):
-                    try:
-                        comp_text, (w, h) = _comp_text_and_size(comp)
+            if sent == 0:
+                await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
 
-                        # лёгкая вариация кадра
-                        if comp == "half" and i % 2 == 1:
-                            comp_text += ", camera slightly closer, gentle 5° head turn"
-                        elif comp == "closeup" and i % 2 == 1:
-                            comp_text += ", micro-reframe, eyes focus a touch brighter"
-
-                        tone_text   = _tone_text(meta.get("tone", ""))
-                        theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
-
-                        prompt, neg = build_prompt(
-                            meta, gender, comp_text, tone_text, theme_boost,
-                            natural, pretty, avatar_token
-                        )
-
-                        if preset == "Харли-Квинн":
-                            g2 = (av.get("gender") or prof.get("gender") or "female").lower()
-                            if g2.startswith("f"):
-                                prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
-                            else:
-                                prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
-
-                        if extra_neg:
-                            neg = _neg_with_gender(neg, extra_neg)
-
-                        seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
-
-                        url = await asyncio.to_thread(
-                            generate_from_finetune,
-                            model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, None  # face_ref=None (plain)
-                        )
-                        await update.effective_message.reply_photo(url)
-                        sent += 1
-
-                    except Exception as e:
-                        logger.exception("gen failed for comp=%s", comp)
-                        await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
-
-                if sent == 0:
-                    await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
 
 
 
