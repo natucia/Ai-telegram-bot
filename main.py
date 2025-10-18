@@ -2421,7 +2421,7 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ===
-                async def start_generation_for_preset(
+async def start_generation_for_preset(
                     update: Update,
                     context: ContextTypes.DEFAULT_TYPE,
                     preset: str,
