@@ -29,6 +29,8 @@ from telegram.ext import (
 import struct
 from telegram import ReplyKeyboardMarkup
 
+import logging
+logger = logging.getLogger()
 
 
 # === FACEID WORKFLOW: robust import + adapter ===
