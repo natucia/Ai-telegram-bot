@@ -46,28 +46,26 @@ async def start_generation_via_workflow(
         context: ContextTypes.DEFAULT_TYPE,
         preset: str,
         show_intro: bool = False,
+        avatar_name: Optional[str] = None,
     ):
-        # 0) проверка наличия workflow
         if not (_wf_start_generation_for_preset and FACEID_WORKFLOW_AVAILABLE):
             raise RuntimeError("FaceID workflow не подключён или не экспортирует start_generation_for_preset")
 
         uid = update.effective_user.id
         prof = load_profile(uid)
-        av_name = get_current_avatar_name(prof)
+        av_name = avatar_name or get_current_avatar_name(prof)  # ← приоритет у переданного имени
 
-        # 1) восстановим ссылки из профиля / Replicate
+        # 1) ссылки на веса и face-ref для ИМЕННО этого аватара
         lora_url, face_url = await asyncio.to_thread(recover_lora_and_face_urls, uid, av_name)
 
-        # 2) если face_url пустой/протух — попробуем тихо обновить
         def _is_https(u: str) -> bool:
             return isinstance(u, str) and u.startswith(("http://", "https://"))
 
         def _alive(u: str) -> bool:
             try:
                 r = requests.head(u, timeout=8, allow_redirects=True)
-                if r.status_code == 200:
-                    return True
-                if r.status_code in (401, 403, 405):
+                if r.status_code == 200: return True
+                if r.status_code in (401,403,405):
                     r2 = requests.get(u, timeout=8, stream=True)
                     return r2.status_code == 200
             except Exception:
@@ -77,36 +75,37 @@ async def start_generation_via_workflow(
         if not face_url or (_is_https(face_url) and not _alive(face_url)):
             try:
                 face_url = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
-                prof = load_profile(uid)  # перечитаем профиль, на всякий
+                prof = load_profile(uid)
             except Exception as e:
                 logger.warning("refresh face embedding failed: %s", e)
 
-        # 3) жёсткая валидация перед WF
         face_kind = (
             "https" if _is_https(face_url)
             else ("file" if (isinstance(face_url, str) and os.path.exists(face_url)) else "none")
         )
-        ok_lora = bool(lora_url and lora_url.endswith(".safetensors") and _is_https(lora_url))
-        ok_face = bool(face_kind in ("https", "file"))
 
-        logger.info(
-            "WORKFLOW DISPATCH: preset=%s avatar=%s lora_ok=%s face_ref=%s",
-            preset, av_name, ok_lora, face_kind
-        )
+        # Считаем ок и .safetensors-URL, и закреплённый slug версии
+        prof = load_profile(uid); av = get_avatar(prof, av_name)
+        model_slug = _pinned_slug(av) or av.get("finetuned_model")
+        ok_weights = bool(lora_url and lora_url.endswith(".safetensors") and _is_https(lora_url))
+        ok_slug    = bool(model_slug)
+        ok_lora    = ok_weights or ok_slug
+
+        logger.info("WORKFLOW DISPATCH: preset=%s avatar=%s lora_ok=%s (%s) face_ref=%s",
+                    preset, av_name, ok_lora, ("weights" if ok_weights else ("slug" if ok_slug else "none")), face_kind)
 
         if not ok_lora:
-            raise RuntimeError("Нет валидной ссылки на веса LoRA (.safetensors). Проверь /trainstatus → status=succeeded.")
-        if not ok_face:
-            raise RuntimeError("Нет валидного FaceID-референса (ни presigned HTTPS, ни локального файла). Загрузите фронтальное фото ещё раз.")
+            raise RuntimeError("Нет ни .safetensors URL, ни закреплённого слуга версии для LoRA (этого аватара).")
 
-        # 4) запуск workflow
+        # Передаём в workflow ИМЕННО этот аватар через колбэки профиля
         return await _wf_start_generation_for_preset(
             update, context, preset,
             STYLE_PRESETS,
             load_profile,
-            get_current_avatar_name,
+            lambda p: av_name,   # ← замораживаем выбор аватара
             get_avatar,
         )
+
 
 
 
@@ -132,6 +131,8 @@ DEST_MODEL = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()
 # LoRA trainer
 LORA_TRAINER_SLUG = os.getenv("LORA_TRAINER_SLUG", "replicate/flux-lora-trainer").strip()
 LORA_INPUT_KEY = os.getenv("LORA_INPUT_KEY", "input_images").strip()
+
+FACEID_WORKFLOW_FORCE_OFF = os.getenv("FACEID_WORKFLOW_FORCE_OFF", "0").lower() in ("1", "true", "yes", "y")
 
 # Пол (опц.) — автоинференс
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
@@ -2440,6 +2441,13 @@ async def refreshstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _neg_with_gender(neg_base:str, gender_negative:str) -> str:
     return (neg_base + (", " + gender_negative if gender_negative else "")).strip(", ")
 
+
+async def wf_toggle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global FACEID_WORKFLOW_FORCE_OFF
+    FACEID_WORKFLOW_FORCE_OFF = not FACEID_WORKFLOW_FORCE_OFF
+    await update.message.reply_text(f"Workflow FaceID: {'OFF' if FACEID_WORKFLOW_FORCE_OFF else 'ON'}")
+
+
 async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
         await q.answer()
@@ -2450,7 +2458,6 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
         av_name = get_current_avatar_name(prof)
         av = get_avatar(prof, av_name)
 
-        # если пол не выбран — сначала просим пол
         if not av.get("gender"):
             await _replace_with_new_below(
                 q.message,
@@ -2459,134 +2466,141 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # карточка статуса "ниже"
-        await _replace_with_new_below(q.message, f"Генерирую «{preset}»…", reply_markup=None)
+        await _replace_with_new_below(q.message, f"Генерирую «{preset}» (аватар: {av_name})…", reply_markup=None)
 
-        # === ЯВНЫЙ РОУТИНГ ===
-        if FACE_ID_ADAPTER_ENABLED and FACEID_WORKFLOW_AVAILABLE:
+        force_plain = FACEID_WORKFLOW_FORCE_OFF
+
+        if not force_plain and FACE_ID_ADAPTER_ENABLED and FACEID_WORKFLOW_AVAILABLE:
             try:
-                await start_generation_via_workflow(update, context, preset, show_intro=False)
+                await start_generation_via_workflow(update, context, preset, show_intro=False, avatar_name=av_name)
                 return
             except Exception as e:
-                logger.warning("FaceID workflow generation failed, fallback to plain: %s", e)
+                logger.warning("WF failed; fallback to plain: %s", e)
 
-        # Иначе — локальная прямая генерация финетюном
-        await start_generation_for_preset(update, context, preset, show_intro=False)
-
+        await start_generation_for_preset(update, context, preset, show_intro=False, avatar_name=av_name, force_plain=True)
 
 
 
-# === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ===
+
+
+# === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ==
 async def start_generation_for_preset(
-                    update: Update,
-                    context: ContextTypes.DEFAULT_TYPE,
-                    preset: str,
-                    show_intro: bool = True
-                ):
-                    uid = update.effective_user.id
-                    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                    av_name = get_current_avatar_name(prof)
-                    av = get_avatar(prof, av_name)
+                            update: Update,
+                            context: ContextTypes.DEFAULT_TYPE,
+                            preset: str,
+                            show_intro: bool = True,
+                            avatar_name: Optional[str] = None,
+                            force_plain: bool = False,
+                        ):
+                            """
+                            Генерация по пресету.
+                            - Жёстко фиксируем имя аватара на момент клика (avatar_name).
+                            - Если workflow доступен и не запрещён, пробуем его; при ошибке — fallback в прямую генерацию.
+                            - В прямой генерации используем FaceID-референс через _resolve_face_ref (если включён).
+                            """
+                            uid = update.effective_user.id
+                            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+                            av_name = avatar_name or get_current_avatar_name(prof)  # фиксируем активный аватар
+                            av = get_avatar(prof, av_name)
 
-                    # 0) пробуем workflow (если он присутствует в проекте)
-                    if FACE_ID_ADAPTER_ENABLED and FACEID_WORKFLOW_AVAILABLE:
-                        try:
-                            await start_generation_via_workflow(update, context, preset, show_intro=show_intro)
-                            return
-                        except Exception as e:
-                            logger.warning("FaceID workflow path failed; fallback to direct: %s", e)
-
-                    # 1) проверка готовности финетюна
-                    if av.get("status") != "succeeded":
-                        await update.effective_message.reply_text(
-                            f"Модель «{av_name}» ещё не готова. Запусти обучение и дождись статуса succeeded."
-                        )
-                        return
-
-                    # 2) резолв модели
-                    model_slug = _pinned_slug(av) or av.get("finetuned_model")
-                    if not model_slug:
-                        await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
-                        return
-
-                    # 3) стиль
-                    meta = STYLE_PRESETS.get(preset)
-                    if not meta:
-                        await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
-                        return
-
-                    gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-                    natural = bool(prof.get("natural", True))
-                    pretty  = bool(prof.get("pretty", False))
-                    avatar_token = av.get("token", "")
-
-                    # 4) АВТО-FACEID: пытаемся получить рабочий ref (и молча обновляем)
-                    face_ref = None
-                    if FACE_ID_ADAPTER_ENABLED:
-                        try:
-                            face_ref = _get_or_refresh_face_ref(uid, av_name)
-                        except Exception as e:
-                            logger.warning("get_or_refresh_face_ref error: %s", e)
-                            face_ref = None
-                    logger.info("GEN PREP: avatar=%s preset=%s use_faceid=%s", av_name, preset, bool(face_ref))
-
-                    # 5) композиции + безопасные твики
-                    comps = _variants_for_preset(meta)
-                    guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
-
-                    if show_intro:
-                        await update.effective_message.reply_text(f"Генерирую «{preset}»…")
-
-                    sent = 0
-                    for i, comp in enumerate(comps):
-                        try:
-                            comp_text, (w, h) = _comp_text_and_size(comp)
-                            if comp == "half" and i % 2 == 1:
-                                comp_text += ", camera slightly closer, gentle 5° head turn"
-                            elif comp == "closeup" and i % 2 == 1:
-                                comp_text += ", micro-reframe, eyes focus a touch brighter"
-
-                            tone_text   = _tone_text(meta.get("tone", ""))
-                            theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
-
-                            prompt, neg = build_prompt(
-                                meta, gender, comp_text, tone_text, theme_boost,
-                                natural, pretty, avatar_token
-                            )
-
-                            if preset == "Харли-Квинн":
-                                if gender.startswith("f"):
-                                    prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
-                                else:
-                                    prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
-
-                            if extra_neg:
-                                neg = _neg_with_gender(neg, extra_neg)
-
-                            seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
-
-                            # если по какой-то причине face_ref None (например, S3 отвалился),
-                            # делаем одну попытку тихого обновления и пробуем снова
-                            local_face_ref = face_ref
-                            if FACE_ID_ADAPTER_ENABLED and not local_face_ref:
+                            # 1) сначала пробуем WF-ветку (если не принудительно plain)
+                            if (not force_plain) and FACE_ID_ADAPTER_ENABLED and FACEID_WORKFLOW_AVAILABLE:
                                 try:
-                                    local_face_ref = _get_or_refresh_face_ref(uid, av_name)
-                                except Exception:
-                                    local_face_ref = None
+                                    await start_generation_via_workflow(
+                                        update, context, preset, show_intro=show_intro, avatar_name=av_name
+                                    )
+                                    return
+                                except Exception as e:
+                                    logger.warning("FaceID workflow path failed; fallback to direct: %s", e)
 
-                            url = await asyncio.to_thread(
-                                generate_from_finetune,
-                                model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, local_face_ref
+                            # 2) прямая генерация финетюном
+                            if av.get("status") != "succeeded":
+                                await update.effective_message.reply_text(
+                                    f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+                                )
+                                return
+
+                            model_slug = _pinned_slug(av) or av.get("finetuned_model")
+                            if not model_slug:
+                                await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
+                                return
+
+                            if preset not in STYLE_PRESETS:
+                                await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
+                                return
+                            meta = STYLE_PRESETS[preset]
+
+                            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+                            natural = bool(prof.get("natural", True))
+                            pretty  = bool(prof.get("pretty", False))
+                            avatar_token = av.get("token", "")
+
+                            # FaceID-референс именно для этого аватара (если включён)
+                            face_ref = None
+                            if FACE_ID_ADAPTER_ENABLED:
+                                try:
+                                    face_ref = await asyncio.to_thread(_resolve_face_ref, uid, av_name)
+                                except Exception as e:
+                                    logger.warning("resolve_face_ref error: %s", e)
+                                    face_ref = None
+
+                            logger.info(
+                                "GEN PREP (PLAIN): avatar=%s gender=%s preset=%s use_faceid=%s",
+                                av_name, gender, preset, bool(face_ref)
                             )
-                            await update.effective_message.reply_photo(url)
-                            sent += 1
 
-                        except Exception as e:
-                            logger.exception("gen failed for comp=%s", comp)
-                            await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
+                            # Композиции и identity-safe твики
+                            comps = _variants_for_preset(meta)
+                            guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
 
-                    if sent == 0:
-                        await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
+                            if show_intro:
+                                await update.effective_message.reply_text(f"Генерирую «{preset}» (аватар: {av_name})…")
+
+                            sent = 0
+                            for i, comp in enumerate(comps):
+                                try:
+                                    comp_text, (w, h) = _comp_text_and_size(comp)
+
+                                    # лёгкая вариация кадра
+                                    if comp == "half" and i % 2 == 1:
+                                        comp_text += ", camera slightly closer, gentle 5° head turn"
+                                    elif comp == "closeup" and i % 2 == 1:
+                                        comp_text += ", micro-reframe, eyes focus a touch brighter"
+
+                                    tone_text   = _tone_text(meta.get("tone", ""))
+                                    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
+
+                                    prompt, neg = build_prompt(
+                                        meta, gender, comp_text, tone_text, theme_boost,
+                                        natural, pretty, avatar_token
+                                    )
+
+                                    # спец-правка для некоторых пресетов (если есть у тебя в стилях)
+                                    if preset == "Харли-Квинн":
+                                        if gender.startswith("f"):
+                                            prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
+                                        else:
+                                            prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
+
+                                    if extra_neg:
+                                        neg = _neg_with_gender(neg, extra_neg)
+
+                                    seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
+
+                                    url = await asyncio.to_thread(
+                                        generate_from_finetune,
+                                        model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
+                                    )
+                                    await update.effective_message.reply_photo(url)
+                                    sent += 1
+
+                                except Exception as e:
+                                    logger.exception("gen failed for comp=%s", comp)
+                                    await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
+
+                            if sent == 0:
+                                await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
+
 
 
 
@@ -2643,6 +2657,7 @@ def main():
     # Команды (оставлены для совместимости; UX — кнопками)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
+    app.add_handler(CommandHandler("wf", wf_toggle_cmd))
     app.add_handler(CommandHandler("idstatus", id_status))
     app.add_handler(CommandHandler("trainid", trainid_cmd))
     app.add_handler(CommandHandler("trainstatus", trainstatus_cmd))
