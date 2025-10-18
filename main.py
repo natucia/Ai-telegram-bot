@@ -2281,7 +2281,7 @@ def _find_first_safetensors_url(data: Any) -> Optional[str]:
             return None
 
         # --- если succeeded: закрепляем версию и парсим ссылку на веса (.safetensors) ---
-        slug_with_ver: Optional[str] = None
+slug_with_ver: Optional[str] = None
         if status == "succeeded" and destination:
             # 1) закрепим версию модели
             try:
