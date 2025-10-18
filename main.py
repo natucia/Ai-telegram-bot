@@ -809,68 +809,127 @@ def _inject_beauty(core_prompt: str, comp_text: str, natural: bool, pretty: bool
         parts.append(PRETTY_COMP_HINT)
     return ", ".join(parts)
 
-def build_prompt(meta: Style, gender: str, comp_text:str, tone_text:str, theme_boost:str, natural:bool, pretty:bool, avatar_token:str="") -> Tuple[str, str]:
-    role = meta.get("role_f") if (gender=="female" and meta.get("role_f")) else meta.get("role","")
-    if not role and meta.get("role_m") and gender=="male":
-        role = meta.get("role_m","")
-    outfit = meta.get("outfit_f") if (gender=="female" and meta.get("outfit_f")) else meta.get("outfit","")
-    props = meta.get("props",""); bg = meta.get("bg","")
-    subject_tag = (f"photo of person {avatar_token}" if avatar_token else "").strip()
+def build_prompt(
+        meta: Style,
+        gender: str,
+        comp_text: str,
+        tone_text: str,
+        theme_boost: str,
+        natural: bool,
+        pretty: bool,
+        avatar_token: str = ""
+    ) -> Tuple[str, str]:
+        """
+        Строит промпт + негативку с «умной автоматикой» выражения рта:
+        - если стиль намекает на улыбку → полноценная улыбка с ровными зубами;
+        - иначе → закрытый рот, зубов не видно.
+        """
+        # --- 1) роль/одежда/сцена ---
+        role = meta.get("role_f") if (gender == "female" and meta.get("role_f")) else meta.get("role", "")
+        if not role and meta.get("role_m") and gender == "male":
+            role = meta.get("role_m", "")
+        outfit = meta.get("outfit_f") if (gender == "female" and meta.get("outfit_f")) else meta.get("outfit", "")
+        props = meta.get("props", "")
+        bg = meta.get("bg", "")
+        subject_tag = (f"photo of person {avatar_token}" if avatar_token else "").strip()
 
-    gpos, gneg = _gender_lock(gender)
-    anti = _anti_distort()
-    hair_lock = "keep original hair color tone and hairstyle family"
+        # --- 2) гендерные замки ---
+        gpos, gneg = _gender_lock(gender)
+        anti = _anti_distort()
+        hair_lock = "keep original hair color tone and hairstyle family"
 
-    common_bits = [
-        subject_tag,
-        tone_text,
-        gpos,
-        "same person as the training photos, no ethnicity change, exact facial identity +++",
-        "photorealistic, realistic body proportions, natural fine skin texture, filmic look",
-        "keep original facial proportions, same interocular distance and cheekbone width, preserve lip shape and beard density",
-        "85mm lens portrait look",
-        hair_lock,
-        _frontal_lock(),
-        _oval_lock(),
-        _head_scale_lock(),
-        _face_scale_hint(),
-        anti,
-        _beauty_guardrail(),
-        _face_lock(),
-        _ethnicity_lock(),
-        FACIAL_RELAX_POS,
-        theme_boost
-    ]
+        # --- 3) «умная автоматика» выражения рта ---
+        # явные флаги из стиля (можно использовать в STYLE_PRESETS при желании)
+        explicit_expr = (meta.get("expression") or "").lower()
+        force_smile = bool(meta.get("force_smile", False))
+        force_closed = bool(meta.get("force_closed_mouth", False))
 
-    if role or outfit or props or bg:
-        core = ", ".join([_style_lock(role, outfit, props, bg, comp_text)] + common_bits)
-        core += ", the costume and background must clearly communicate the role; avoid plain portrait"
-    else:
-        base_prompt = meta.get("p", "")
-        core = ", ".join([f"{base_prompt}, {comp_text}"] + common_bits)
+        # эвристика по ключевым словам
+        text_blob = " ".join([
+            str(meta.get("desc", "")),
+            str(role or ""),
+            str(props or ""),
+            str(bg or "")
+        ]).lower()
 
-    core = _inject_beauty(core, comp_text, natural, pretty)
+        smile_kw = ("улыб", "smile", "happy", "cheer", "friendly", "радост", "добродуш", "дружелюб")
+        closed_kw = ("neutral", "нейтр", "строг", "serious", "passport", "id photo", "документ")
 
-    neg = gneg
-    if natural:
-        neg = (neg + ", " + NATURAL_NEG) if neg else NATURAL_NEG
-    if pretty:
-        neg = (neg + ", " + PRETTY_NEG) if neg else PRETTY_NEG
-    neg = (neg + ", " + FACIAL_RELAX_NEG) if neg else FACIAL_RELAX_NEG
+        wants_smile = (
+            force_smile
+            or "smile" in explicit_expr
+            or any(k in text_blob for k in smile_kw)
+        ) and not force_closed
 
-    return core, neg
+        # Позитив/негатив для выражения
+        if wants_smile:
+            expr_pos = (
+                "natural friendly smile showing full teeth, even aligned teeth, "
+                "cheeks gently raised, lips parted naturally, smile allowed despite neutral lock"
+            )
+            expr_neg = (
+                "no partial teeth, no half-open mouth, no awkward lip separation, "
+                "no gummy smile, no clenched jaw, no asymmetric smile, no lip biting"
+            )
+            # смягчим «neutral relaxed expression» из _frontal_lock()
+            frontal = _frontal_lock() + ", natural smile allowed"
+        else:
+            expr_pos = "neutral expression, closed lips, no visible teeth"
+            expr_neg = "no visible teeth, no parted lips, no half-open mouth, no tooth gaps showing"
+            frontal = _frontal_lock()  # как есть
 
-IDENTITY_SAFE_NEG = (
-    "no makeup change, no lip reshaping, no nose reshaping, "
-    "no jawline reshaping, no cheekbone reshaping, no eyebrow reshaping"
-)
+        # --- 4) общие «замки» и хинты ---
+        common_bits = [
+            subject_tag,
+            tone_text,
+            gpos,
+            "same person as the training photos, no ethnicity change, exact facial identity +++",
+            "photorealistic, realistic body proportions, natural fine skin texture, filmic look",
+            "keep original facial proportions, same interocular distance and cheekbone width, preserve lip shape and beard density",
+            "85mm lens portrait look",
+            hair_lock,
+            frontal,
+            _oval_lock(),
+            _head_scale_lock(),
+            _face_scale_hint(),
+            anti,
+            _beauty_guardrail(),
+            _face_lock(),
+            _ethnicity_lock(),
+            FACIAL_RELAX_POS,   # расслабленные мышцы лица
+            expr_pos,           # ← выражение
+            _safe_theme_boost(theme_boost or "")
+        ]
 
-def _identity_safe_tune(preset_key:str, guidance:float, comps:List[str]) -> Tuple[float, List[str], str]:
-    if preset_key not in RISKY_PRESETS:
-        return guidance, comps, ""
-    g = min(guidance, 4.6)
-    cc = ["closeup", "half", "closeup"]
-    return g, cc, IDENTITY_SAFE_NEG
+        # --- 5) ядро промпта: либо жёстко-стилевой, либо базовый ---
+        if role or outfit or props or bg:
+            core = ", ".join([
+                _style_lock(role, outfit, props, bg, comp_text)
+            ] + common_bits)
+            core += ", the costume and background must clearly communicate the role; avoid plain portrait"
+        else:
+            base_prompt = meta.get("p", "")
+            core = ", ".join([f"{base_prompt}, {comp_text}"] + common_bits)
+
+        # --- 6) Natural/Pretty инъекции ---
+        if natural:
+            core = ", ".join([core, NATURAL_POS])
+        if pretty:
+            core = ", ".join([core, PRETTY_POS])
+        if ("eye level" in comp_text) or ("chest level" in comp_text):
+            core = ", ".join([core, PRETTY_COMP_HINT])
+
+        # --- 7) негативка ---
+        neg_parts = [gneg, FACIAL_RELAX_NEG, expr_neg]  # гендерный минус + лицо + рот
+        if natural:
+            neg_parts.append(NATURAL_NEG)
+        if pretty:
+            neg_parts.append(PRETTY_NEG)
+
+        negative = ", ".join([p for p in neg_parts if p])
+
+        return core, negative
+
 
     # ---------- Инференс/генерация (исправлено) ----------
 def _resolve_face_ref(uid: int, avatar: str) -> Optional[Union[str, IO[bytes]]]:
