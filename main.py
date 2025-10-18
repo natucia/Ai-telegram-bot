@@ -930,60 +930,78 @@ def generate_with_face_id_adapter(
         negative_prompt: str,
         face_embedding_url: Union[str, IO[bytes]],
     ) -> str:
-        """
-        Replicate принимает либо файловый хендл (rb), либо HTTPS URL.
-        Никаких сырых bytes — иначе «Object of type bytes is not JSON serializable».
-        """
-        mv = resolve_model_version(model_slug)
+    """
+    Надёжная генерация с FaceID: ручной пуллинг, таймаут, фоллбеки.
+    """
+    mv = resolve_model_version(model_slug)
 
-        # подготавливаем корректный источник
-        face_source: Any
-        if isinstance(face_embedding_url, str):
-            if os.path.exists(face_embedding_url):
-                face_source = open(face_embedding_url, "rb")          # file handle
-            elif face_embedding_url.startswith(("http://", "https://")):
-                face_source = face_embedding_url                      # URL
-            else:
-                raise RuntimeError(f"FACE-ID: неподдерживаемый ref: {face_embedding_url!r}")
-        elif hasattr(face_embedding_url, "read"):
-            face_source = face_embedding_url                          # IO[bytes]
+    # подготовим источник лица
+    face_source: Any
+    fh = None
+    if isinstance(face_embedding_url, str):
+        if os.path.exists(face_embedding_url):
+            fh = open(face_embedding_url, "rb")
+            face_source = fh
+        elif face_embedding_url.startswith(("http://", "https://")):
+            face_source = face_embedding_url
         else:
-            raise RuntimeError("FACE-ID: нужен путь/URL/файловый объект")
+            raise RuntimeError(f"FACE-ID: неподдерживаемый ref: {face_embedding_url!r}")
+    elif hasattr(face_embedding_url, "read"):
+        face_source = face_embedding_url
+    else:
+        raise RuntimeError("FACE-ID: нужен путь/URL/файловый объект")
 
-        extra_inputs = {
-            "face_image": face_source,
-            "ip_adapter_scale": FACE_ID_WEIGHT,
-            "face_id_noise": FACE_ID_NOISE,
+    def _inputs(_steps:int, _w:int, _h:int, with_face:bool=True) -> Dict[str, Any]:
+        base = {
+            "prompt": prompt + AESTHETIC_SUFFIX,
+            "negative_prompt": negative_prompt,
+            "width": _w,
+            "height": _h,
+            "num_inference_steps": min(MAX_STEPS, _steps),
+            "guidance_scale": guidance,
+            "seed": seed,
         }
+        if with_face:
+            base.update({
+                "face_image": face_source,
+                "ip_adapter_scale": FACE_ID_WEIGHT,
+                "face_id_noise": FACE_ID_NOISE,
+            })
+        return base
 
-        try:
-            out = _retry(
-                lambda: replicate.run(
-                    mv,
-                    input={
-                        "prompt": prompt + AESTHETIC_SUFFIX,
-                        "negative_prompt": negative_prompt,
-                        "width": w,
-                        "height": h,
-                        "num_inference_steps": min(MAX_STEPS, steps),
-                        "guidance_scale": guidance,
-                        "seed": seed,
-                        **extra_inputs,
-                    },
-                ),
-                label="replicate_gen_faceid",
-            )
-        finally:
+    try:
+        # 1) основная попытка
+        out = _run_replicate_prediction(mv, _inputs(steps, w, h, with_face=True))
+    except TimeoutError as e:
+        logger.warning("GEN FaceID timeout, applying fallback: %s", e)
+        # 2) фоллбеки: уменьшаем шаги и размер, максимум GENERATION_RETRY_ATTEMPTS раз
+        cur_steps = max(12, steps - FALLBACK_STEPS_DELTA)
+        cur_w = max(512, int(w * FALLBACK_SIZE_SCALE))
+        cur_h = max(640, int(h * FALLBACK_SIZE_SCALE))
+        last_err = e
+        for attempt in range(GENERATION_RETRY_ATTEMPTS):
             try:
-                if hasattr(face_source, "close"):
-                    face_source.close()
-            except Exception:
-                pass
+                out = _run_replicate_prediction(mv, _inputs(cur_steps, cur_w, cur_h, with_face=True))
+                break
+            except TimeoutError as te:
+                last_err = te
+                cur_steps = max(12, cur_steps - FALLBACK_STEPS_DELTA)
+                cur_w = max(512, int(cur_w * FALLBACK_SIZE_SCALE))
+                cur_h = max(640, int(cur_h * FALLBACK_SIZE_SCALE))
+        else:
+            # 3) крайний фоллбек — пробуем без FaceID (иногда IP-Adapter зависает)
+            logger.warning("All FaceID fallbacks timed out, trying without FaceID…")
+            out = _run_replicate_prediction(mv, _inputs(cur_steps, cur_w, cur_h, with_face=False))
+    finally:
+        with contextlib.suppress(Exception):
+            if fh:
+                fh.close()
 
-        url = extract_any_url(out)
-        if not url:
-            raise RuntimeError(f"Empty output with FACE-ID (model={model_slug})")
-        return url
+    url = extract_any_url(out)
+    if not url:
+        raise RuntimeError(f"Empty output with FACE-ID (model={model_slug})")
+    return url
+
 
 
     # ---------- Диспетчер генерации ----------
@@ -998,42 +1016,60 @@ def generate_from_finetune(
         negative_prompt: str,
         face_embedding_url: Optional[Union[str, IO[bytes]]] = None,
     ) -> str:
-        use_faceid = bool(FACE_ID_ADAPTER_ENABLED and face_embedding_url)
-        logger.info("GEN DISPATCH: model=%s use_faceid=%s", model_slug, use_faceid)
+    use_faceid = bool(FACE_ID_ADAPTER_ENABLED and face_embedding_url)
+    logger.info("GEN DISPATCH: model=%s use_faceid=%s", model_slug, use_faceid)
 
-        if use_faceid:
-            return generate_with_face_id_adapter(
-                model_slug=model_slug,
-                prompt=prompt,
-                steps=steps,
-                guidance=guidance,
-                seed=seed,
-                w=w,
-                h=h,
-                negative_prompt=negative_prompt,
-                face_embedding_url=face_embedding_url,  # URL/путь/IO[bytes]
-            )
-
-        mv = resolve_model_version(model_slug)
-        out = _retry(
-            lambda: replicate.run(
-                mv,
-                input={
-                    "prompt": prompt + AESTHETIC_SUFFIX,
-                    "negative_prompt": negative_prompt,
-                    "width": w,
-                    "height": h,
-                    "num_inference_steps": min(MAX_STEPS, steps),
-                    "guidance_scale": guidance,
-                    "seed": seed,
-                },
-            ),
-            label="replicate_gen_plain",
+    if use_faceid:
+        return generate_with_face_id_adapter(
+            model_slug=model_slug,
+            prompt=prompt,
+            steps=steps,
+            guidance=guidance,
+            seed=seed,
+            w=w,
+            h=h,
+            negative_prompt=negative_prompt,
+            face_embedding_url=face_embedding_url,
         )
-        url = extract_any_url(out)
-        if not url:
-            raise RuntimeError("Empty output (plain)")
-        return url
+
+    # Без FaceID — тоже через predictions.create с таймаутами/фоллбеками
+    mv = resolve_model_version(model_slug)
+
+    def _inputs(_steps:int, _w:int, _h:int) -> Dict[str, Any]:
+        return {
+            "prompt": prompt + AESTHETIC_SUFFIX,
+            "negative_prompt": negative_prompt,
+            "width": _w,
+            "height": _h,
+            "num_inference_steps": min(MAX_STEPS, _steps),
+            "guidance_scale": guidance,
+            "seed": seed,
+        }
+
+    try:
+        out = _run_replicate_prediction(mv, _inputs(steps, w, h))
+    except TimeoutError as e:
+        logger.warning("GEN plain timeout, applying fallback: %s", e)
+        cur_steps = max(12, steps - FALLBACK_STEPS_DELTA)
+        cur_w = max(512, int(w * FALLBACK_SIZE_SCALE))
+        cur_h = max(640, int(h * FALLBACK_SIZE_SCALE))
+        for attempt in range(GENERATION_RETRY_ATTEMPTS):
+            try:
+                out = _run_replicate_prediction(mv, _inputs(cur_steps, cur_w, cur_h))
+                break
+            except TimeoutError:
+                cur_steps = max(12, cur_steps - FALLBACK_STEPS_DELTA)
+                cur_w = max(512, int(cur_w * FALLBACK_SIZE_SCALE))
+                cur_h = max(640, int(cur_h * FALLBACK_SIZE_SCALE))
+        else:
+            raise
+
+    url = extract_any_url(out)
+    if not url:
+        raise RuntimeError("Empty output (plain)")
+    return url
+
+
 
 
 
@@ -1307,7 +1343,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- UI utils ----------
 
         # ---------- UI utils: удалить старое, прислать новое снизу ----------
-# --- Persistent main menu (не удаляем) ---
+# --- Persistent main menu (не удаляем) --
+def _now_s() -> float:
+    return time.time()
+
+PREDICTION_TIMEOUT = int(os.getenv("PREDICTION_TIMEOUT", "420"))
+PREDICTION_POLL_EVERY = float(os.getenv("PREDICTION_POLL_EVERY", "3"))
+GENERATION_RETRY_ATTEMPTS = int(os.getenv("GENERATION_RETRY_ATTEMPTS", "2"))
+FALLBACK_STEPS_DELTA = int(os.getenv("FALLBACK_STEPS_DELTA", "12"))
+FALLBACK_SIZE_SCALE = float(os.getenv("FALLBACK_SIZE_SCALE", "0.9"))
+
+def _run_replicate_prediction(version_slug: str, inputs: Dict[str, Any]) -> Any:
+    """
+    Надёжный запуск инференса на Replicate:
+    - создаём prediction,
+    - вручную опрашиваем статус,
+    - по таймауту — отменяем.
+    Возвращает .output (как его отдаёт Replicate SDK).
+    """
+    client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+    pred = client.predictions.create(version=version_slug, input=inputs)
+
+    started = _now_s()
+    last_status = None
+    while True:
+        pred.reload()
+        if pred.status != last_status:
+            logger.info("Replicate prediction status: %s", pred.status)
+            last_status = pred.status
+
+        if pred.status in ("succeeded", "failed", "canceled"):
+            break
+
+        if _now_s() - started > PREDICTION_TIMEOUT:
+            with contextlib.suppress(Exception):
+                pred.cancel()
+            raise TimeoutError("Timed out")
+
+        time.sleep(PREDICTION_POLL_EVERY)
+
+    if pred.status == "succeeded":
+        return pred.output
+    if pred.status == "failed":
+        # Replicate иногда кладёт текст ошибки в pred.error
+        raise RuntimeError(getattr(pred, "error", "Replicate failed"))
+    raise RuntimeError(f"Prediction ended with status={pred.status}")
+
     # --- "Вечное" Главное меню ---
 MAIN_MENU_MSG_ID: Dict[int, int] = {}  # uid -> message_id
 
@@ -2237,95 +2318,128 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ===
+                # === ПРЯМАЯ ГЕНЕРАЦИЯ С АВТО-ПЕРЕЗАПУСКОМ УПАВШЕГО КАДРА ===
 async def start_generation_for_preset(
-            update: Update,
-            context: ContextTypes.DEFAULT_TYPE,
-            preset: str,
-            show_intro: bool = True
-        ):
-            uid = update.effective_user.id
-            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-            av_name = get_current_avatar_name(prof)
-            av = get_avatar(prof, av_name)
+                        update: Update,
+                        context: ContextTypes.DEFAULT_TYPE,
+                        preset: str,
+                        show_intro: bool = True
+                    ):
+                    uid = update.effective_user.id
+                    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+                    av_name = get_current_avatar_name(prof)
+                    av = get_avatar(prof, av_name)
 
-            # проверка готовности модели
-            if av.get("status") != "succeeded":
-                await update.effective_message.reply_text(
-                    f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
-                )
-                return
+                    # 0) готовность модели
+                    if av.get("status") != "succeeded":
+                        await update.effective_message.reply_text(
+                            f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+                        )
+                        return
 
-            # закреплённый слаг версии
-            model_slug = _pinned_slug(av) or av.get("finetuned_model")
-            if not model_slug:
-                await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
-                return
+                    # 1) закреплённый слаг версии
+                    model_slug = _pinned_slug(av) or av.get("finetuned_model")
+                    if not model_slug:
+                        await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
+                        return
 
-            # метаданные стиля
-            if preset not in STYLE_PRESETS:
-                await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
-                return
-            meta = STYLE_PRESETS[preset]
+                    # 2) метаданные стиля
+                    if preset not in STYLE_PRESETS:
+                        await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
+                        return
+                    meta = STYLE_PRESETS[preset]
 
-            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-            natural = bool(prof.get("natural", True))
-            pretty  = bool(prof.get("pretty", False))
-            avatar_token = av.get("token", "")
+                    gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+                    natural = bool(prof.get("natural", True))
+                    pretty  = bool(prof.get("pretty", False))
+                    avatar_token = av.get("token", "")
 
-            # композиции и identity-safe твики
-            comps = _variants_for_preset(meta)           # например ["half","half","closeup"]
-            guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
+                    # 3) композиции и identity-safe твики
+                    comps = _variants_for_preset(meta)           # например ["half","half","closeup"]
+                    guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
 
-            # FaceID: ссылка/путь; если нет — сгеним без него
-            face_ref = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
+                    # 4) FaceID: ссылка/путь; если нет — сгеним без него
+                    face_ref = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
 
-            if show_intro:
-                await update.effective_message.reply_text(f"Генерирую «{preset}»…")
+                    if show_intro:
+                        await update.effective_message.reply_text(f"Генерирую «{preset}»…")
 
-            sent = 0
-            for i, comp in enumerate(comps):
-                try:
-                    comp_text, (w, h) = _comp_text_and_size(comp)
+                    # --- настройки перезапуска кадра (локальные; можно переопределить через ENV) ---
+                    FRAME_RETRY_ATTEMPTS = int(os.getenv("FRAME_RETRY_ATTEMPTS", "1"))  # доп. попыток поверх основной
+                    RETRY_SEED_JITTER    = int(os.getenv("RETRY_SEED_JITTER", "99991")) # простое простое смещение сида
+                    RETRY_NOTE           = os.getenv("FRAME_RETRY_NOTE", "1").lower() in ("1","true","yes","y")
 
-                    # лёгкая вариация кадра, чтобы не триггерить кэш/дубликаты
-                    if comp == "half" and i % 2 == 1:
-                        comp_text += ", camera slightly closer, gentle 5° head turn"
-                    elif comp == "closeup" and i % 2 == 1:
-                        comp_text += ", micro-reframe, eyes focus a touch brighter"
+                    def _seed_try(base_seed: int, attempt_idx: int) -> int:
+                        """Новый сид для перезапуска: base + jitter*attempt (в 32-битных границах)."""
+                        # держим в пределах uint32
+                        return (base_seed + RETRY_SEED_JITTER * max(0, attempt_idx)) & 0xFFFFFFFF
 
-                    tone_text   = _tone_text(meta.get("tone", ""))
-                    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
+                    sent = 0
+                    for i, comp in enumerate(comps):
+                        # === собираем комп-хинты и промпт ===
+                        try:
+                            comp_text, (w, h) = _comp_text_and_size(comp)
 
-                    prompt, neg = build_prompt(
-                        meta, gender, comp_text, tone_text, theme_boost,
-                        natural, pretty, avatar_token
-                    )
-                    # === Спецлогика для Харли Квинн / Джокера ===
-                    if preset == "Харли-Квинн":
-                        gender = (av.get("gender") or prof.get("gender") or "female").lower()
-                        if gender.startswith("f"):  # женщина
-                            prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
-                        else:  # мужчина
-                            prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
+                            # лёгкая вариация кадра, чтобы не ловить дубли
+                            if comp == "half" and i % 2 == 1:
+                                comp_text += ", camera slightly closer, gentle 5° head turn"
+                            elif comp == "closeup" and i % 2 == 1:
+                                comp_text += ", micro-reframe, eyes focus a touch brighter"
 
-                    if extra_neg:
-                        neg = _neg_with_gender(neg, extra_neg)
+                            tone_text   = _tone_text(meta.get("tone", ""))
+                            theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
 
-                    seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
+                            prompt, neg = build_prompt(
+                                meta, gender, comp_text, tone_text, theme_boost,
+                                natural, pretty, avatar_token
+                            )
 
-                    url = await asyncio.to_thread(
-                        generate_from_finetune,
-                        model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
-                    )
-                    await update.effective_message.reply_photo(url)
-                    sent += 1
+                            # Спецлогика Харли/Джокер (если используешь такие поля)
+                            if preset == "Харли-Квинн":
+                                gcur = (av.get("gender") or prof.get("gender") or "female").lower()
+                                if gcur.startswith("f"):
+                                    prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
+                                else:
+                                    prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
 
-                except Exception as e:
-                    logger.exception("gen failed for comp=%s", comp)
-                    await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
+                            if extra_neg:
+                                neg = _neg_with_gender(neg, extra_neg)
 
-            if sent == 0:
-                await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
+                            base_seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
+
+                            # === Основная попытка + перезапуски ТОЛЬКО этого кадра ===
+                            last_err = None
+                            attempts_total = 1 + max(0, FRAME_RETRY_ATTEMPTS)
+                            for attempt in range(attempts_total):
+                                cur_seed = _seed_try(base_seed, attempt)
+                                try:
+                                    url = await asyncio.to_thread(
+                                        generate_from_finetune,
+                                        model_slug, prompt, GEN_STEPS, guidance, cur_seed, w, h, neg, face_ref
+                                    )
+                                    # если это был перезапуск — опционально отметим
+                                    if attempt > 0 and RETRY_NOTE:
+                                        await update.effective_message.reply_text(f"⏱️ {comp}: перезапустила — готово.")
+                                    await update.effective_message.reply_photo(url)
+                                    sent += 1
+                                    break
+                                except Exception as e:
+                                    last_err = e
+                                    logger.warning("gen failed for comp=%s (try %d/%d): %s", comp, attempt+1, attempts_total, e)
+                                    # пробуем ещё — с новым сидом; фоллбеки по шагам/размеру уже внутри generate_from_finetune
+                                    await asyncio.sleep(0.1)
+
+                            # все попытки исчерпаны
+                            if last_err and sent == i:
+                                await update.effective_message.reply_text(f"⚠️ Пропустила кадр {comp}: {last_err}")
+
+                        except Exception as e:
+                            logger.exception("gen fatal for comp=%s", comp)
+                            await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
+
+                    if sent == 0:
+                        await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
+
 
 
 # --- Toggles (пер-юзер) ---
