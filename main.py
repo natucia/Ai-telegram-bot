@@ -2114,37 +2114,81 @@ def start_lora_training(uid: int, avatar: str) -> str:
 
     return tid
 
-def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Optional[str]]:
-        """Возвращает (status, slug_with_version_if_ready, error_text_or_None)
-        и попутно обновляет профиль: status, finetuned_model, finetuned_version, lora_url.
-        """
-        prof = load_profile(uid)
-        av = get_avatar(prof, avatar)
-        tid = av.get("training_id")
-        if not tid:
-            return ("not_started", None, None)
 
-        client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-        try:
-            tr = client.trainings.get(tid)
-        except Exception as e:
-            return ("unknown", None, str(e))
 
-        # --- безопасно достаем поля из объекта/словаря ---
-        if isinstance(tr, dict):
-            status = tr.get("status", "unknown")
-            destination = tr.get("destination") or av.get("finetuned_model")
-            err = tr.get("error") or tr.get("detail")
-            output = tr.get("output")
-        else:
-            status = getattr(tr, "status", "unknown")
-            destination = getattr(tr, "destination", None) or av.get("finetuned_model")
-            err = getattr(tr, "error", None) or getattr(tr, "detail", None)
-            output = getattr(tr, "output", None)
+async def check_training_status(uid: int, av_name: str, msg_callback=None):
+                """
+                Проверяет статус обучения LoRA-модели на Replicate,
+                сохраняет финальный slug с версией и URL на веса (.safetensors)
+                """
+                prof = load_profile(uid)
+                av = get_avatar(prof, av_name)
+                train_id = av.get("train_id")
+                if not train_id:
+                    if msg_callback:
+                        await msg_callback("⚠️ Нет ID обучения.")
+                    return None
 
-        av["status"] = status
-        if destination:
-            av["finetuned_model"] = destination
+                client = replicate.Client(api_token=REPLICATE_API_TOKEN)
+
+                try:
+                    training = client.trainings.get(train_id)
+                except Exception as e:
+                    if msg_callback:
+                        await msg_callback(f"⚠️ Ошибка запроса статуса: {e}")
+                    return None
+
+                status = getattr(training, "status", None)
+                destination = getattr(training, "destination", None)
+                output = getattr(training, "output", None)
+                url = getattr(training, "urls", {}).get("stream", None)
+
+                if msg_callback:
+                    await msg_callback(f"Статус: {status}")
+
+                # --- если succeeded: закрепляем версию и парсим ссылку на веса (.safetensors) ---
+                slug_with_ver: Optional[str] = None
+                if status == "succeeded" and destination:
+                    try:
+                        model_obj = replicate.models.get(destination)
+                        versions = list(model_obj.versions.list())
+                        if versions:
+                            ver_id = versions[0].id
+                            av["finetuned_version"] = ver_id
+                            slug_with_ver = f"{destination}:{ver_id}"
+                        else:
+                            slug_with_ver = destination
+                    except Exception as e:
+                        logger.warning("Version parse error: %s", e)
+
+                    # ищем .safetensors URL в output
+                    try:
+                        safetensors_url = _find_first_safetensors_url(output)
+                        if safetensors_url:
+                            av["lora_url"] = safetensors_url
+                    except Exception as e:
+                        logger.warning("Could not parse safetensors url: %s", e)
+
+                    # сохраняем
+                    av["status"] = "succeeded"
+                    av["slug_with_ver"] = slug_with_ver
+                    save_profile(uid, prof)
+                    if msg_callback:
+                        await msg_callback("✅ Обучение завершено. Модель закреплена.")
+
+                elif status in ("failed", "cancelled"):
+                    av["status"] = "failed"
+                    save_profile(uid, prof)
+                    if msg_callback:
+                        await msg_callback("❌ Ошибка обучения. Перезапусти процесс.")
+
+                else:
+                    # всё ещё в процессе
+                    av["status"] = status or "starting"
+                    save_profile(uid, prof)
+
+                return status
+
 
         # --- helper: найти первую HTTPS-ссылку на .safetensors в произвольной структуре ---
 def _model_input_keys(slug_with_ver: str) -> set:
@@ -2280,62 +2324,7 @@ def _find_first_safetensors_url(data: Any) -> Optional[str]:
                         return got
             return None
 
-        # --- если succeeded: закрепляем версию и парсим ссылку на веса (.safetensors) ---
-        slug_with_ver: Optional[str] = None
-        if status == "succeeded" and destination:
-            # 1) закрепим версию модели
-            try:
-                model_obj = replicate.models.get(destination)
-                versions = list(model_obj.versions.list())
-                if versions:
-                    ver_id = versions[0].id
-                    av["finetuned_version"] = ver_id
-                    slug_with_ver = f"{destination}:{ver_id}"
-                else:
-                    slug_with_ver = destination
-            except Exception as e:
-                logger.warning("Не удалось получить версию модели %s: %s", destination, e)
-                slug_with_ver = destination
 
-            # 2) попробуем достать HTTPS .safetensors
-            try:
-                weights_url: Optional[str] = None
-                if output is not None:
-                    # типовые структуры:
-                    # {"weights": {"safetensors": "https://..."}}
-                    # {"artifacts": {"safetensors_url": "https://..."}}
-                    # {"lora": {"url": "https://.../weights.safetensors"}}
-                    # или просто плоско: {"safetensors": "https://..."}
-                    if isinstance(output, dict):
-                        for key in ("weights", "artifacts", "lora"):
-                            if key in output and isinstance(output[key], dict):
-                                weights_url = (
-                                    output[key].get("safetensors")
-                                    or output[key].get("safetensors_url")
-                                    or output[key].get("url")
-                                )
-                                if isinstance(weights_url, str) and weights_url.startswith(("http://","https://")) and ".safetensors" in weights_url:
-                                    break
-                        if not weights_url:
-                            cand = output.get("safetensors") or output.get("weights_url")
-                            if isinstance(cand, str) and cand.startswith(("http://","https://")) and ".safetensors" in cand:
-                                weights_url = cand
-                        if not weights_url:
-                            weights_url = _find_first_safetensors_url(output)
-                    else:
-                        # на всякий случай попробуем рекурсивно
-                        weights_url = _find_first_safetensors_url(output)
-
-                if weights_url and weights_url.startswith(("http://","https://")) and ".safetensors" in weights_url:
-                    av["lora_url"] = weights_url
-                    logger.info("Saved lora_url for avatar '%s': %s", avatar, weights_url)
-                else:
-                    logger.warning("Не удалось извлечь lora_url (.safetensors) из training.output")
-            except Exception as e:
-                logger.warning("Парсинг lora_url из output провалился: %s", e)
-
-        save_profile(uid, prof)
-        return (status, slug_with_ver, err)
 
 
 def _pinned_slug(av: Dict[str, Any]) -> str:
