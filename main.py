@@ -10,7 +10,11 @@
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 from typing import Union, IO
 Style = Dict[str, Any]
-
+from faceid_workflow_integration import (
+    start_generation_for_preset as start_generation_faceid,
+    on_user_upload_photo as on_user_upload_face,
+    training_poller_tick,
+)
 from styles import (
     STYLE_PRESETS, STYLE_CATEGORIES, THEME_BOOST, SCENE_GUIDANCE, RISKY_PRESETS
 )
@@ -28,122 +32,6 @@ from telegram.ext import (
 )
 import struct
 from telegram import ReplyKeyboardMarkup
-
-import logging
-logger = logging.getLogger()
-
-
-# === FACEID WORKFLOW: robust import + adapter ===
-try:
-    from faceid_workflow_integration import start_generation_for_preset as _wf_start_generation_for_preset
-    FACEID_WORKFLOW_AVAILABLE = True
-except Exception as _imp_err:
-    _wf_start_generation_for_preset = None
-    FACEID_WORKFLOW_AVAILABLE = False
-    logger.warning("FaceID workflow integration unavailable: %s", _imp_err)
-
-
-async def start_generation_via_workflow(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE,
-        preset: str,
-        show_intro: bool = False,
-        avatar_name: Optional[str] = None,   # можно не передавать; если передали — фиксируем аватар
-    ):
-        """
-        Workflow-ветка с шимом lora_url:
-        - если у аватара нет HTTPS .safetensors, но есть slug версии модели,
-          кладём в av['lora_url'] строку 'slug:<owner/model:version>' и считаем это валидным.
-        - face_ref (presigned HTTPS / локальный путь) обновляем при необходимости.
-        - при желании можно фиксировать конкретный аватар через avatar_name.
-        """
-        # 0) наличие WF
-        if not (_wf_start_generation_for_preset and FACEID_WORKFLOW_AVAILABLE):
-            raise RuntimeError("FaceID workflow не подключён или не экспортирует start_generation_for_preset")
-
-        uid = update.effective_user.id
-        prof = load_profile(uid)
-        av_name = avatar_name or get_current_avatar_name(prof)
-
-        # 1) подтянем lora_url/face_url из профиля/Replicate
-        lora_url, face_url = await asyncio.to_thread(recover_lora_and_face_urls, uid, av_name)
-
-        # 1a) ШИМ: если нет валидного .safetensors, но есть slug -> записываем 'slug:<...>'
-        prof2 = load_profile(uid)
-        av = get_avatar(prof2, av_name)
-
-        def _has_https_weights(u: Optional[str]) -> bool:
-            return isinstance(u, str) and u.startswith(("http://", "https://")) and u.endswith(".safetensors")
-
-        if not _has_https_weights(av.get("lora_url")):
-            base = av.get("finetuned_model") or ""
-            ver  = av.get("finetuned_version")
-            # аккуратно соберём slug (если ver уже в формате <model:ver-id> — не дублируем двоеточие)
-            model_slug = f"{base}:{ver}" if (base and ver and ":" not in (ver or "")) else (base or "")
-            if model_slug:
-                av["lora_url"] = f"slug:{model_slug}"
-                save_profile(uid, prof2)  # сохраним, чтобы WF увидел
-
-        # 2) если face_url пуст/протух — обновим
-        def _is_https(u: str) -> bool:
-            return isinstance(u, str) and u.startswith(("http://", "https://"))
-
-        def _alive(u: str) -> bool:
-            try:
-                r = requests.head(u, timeout=8, allow_redirects=True)
-                if r.status_code == 200:
-                    return True
-                if r.status_code in (401, 403, 405):
-                    r2 = requests.get(u, timeout=8, stream=True)
-                    return r2.status_code == 200
-            except Exception:
-                pass
-            return False
-
-        if not face_url or (_is_https(face_url) and not _alive(face_url)):
-            try:
-                face_url = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
-                prof = load_profile(uid)  # перечитаем профиль на всякий
-            except Exception as e:
-                logger.warning("refresh face embedding failed: %s", e)
-
-        # 3) финальная валидация источников для WF
-        av = get_avatar(load_profile(uid), av_name)
-        lu = av.get("lora_url") or ""
-        lora_source = (
-            "weights" if _has_https_weights(lu)
-            else ("slug" if (isinstance(lu, str) and lu.startswith("slug:")) else "none")
-        )
-        face_kind = (
-            "https" if (_is_https(face_url or "")) else
-            ("file" if (isinstance(face_url, str) and os.path.exists(face_url)) else "none")
-        )
-        ok_lora = lora_source in ("weights", "slug")
-        ok_face = face_kind in ("https", "file")
-
-        logger.info(
-            "WORKFLOW DISPATCH: preset=%s avatar=%s lora_ok=%s(%s) face_ref=%s",
-            preset, av_name, ok_lora, lora_source, face_kind
-        )
-
-        if not ok_lora:
-            raise RuntimeError("Не найдена LoRA: ни HTTPS .safetensors, ни slug версии модели.")
-        if not ok_face:
-            raise RuntimeError("Нет валидного FaceID-референса (ни presigned HTTPS, ни локального файла).")
-
-        # 4) запуск WF — передаём колбэки профиля; фиксируем аватар, если его передали в аргумент
-        return await _wf_start_generation_for_preset(
-            update, context, preset,
-            STYLE_PRESETS,
-            load_profile,
-            (lambda _prof: av_name) if avatar_name else get_current_avatar_name,
-            get_avatar,
-        )
-
-
-
-
-
 
 def _stable_seed(*parts:str) -> int:
     h = hashlib.sha1(("::".join(parts)).encode("utf-8")).digest()
@@ -166,8 +54,6 @@ DEST_MODEL = os.getenv("REPLICATE_DEST_MODEL", "yourtwin-lora").strip()
 # LoRA trainer
 LORA_TRAINER_SLUG = os.getenv("LORA_TRAINER_SLUG", "replicate/flux-lora-trainer").strip()
 LORA_INPUT_KEY = os.getenv("LORA_INPUT_KEY", "input_images").strip()
-
-FACEID_WORKFLOW_FORCE_OFF = os.getenv("FACEID_WORKFLOW_FORCE_OFF", "0").lower() in ("1", "true", "yes", "y")
 
 # Пол (опц.) — автоинференс
 GENDER_MODEL_SLUG = os.getenv("GENDER_MODEL_SLUG", "nateraw/vit-age-gender").strip()
@@ -349,88 +235,6 @@ def _photo_look(im: Image.Image) -> Image.Image:
     return im
 
 # --- FS utils (локальный fallback) ---
-def _find_first_https_safetensors(data: Any) -> Optional[str]:
-    def rec(x: Any) -> Optional[str]:
-        if isinstance(x, str):
-            if x.startswith(("http://", "https://")) and x.lower().endswith(".safetensors"):
-                return x
-            return None
-        if isinstance(x, dict):
-            # самые частые ключи
-            for k in ("safetensors", "safetensors_url", "weights_url", "url"):
-                v = x.get(k)
-                got = rec(v)
-                if got:
-                    return got
-            for v in x.values():
-                got = rec(v)
-                if got:
-                    return got
-        if isinstance(x, (list, tuple)):
-            for v in x:
-                got = rec(v)
-                if got:
-                    return got
-        return None
-    return rec(data)
-
-
-def recover_lora_and_face_urls(uid: int, av_name: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Пытается заполнить av['lora_url'] (HTTPS .safetensors) и av['face_image_url'].
-    Возвращает (lora_url, face_image_url), даже если они уже были.
-    """
-    prof = load_profile(uid); av = get_avatar(prof, av_name)
-    lora_url = av.get("lora_url")
-    face_url = av.get("face_image_url") or av.get("face_embedding")
-
-    # 1) LORA URL из тренировки Replicate
-    if not lora_url:
-        tid = av.get("training_id")
-        try:
-            client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-            tr = client.trainings.get(tid) if tid else None
-            # достаём из output любую https .safetensors
-            if tr is not None:
-                output = getattr(tr, "output", None)
-                if isinstance(tr, dict):
-                    output = tr.get("output")
-                cand = _find_first_https_safetensors(output)
-                if cand:
-                    lora_url = cand
-        except Exception as e:
-            logger.warning("recover_lora_and_face_urls: fetch training output failed: %s", e)
-
-        # Если всё ещё нет — попробуем из destination модели (иногда trainer кладёт ссылку в model card output)
-        if not lora_url:
-            try:
-                dest = av.get("finetuned_model")
-                if dest:
-                    model_obj = replicate.models.get(dest)
-                    versions = list(model_obj.versions.list())
-                    if versions:
-                        v0 = versions[0]
-                        # Некоторые тренеры дублируют ссылки в полях версии; проверим как строку/словарь
-                        lora_url = _find_first_https_safetensors(getattr(v0, "openapi_schema", {}) or {})
-                        if not lora_url:
-                            lora_url = _find_first_https_safetensors(getattr(v0, "__dict__", {}))
-            except Exception as e:
-                logger.warning("recover_lora_and_face_urls: scan model version failed: %s", e)
-
-        if lora_url:
-            av["lora_url"] = lora_url
-
-    # 2) FACE IMAGE URL: если нет — используем уже подготовленный presigned из main.prepare_face_embedding
-    if not face_url and av.get("face_embedding"):
-        face_url = av["face_embedding"]
-        av["face_image_url"] = face_url
-
-    save_profile(uid, prof)
-    return lora_url, face_url
-
-
-
-
 def user_dir(uid:int) -> Path:
     p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
 
@@ -1100,79 +904,6 @@ def _resolve_face_ref(uid: int, avatar: str) -> Optional[Union[str, IO[bytes]]]:
 
         return None
 
-def _get_or_refresh_face_ref(uid: int, avatar: str) -> Optional[Union[str, IO[bytes]]]:
-    """
-    Возвращает рабочий источник для FaceID:
-    - presigned HTTPS на лицо из av['face_embedding'], если живой
-    - локальный путь (FS)
-    - если нет/протух: пытается пересоздать через prepare_face_embedding(...)
-    Возвращает URL/путь/файловый объект — то, что принимает Replicate SDK.
-    """
-    # 1) пробуем существующее значение (embedding)
-    prof = load_profile(uid)
-    av = get_avatar(prof, avatar)
-    ref = av.get("face_embedding")
-
-    def _is_ok_https(u: str) -> bool:
-        return isinstance(u, str) and u.startswith(("http://", "https://"))
-
-    # Проверяем жив ли presigned (HEAD/GET)
-    def _alive(u: str) -> bool:
-        try:
-            r = requests.head(u, timeout=10, allow_redirects=True)
-            if r.status_code == 200:
-                return True
-            # AWS иногда 403 на HEAD — попробуем GET с небольшим range
-            if r.status_code in (401, 403, 405):
-                r2 = requests.get(u, timeout=10, stream=True)
-                return r2.status_code == 200
-        except Exception:
-            pass
-        return False
-
-    # a) HTTPS → жив?
-    if _is_ok_https(ref) and _alive(ref):
-        return ref
-
-    # b) локальный путь существует?
-    if isinstance(ref, str) and os.path.exists(ref):
-        return ref
-
-    # 2) нет валидного embedding → пробуем пересоздать
-    try:
-        new_ref = prepare_face_embedding(uid, avatar)
-        if _is_ok_https(new_ref) and _alive(new_ref):
-            return new_ref
-        if isinstance(new_ref, str) and os.path.exists(new_ref):
-            return new_ref
-    except Exception as e:
-        logger.warning("auto refresh face_embedding failed: %s", e)
-
-    # 3) fallback: возьмём первое референс-фото и подпишем при необходимости
-    try:
-        refs = list_ref_images(uid, avatar)
-        if not refs:
-            return None
-        key = refs[0]
-        if os.path.exists(key):           # FS
-            return key
-        if isinstance(key, str) and key.startswith("s3://") and s3_client:
-            _, _, bucket_and_key = key.partition("s3://")
-            bucket, _, obj_key = bucket_and_key.partition("/")
-            url = s3_client.generate_presigned_url(
-                "get_object", Params={"Bucket": bucket, "Key": obj_key},
-                ExpiresIn=int(os.getenv("FACE_ID_URL_TTL", "86400"))
-            )
-            # заодно сохраним как новый embedding
-            av["face_embedding"] = url
-            save_profile(uid, prof)
-            return url
-        if isinstance(key, str) and key.startswith(("http://","https://")):
-            return key
-    except Exception as e:
-        logger.warning("fallback face ref failed: %s", e)
-
-    return None
 
     # ---------- Инференс с FaceID (без bytes в JSON) ----------
 def generate_with_face_id_adapter(
@@ -2170,10 +1901,8 @@ def start_lora_training(uid: int, avatar: str) -> str:
     return tid
 
 def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Optional[str]]:
-        """
-        Возвращает (status, slug_with_version_if_ready, error_text_or_None)
-        и по пути обновляет профиль: status, finetuned_model, finetuned_version, lora_url.
-        Супер-терпеливый парсер .safetensors — умеет список/словарь/вложенность и fallback к версии модели.
+        """Возвращает (status, slug_with_version_if_ready, error_text_or_None)
+        и попутно обновляет профиль: status, finetuned_model, finetuned_version, lora_url.
         """
         prof = load_profile(uid)
         av = get_avatar(prof, avatar)
@@ -2182,76 +1911,55 @@ def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Op
             return ("not_started", None, None)
 
         client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
-
-        # --- 1) тянем объект тренировки ---
         try:
             tr = client.trainings.get(tid)
         except Exception as e:
             return ("unknown", None, str(e))
 
-        # Безопасно достаём поля из объекта/словаря
+        # --- безопасно достаем поля из объекта/словаря ---
         if isinstance(tr, dict):
-            status      = tr.get("status", "unknown")
+            status = tr.get("status", "unknown")
             destination = tr.get("destination") or av.get("finetuned_model")
-            err         = tr.get("error") or tr.get("detail")
-            output      = tr.get("output")
+            err = tr.get("error") or tr.get("detail")
+            output = tr.get("output")
         else:
-            status      = getattr(tr, "status", "unknown")
+            status = getattr(tr, "status", "unknown")
             destination = getattr(tr, "destination", None) or av.get("finetuned_model")
-            err         = getattr(tr, "error", None) or getattr(tr, "detail", None)
-            output      = getattr(tr, "output", None)
+            err = getattr(tr, "error", None) or getattr(tr, "detail", None)
+            output = getattr(tr, "output", None)
 
         av["status"] = status
         if destination:
             av["finetuned_model"] = destination
 
-        # --- helper: универсальный поиск первой HTTPS-ссылки на .safetensors ---
+        # --- helper: найти первую HTTPS-ссылку на .safetensors в произвольной структуре ---
         def _find_first_safetensors_url(data: Any) -> Optional[str]:
-            def _is_url(s: Any) -> bool:
+            def _is_url(s: str) -> bool:
                 return isinstance(s, str) and s.startswith(("http://", "https://"))
-            try:
-                # строка
-                if isinstance(data, str):
-                    return data if _is_url(data) and ".safetensors" in data else None
-                # список / кортеж
-                if isinstance(data, (list, tuple)):
-                    for v in data:
-                        got = _find_first_safetensors_url(v)
-                        if got:
-                            return got
-                    return None
-                # словарь
-                if isinstance(data, dict):
-                    # частые ключи у разных тренеров
-                    for k in ("safetensors", "safetensors_url", "weights_url", "url", "model_url", "lora_url"):
-                        v = data.get(k)
-                        if _is_url(v) and ".safetensors" in v:
-                            return v
-                    # вложенные контейнеры
-                    for v in data.values():
-                        got = _find_first_safetensors_url(v)
-                        if got:
-                            return got
-                    return None
-            except Exception:
-                return None
+            if isinstance(data, str):
+                return data if _is_url(data) and ".safetensors" in data else None
+            if isinstance(data, dict):
+                # прямые популярные поля у разных тренеров
+                for k in ("safetensors", "safetensors_url", "weights_url", "url"):
+                    v = data.get(k)
+                    if isinstance(v, str) and _is_url(v) and ".safetensors" in v:
+                        return v
+                # вложенные контейнеры
+                for v in data.values():
+                    got = _find_first_safetensors_url(v)
+                    if got:
+                        return got
+            if isinstance(data, (list, tuple)):
+                for v in data:
+                    got = _find_first_safetensors_url(v)
+                    if got:
+                        return got
             return None
 
-        # чуть подсветим, что же пришло
-        try:
-            sample = None
-            if isinstance(output, (list, tuple)) and output:
-                sample = output[0]
-            elif isinstance(output, dict):
-                sample = {k: type(v).__name__ for k, v in list(output.items())[:5]}
-            logger.info("TRAIN OUT sample=%r", sample)
-        except Exception:
-            pass
-
-        # --- 2) если succeeded — закрепляем версию + достаём ссылку на веса ---
+        # --- если succeeded: закрепляем версию и парсим ссылку на веса (.safetensors) ---
         slug_with_ver: Optional[str] = None
         if status == "succeeded" and destination:
-            # 2.1) закрепим версию модели
+            # 1) закрепим версию модели
             try:
                 model_obj = replicate.models.get(destination)
                 versions = list(model_obj.versions.list())
@@ -2265,25 +1973,34 @@ def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Op
                 logger.warning("Не удалось получить версию модели %s: %s", destination, e)
                 slug_with_ver = destination
 
-            # 2.2) пытаемся вытащить HTTPS .safetensors из output тренировки
-            weights_url: Optional[str] = None
+            # 2) попробуем достать HTTPS .safetensors
             try:
+                weights_url: Optional[str] = None
                 if output is not None:
-                    weights_url = _find_first_safetensors_url(output)
-
-                # 2.3) fallback: иногда тренер не кладёт ссылку в output → пробуем в описании версии
-                if not weights_url:
-                    try:
-                        model_obj = replicate.models.get(destination)
-                        versions = list(model_obj.versions.list())
-                        if versions:
-                            v0 = versions[0]
-                            cand = getattr(v0, "openapi_schema", {}) or {}
-                            weights_url = _find_first_safetensors_url(cand)
-                            if not weights_url:
-                                weights_url = _find_first_safetensors_url(getattr(v0, "__dict__", {}))
-                    except Exception as e:
-                        logger.warning("Скан версии модели на .safetensors провалился: %s", e)
+                    # типовые структуры:
+                    # {"weights": {"safetensors": "https://..."}}
+                    # {"artifacts": {"safetensors_url": "https://..."}}
+                    # {"lora": {"url": "https://.../weights.safetensors"}}
+                    # или просто плоско: {"safetensors": "https://..."}
+                    if isinstance(output, dict):
+                        for key in ("weights", "artifacts", "lora"):
+                            if key in output and isinstance(output[key], dict):
+                                weights_url = (
+                                    output[key].get("safetensors")
+                                    or output[key].get("safetensors_url")
+                                    or output[key].get("url")
+                                )
+                                if isinstance(weights_url, str) and weights_url.startswith(("http://","https://")) and ".safetensors" in weights_url:
+                                    break
+                        if not weights_url:
+                            cand = output.get("safetensors") or output.get("weights_url")
+                            if isinstance(cand, str) and cand.startswith(("http://","https://")) and ".safetensors" in cand:
+                                weights_url = cand
+                        if not weights_url:
+                            weights_url = _find_first_safetensors_url(output)
+                    else:
+                        # на всякий случай попробуем рекурсивно
+                        weights_url = _find_first_safetensors_url(output)
 
                 if weights_url and weights_url.startswith(("http://","https://")) and ".safetensors" in weights_url:
                     av["lora_url"] = weights_url
@@ -2295,7 +2012,6 @@ def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Op
 
         save_profile(uid, prof)
         return (status, slug_with_ver, err)
-
 
 
 def _pinned_slug(av: Dict[str, Any]) -> str:
@@ -2476,13 +2192,6 @@ async def refreshstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _neg_with_gender(neg_base:str, gender_negative:str) -> str:
     return (neg_base + (", " + gender_negative if gender_negative else "")).strip(", ")
 
-
-async def wf_toggle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global FACEID_WORKFLOW_FORCE_OFF
-    FACEID_WORKFLOW_FORCE_OFF = not FACEID_WORKFLOW_FORCE_OFF
-    await update.message.reply_text(f"Workflow FaceID: {'OFF' if FACEID_WORKFLOW_FORCE_OFF else 'ON'}")
-
-
 async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
         await q.answer()
@@ -2493,6 +2202,7 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
         av_name = get_current_avatar_name(prof)
         av = get_avatar(prof, av_name)
 
+        # если пол не выбран — сначала просим пол
         if not av.get("gender"):
             await _replace_with_new_below(
                 q.message,
@@ -2501,144 +2211,104 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        await _replace_with_new_below(q.message, f"Генерирую «{preset}» (аватар: {av_name})…", reply_markup=None)
+        # 1) удаляем старое меню и пишем новое «внизу»
+        await _replace_with_new_below(q.message, f"Генерирую «{preset}»…", reply_markup=None)
 
-        force_plain = FACEID_WORKFLOW_FORCE_OFF
-
-        if not force_plain and FACE_ID_ADAPTER_ENABLED and FACEID_WORKFLOW_AVAILABLE:
-            try:
-                await start_generation_via_workflow(update, context, preset, show_intro=False, avatar_name=av_name)
-                return
-            except Exception as e:
-                logger.warning("WF failed; fallback to plain: %s", e)
-
-        await start_generation_for_preset(update, context, preset, show_intro=False, avatar_name=av_name, force_plain=True)
+        # 2) генерим без повторного интро
+        await start_generation_for_preset(update, context, preset, show_intro=False)
 
 
 
-
-
-# === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ==
+# === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ===
 async def start_generation_for_preset(
-                            update: Update,
-                            context: ContextTypes.DEFAULT_TYPE,
-                            preset: str,
-                            show_intro: bool = True,
-                            avatar_name: Optional[str] = None,
-                            force_plain: bool = False,
-                        ):
-                            """
-                            Генерация по пресету.
-                            - Жёстко фиксируем имя аватара на момент клика (avatar_name).
-                            - Если workflow доступен и не запрещён, пробуем его; при ошибке — fallback в прямую генерацию.
-                            - В прямой генерации используем FaceID-референс через _resolve_face_ref (если включён).
-                            """
-                            uid = update.effective_user.id
-                            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                            av_name = avatar_name or get_current_avatar_name(prof)  # фиксируем активный аватар
-                            av = get_avatar(prof, av_name)
+            update: Update,
+            context: ContextTypes.DEFAULT_TYPE,
+            preset: str,
+            show_intro: bool = True
+        ):
+            uid = update.effective_user.id
+            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+            av_name = get_current_avatar_name(prof)
+            av = get_avatar(prof, av_name)
 
-                            # 1) сначала пробуем WF-ветку (если не принудительно plain)
-                            if (not force_plain) and FACE_ID_ADAPTER_ENABLED and FACEID_WORKFLOW_AVAILABLE:
-                                try:
-                                    await start_generation_via_workflow(
-                                        update, context, preset, show_intro=show_intro, avatar_name=av_name
-                                    )
-                                    return
-                                except Exception as e:
-                                    logger.warning("FaceID workflow path failed; fallback to direct: %s", e)
+            # проверка готовности модели
+            if av.get("status") != "succeeded":
+                await update.effective_message.reply_text(
+                    f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+                )
+                return
 
-                            # 2) прямая генерация финетюном
-                            if av.get("status") != "succeeded":
-                                await update.effective_message.reply_text(
-                                    f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
-                                )
-                                return
+            # закреплённый слаг версии
+            model_slug = _pinned_slug(av) or av.get("finetuned_model")
+            if not model_slug:
+                await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
+                return
 
-                            model_slug = _pinned_slug(av) or av.get("finetuned_model")
-                            if not model_slug:
-                                await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
-                                return
+            # метаданные стиля
+            if preset not in STYLE_PRESETS:
+                await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
+                return
+            meta = STYLE_PRESETS[preset]
 
-                            if preset not in STYLE_PRESETS:
-                                await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
-                                return
-                            meta = STYLE_PRESETS[preset]
+            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+            natural = bool(prof.get("natural", True))
+            pretty  = bool(prof.get("pretty", False))
+            avatar_token = av.get("token", "")
 
-                            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-                            natural = bool(prof.get("natural", True))
-                            pretty  = bool(prof.get("pretty", False))
-                            avatar_token = av.get("token", "")
+            # композиции и identity-safe твики
+            comps = _variants_for_preset(meta)           # например ["half","half","closeup"]
+            guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
 
-                            # FaceID-референс именно для этого аватара (если включён)
-                            face_ref = None
-                            if FACE_ID_ADAPTER_ENABLED:
-                                try:
-                                    face_ref = await asyncio.to_thread(_resolve_face_ref, uid, av_name)
-                                except Exception as e:
-                                    logger.warning("resolve_face_ref error: %s", e)
-                                    face_ref = None
+            # FaceID: ссылка/путь; если нет — сгеним без него
+            face_ref = _resolve_face_ref(uid, av_name) if FACE_ID_ADAPTER_ENABLED else None
 
-                            logger.info(
-                                "GEN PREP (PLAIN): avatar=%s gender=%s preset=%s use_faceid=%s",
-                                av_name, gender, preset, bool(face_ref)
-                            )
+            if show_intro:
+                await update.effective_message.reply_text(f"Генерирую «{preset}»…")
 
-                            # Композиции и identity-safe твики
-                            comps = _variants_for_preset(meta)
-                            guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
+            sent = 0
+            for i, comp in enumerate(comps):
+                try:
+                    comp_text, (w, h) = _comp_text_and_size(comp)
 
-                            if show_intro:
-                                await update.effective_message.reply_text(f"Генерирую «{preset}» (аватар: {av_name})…")
+                    # лёгкая вариация кадра, чтобы не триггерить кэш/дубликаты
+                    if comp == "half" and i % 2 == 1:
+                        comp_text += ", camera slightly closer, gentle 5° head turn"
+                    elif comp == "closeup" and i % 2 == 1:
+                        comp_text += ", micro-reframe, eyes focus a touch brighter"
 
-                            sent = 0
-                            for i, comp in enumerate(comps):
-                                try:
-                                    comp_text, (w, h) = _comp_text_and_size(comp)
+                    tone_text   = _tone_text(meta.get("tone", ""))
+                    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
 
-                                    # лёгкая вариация кадра
-                                    if comp == "half" and i % 2 == 1:
-                                        comp_text += ", camera slightly closer, gentle 5° head turn"
-                                    elif comp == "closeup" and i % 2 == 1:
-                                        comp_text += ", micro-reframe, eyes focus a touch brighter"
+                    prompt, neg = build_prompt(
+                        meta, gender, comp_text, tone_text, theme_boost,
+                        natural, pretty, avatar_token
+                    )
+                    # === Спецлогика для Харли Квинн / Джокера ===
+                    if preset == "Харли-Квинн":
+                        gender = (av.get("gender") or prof.get("gender") or "female").lower()
+                        if gender.startswith("f"):  # женщина
+                            prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
+                        else:  # мужчина
+                            prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
 
-                                    tone_text   = _tone_text(meta.get("tone", ""))
-                                    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
+                    if extra_neg:
+                        neg = _neg_with_gender(neg, extra_neg)
 
-                                    prompt, neg = build_prompt(
-                                        meta, gender, comp_text, tone_text, theme_boost,
-                                        natural, pretty, avatar_token
-                                    )
+                    seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
 
-                                    # спец-правка для некоторых пресетов (если есть у тебя в стилях)
-                                    if preset == "Харли-Квинн":
-                                        if gender.startswith("f"):
-                                            prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
-                                        else:
-                                            prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
+                    url = await asyncio.to_thread(
+                        generate_from_finetune,
+                        model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
+                    )
+                    await update.effective_message.reply_photo(url)
+                    sent += 1
 
-                                    if extra_neg:
-                                        neg = _neg_with_gender(neg, extra_neg)
+                except Exception as e:
+                    logger.exception("gen failed for comp=%s", comp)
+                    await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
 
-                                    seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
-
-                                    url = await asyncio.to_thread(
-                                        generate_from_finetune,
-                                        model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
-                                    )
-                                    await update.effective_message.reply_photo(url)
-                                    sent += 1
-
-                                except Exception as e:
-                                    logger.exception("gen failed for comp=%s", comp)
-                                    await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
-
-                            if sent == 0:
-                                await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
-
-
-
-
+            if sent == 0:
+                await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
 
 
 # --- Toggles (пер-юзер) ---
@@ -2660,25 +2330,17 @@ async def natural_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- System ----------
 # --- ФОНОВЫЙ ПОЛЛЕР БЕЗ JobQueue ---
-        # ---------- System ----------
-        # --- ФОНОВЫЙ ПОЛЛЕР БЕЗ JobQueue ---
 async def _poller_loop(app):
-            while True:
-                try:
-                    # обходим всех пользователей и просто дёргаем наш check_training_status
-                    profiles = load_all_profiles()
-                    for uid, prof in profiles.items():
-                        try:
-                            av_name = get_current_avatar_name(prof)
-                            # check_training_status сам обновляет профиль внутри
-                            await asyncio.to_thread(check_training_status, uid, av_name)
-                        except Exception as e:
-                            logger.warning("poller: user %s avatar %s failed: %s", uid, av_name, e)
-                except Exception as e:
-                    logger.warning("poller loop outer failed: %s", e)
-
-                # опрашиваем раз в 5 минут
-                await asyncio.sleep(300)
+    while True:
+        try:
+            await training_poller_tick(
+                load_all_profiles, save_profile,
+                get_current_avatar_name, get_avatar,
+                check_training_status   # <-- проверь имя именно такое
+            )
+        except Exception as e:
+            logger.warning("poller tick failed: %s", e)
+        await asyncio.sleep(300)  # 5 минут
 
 async def _post_init(app):
     await app.bot.delete_webhook(drop_pending_updates=True)
@@ -2692,7 +2354,6 @@ def main():
     # Команды (оставлены для совместимости; UX — кнопками)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
-    app.add_handler(CommandHandler("wf", wf_toggle_cmd))
     app.add_handler(CommandHandler("idstatus", id_status))
     app.add_handler(CommandHandler("trainid", trainid_cmd))
     app.add_handler(CommandHandler("trainstatus", trainstatus_cmd))
