@@ -847,49 +847,56 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "hospital corridor with soft bokeh",
         "comp": "half", "tone": "warm"
     },
-    "Русалка": {
-        "desc": "Сказочная, но ФОТОРЕАЛЬНАЯ русалка в прозрачной лагуне. Кадр по пояс, скромно. Хвост — как у настоящей рыбы: перекрывающиеся чешуйки, блик, полупрозрачные плавники.",
-        "role_f": "mermaid princess underwater, tasteful and modest",
-        "role": "merperson underwater, tasteful and modest",
+    "Русалка": "Русалка": {
+        "desc": "Фотореалистичная подводная сцена: настоящая русалка в прозрачной лагуне с детализированным рыбьим хвостом, парит в воде, вокруг кораллы и рыбы. Полный рост, без сидячих поз.",
+        "role_f": "realistic mermaid swimming underwater, full body, tasteful and elegant",
+        "role": "realistic merman swimming underwater, full body, tasteful and elegant",
 
-        "outfit_f": "sea-green seashell-motif fabric top with straps, fully covered; flowing hair with tiny pearls",
-        "outfit": "sea-green scale-pattern top with straps, fully covered",
+        "outfit_f": "sea-green scale-pattern top with shoulder straps, fully covered; long flowing hair with pearls",
+        "outfit": "sea-green scale-pattern top with shoulder straps, fully covered",
 
-        "props": "realistic fish tail visible below waist; overlapping micro-scales; translucent caudal and dorsal fin rays; tiny tropical fish; small red crab on coral; gentle bubbles",
-        "bg": "clear underwater lagoon with corals, sunbeams through water, natural marine life",
+        "props": (
+            "REALISTIC FISH TAIL WITH DETAILED OVERLAPPING SCALES, "
+            "VISIBLE TAIL FIN AND PELVIC FINS, "
+            "TRANSLUCENT FIN MEMBRANES WITH LIGHT THROUGH THEM, "
+            "TROPICAL FISH AROUND, CORAL REEF BELOW, AIR BUBBLES IN WATER"
+        ),
 
-        "comp": "waistup",
+        "bg": (
+            "CLEAR UNDERWATER LAGOON WITH CORALS AND SUNRAYS, "
+            "SOFT SANDY BOTTOM, NATURAL MARINE LIFE AROUND"
+        ),
+
+        "comp": "full",
         "tone": "vibrant",
-        "style": "photorealistic, detailed, natural textures",
+        "style": "photorealistic, detailed, natural lighting, underwater realism",
 
         "required_attributes": [
             "underwater environment",
-            "mermaid/merman tail visible below waist",
-            "overlapping fish scales with varied size and micro-texture",
-            "specular highlights along scales and lateral line",
-            "translucent fin membranes with visible fin rays",
-            "modest fully covered top",
-            "waist-up framing"
+            "full body mermaid with realistic fish tail",
+            "overlapping scales with metallic sheen",
+            "translucent fin rays and fins",
+            "floating or swimming pose (not sitting)",
+            "sunbeams and coral reef background",
+            "modest fully covered top"
         ],
 
         "force_keywords": [
-            "PHOTOREALISTIC UNDERWATER PORTRAIT",
-            "WAIST-UP SHOT, NOT FULL BODY",
-            "REAL FISH TAIL WITH OVERLAPPING SCALES",
-            "MICRO-SCALE TEXTURE, SUBTLE IMPERFECTIONS, NATURAL COLOR VARIATION",
-            "IRIDESCENT SPECULAR HIGHLIGHTS ALONG SCALES",
-            "VISIBLE LATERAL LINE AND SCALE ROWS",
-            "TRANSLUCENT FIN MEMBRANES WITH FIN RAYS",
-            "CLEAR TURQUOISE WATER, SUNRAYS, CORAL REEF",
-            "SMALL TROPICAL FISH, RED CRAB ON CORAL"
+            "PHOTOREALISTIC FULL BODY MERMAID UNDERWATER",
+            "REAL FISH TAIL WITH DETAILED OVERLAPPING SCALES",
+            "TRANSLUCENT FIN MEMBRANES WITH LIGHT PASSING THROUGH",
+            "FLOATING OR SWIMMING POSE, NO CHAIR OR ROCK",
+            "CLEAR TURQUOISE WATER, SUNBEAMS, CORAL REEF, SMALL FISH",
+            "REALISTIC LIGHT REFRACTIONS AND BUBBLES",
+            "NO CLEAVAGE, NO REVEALING OUTFIT, NO SEDUCTIVE POSE"
         ],
 
         "negative": (
-            "cartoon, anime, 3d render, cgi, painted, illustration, toy, plastic, "
-            "smooth tail, uniform texture, low detail, airbrushed, blurry, "
-            "bikini, bra, revealing, cleavage, nipples, nudity, lingerie, suggestive, "
-            "sitting on rock, chair, throne, beach, above water, "
-            "murky water, dark scene, full body, legs, feet, high slit"
+            "sitting, chair, stool, rock, throne, ground, surface, beach, above water, "
+            "legs, feet, shoes, human legs visible, standing on floor, "
+            "bikini, bra, revealing, nudity, cleavage, lingerie, seductive, "
+            "cartoon, anime, drawing, cgi, plastic, illustration, toy, "
+            "murky water, low detail, smooth tail, textureless tail"
         )
     },
 
@@ -1085,8 +1092,10 @@ THEME_BOOST = {
         "SUNSET GOLDEN HOUR LIGHTING, SAVANNA GRASS TEXTURE, ACACIA TREE SILHOUETTES"
     ),
     "Русалка": (
-        "sunbeam caustics, iridescent scale micro-texture, tiny specular glints on overlapping scales, "
-        "subtle lateral line, translucent fin rays, floating particles, gentle bubble trails"
+        "iridescent overlapping fish scales with metallic reflections, "
+        "translucent fins with light scattering, "
+        "underwater sunbeams, floating hair, coral shimmer, "
+        "bubble trails, tiny fish, photorealistic water caustics"
     ),
     "Атлантида": "water caustics, pearl sheen, ancient glyphs",
     "Винтажный цирк": "sawdust on floor, tent fabric texture, vintage poster art",
