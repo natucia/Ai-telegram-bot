@@ -94,16 +94,23 @@ def resolve_lora_url(av: Dict[str, Any]) -> str:
     raise RuntimeError("Не найден lora_url у аватара (HTTPS .safetensors)")
 
 def resolve_face_image_url(av: Dict[str, Any]) -> str:
-    candidates = [
-        av.get("face_image_url"),
-        av.get("cover_face"),
-        (av.get("images") or {}).get("face"),
-        (av.get("refs") or {}).get("face"),
-    ]
-    for url in candidates:
-        if url and isinstance(url, str) and url.startswith("http"):
-            return url
-    raise RuntimeError("Не найден face_image_url у аватара (HTTPS на фронтальное фото)")
+        candidates = [
+            av.get("face_image_url"),
+            av.get("face_embedding"),      # ← добавили: presigned HTTPS/локальный путь из main.prepare_face_embedding
+            av.get("cover_face"),
+            (av.get("images") or {}).get("face"),
+            (av.get("refs") or {}).get("face"),
+        ]
+        for url in candidates:
+            if url and isinstance(url, str) and url.startswith(("http://","https://")):
+                return url
+            # допускаем локальный путь на FS
+            if url and isinstance(url, str) and os.path.exists(url):
+                # Comfy/fofr обычно ждёт URL; если локальный путь — подними mini HTTP или заранее закинь в S3.
+                # Здесь бросаем явную ошибку, чтобы не было тихих провалов:
+                raise RuntimeError("face_image_url — локальный путь. Нужен публичный HTTPS (загрузи в S3 или сделай presign).")
+        raise RuntimeError("Не найден face_image_url у аватара (нужен HTTPS на фронтальное фото)")
+
 
 # === Выбор фронтального фото из первых 10 ===
 async def head_content_length(url: str) -> int:

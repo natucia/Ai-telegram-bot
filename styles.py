@@ -848,56 +848,61 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "warm"
     },
     "Русалка": {
-        "desc": "Фотореалистичная подводная сцена: настоящая русалка в прозрачной лагуне с детализированным рыбьим хвостом, парит в воде, вокруг кораллы и рыбы. Полный рост, без сидячих поз.",
-        "role_f": "realistic mermaid swimming underwater, full body, tasteful and elegant",
-        "role": "realistic merman swimming underwater, full body, tasteful and elegant",
-
-        "outfit_f": "sea-green scale-pattern top with shoulder straps, fully covered; long flowing hair with pearls",
-        "outfit": "sea-green scale-pattern top with shoulder straps, fully covered",
-
+        "desc": "РЕАЛИСТИЧНАЯ волшебная русалка с настоящим рыбьим хвостом, покрытым мелкой чешуёй, в кристально чистой лагуне. ОБЯЗАТЕЛЬНО: фиолетовые ракушки на груди, детализированный хвост с чешуёй как у реальной рыбы, плавающая поза, Флаундер и Себастьян рядом.",
+        "role_f": "realistic mermaid with fish-scale tail and purple seashells",
+        "role": "realistic merman with fish-scale tail",
+        "outfit_f": "PURPLE SEASHELLS TOP MANDATORY, flowing hair with pearls",
+        "outfit": "bare torso, aquatic accessories",
         "props": (
-            "REALISTIC FISH TAIL WITH DETAILED OVERLAPPING SCALES, "
-            "VISIBLE TAIL FIN AND PELVIC FINS, "
-            "TRANSLUCENT FIN MEMBRANES WITH LIGHT THROUGH THEM, "
-            "TROPICAL FISH AROUND, CORAL REEF BELOW, AIR BUBBLES IN WATER"
+            "REALISTIC FISH-LIKE MERMAID TAIL WITH DETAILED INDIVIDUAL SCALES VISIBLE, "
+            "PURPLE SEASHELLS CLEARLY VISIBLE ON CHEST, "
+            "FLOUNDER FISH SWIMMING CLOSE, SEBASTIAN CRAB ON ROCK OR SHOULDER, "
+            "SCHOOLS OF TROPICAL FISH, BUBBLES, SWIMMING POSE IN WATER"
         ),
-
         "bg": (
-            "CLEAR UNDERWATER LAGOON WITH CORALS AND SUNRAYS, "
-            "SOFT SANDY BOTTOM, NATURAL MARINE LIFE AROUND"
+            "REALISTIC UNDERWATER LAGOON WITH CORAL REEF, "
+            "SUNBEAMS STREAKING THROUGH WATER, CLEAR TURQUOISE WATER, "
+            "NATURAL MARINE ENVIRONMENT"
+        ),
+        "comp": "full", 
+        "tone": "vibrant",
+        "style": "realistic, photorealistic, detailed",
+
+        # ЖЕСТКИЕ ТРЕБОВАНИЯ
+        "required_attributes": [
+            "realistic mermaid tail with fish scales", "underwater", 
+            "purple seashell top", "swimming pose", "detailed scales"
+        ],
+
+        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
+        "force_keywords": [
+            "PHOTOREALISTIC", "REALISTIC MERMAID WITH FISH SCALES", 
+            "DETAILED INDIVIDUAL FISH SCALES ON TAIL", "PURPLE SEASHELLS BIKINI TOP", 
+            "UNDERWATER SWIMMING POSE", "FLOATING IN WATER",
+            "FLOUNDER FISH", "SEBASTIAN CRAB", "CORAL REEF",
+            "SUNBEAMS THROUGH WATER", "NATURAL MARINE LIFE",
+            "NO SITTING", "REALISTIC WATER EFFECTS"
+        ],
+
+        # ЗАПРЕТЫ - ужесточенные
+        "negative": (
+            "sitting, seated, on rock, on chair, on throne, on surface, "
+            "land, ground, walking, legs, feet, shoes, "
+            "beach, shore, boat, surface, above water, "
+            "dark water, murky, no tail, drawn tail, fake tail, cartoon tail, "
+            "no seashell top, bare chest without shells, wrong color shells, "
+            "standing, standing pose, anime, cartoon, drawing, painting, "
+            "smooth tail, no scales, plastic look"
         ),
 
-        "comp": "full",
-        "tone": "vibrant",
-        "style": "photorealistic, detailed, natural lighting, underwater realism",
-
-        "required_attributes": [
-            "underwater environment",
-            "full body mermaid with realistic fish tail",
-            "overlapping scales with metallic sheen",
-            "translucent fin rays and fins",
-            "floating or swimming pose (not sitting)",
-            "sunbeams and coral reef background",
-            "modest fully covered top"
-        ],
-
-        "force_keywords": [
-            "PHOTOREALISTIC FULL BODY MERMAID UNDERWATER",
-            "REAL FISH TAIL WITH DETAILED OVERLAPPING SCALES",
-            "TRANSLUCENT FIN MEMBRANES WITH LIGHT PASSING THROUGH",
-            "FLOATING OR SWIMMING POSE, NO CHAIR OR ROCK",
-            "CLEAR TURQUOISE WATER, SUNBEAMS, CORAL REEF, SMALL FISH",
-            "REALISTIC LIGHT REFRACTIONS AND BUBBLES",
-            "NO CLEAVAGE, NO REVEALING OUTFIT, NO SEDUCTIVE POSE"
-        ],
-
-        "negative": (
-            "sitting, chair, stool, rock, throne, ground, surface, beach, above water, "
-            "legs, feet, shoes, human legs visible, standing on floor, "
-            "bikini, bra, revealing, nudity, cleavage, lingerie, seductive, "
-            "cartoon, anime, drawing, cgi, plastic, illustration, toy, "
-            "murky water, low detail, smooth tail, textureless tail"
-        )
+        # Особые указания для женщин
+        "force_keywords_f": [
+            "PURPLE SEASHELLS TOP CLEARLY VISIBLE AND COVERING CHEST",
+            "REALISTIC FISH-SCALE TAIL WITH INDIVIDUAL SCALES DETAIL",
+            "FLOATING SWIMMING POSE IN WATER",
+            "PHOTOREALISTIC DETAILS",
+            "NATURAL LIGHTING UNDERWATER"
+        ]
     },
 
     # ===== ДИЗНЕЕВСКИЕ ВАЙБЫ / PIXAR (стилизация) =====
@@ -1092,10 +1097,9 @@ THEME_BOOST = {
         "SUNSET GOLDEN HOUR LIGHTING, SAVANNA GRASS TEXTURE, ACACIA TREE SILHOUETTES"
     ),
     "Русалка": (
-        "iridescent overlapping fish scales with metallic reflections, "
-        "translucent fins with light scattering, "
-        "underwater sunbeams, floating hair, coral shimmer, "
-        "bubble trails, tiny fish, photorealistic water caustics"
+        "IRIDESCENT SCALE TEXTURES, SUNBEAM CAUSTICS PATTERNS, "
+        "WATER SURFACE GLIMMER, CORAL DETAILS, FISH SCALE REFLECTIONS, "
+        "BUBBLE TRAILS, FLOWING HAIR IN WATER, PEARL LUSTER"
     ),
     "Атлантида": "water caustics, pearl sheen, ancient glyphs",
     "Винтажный цирк": "sawdust on floor, tent fabric texture, vintage poster art",
