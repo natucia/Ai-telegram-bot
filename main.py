@@ -47,19 +47,59 @@ async def start_generation_via_workflow(
         preset: str,
         show_intro: bool = False,
     ):
+        # 0) проверка наличия workflow
         if not (_wf_start_generation_for_preset and FACEID_WORKFLOW_AVAILABLE):
             raise RuntimeError("FaceID workflow не подключён или не экспортирует start_generation_for_preset")
 
-        # перед запуском workflow гарантируем, что есть lora_url и face_image_url
         uid = update.effective_user.id
         prof = load_profile(uid)
         av_name = get_current_avatar_name(prof)
-        # Восстановим ссылки (в т.ч. если presign просрочен — ты можешь отдельной кнопкой его обновить)
-        lora_url, face_url = await asyncio.to_thread(recover_lora_and_face_urls, uid, av_name)
-        if not lora_url:
-            raise RuntimeError("У аватара нет lora_url (HTTPS .safetensors). Попробуй /trainstatus или запусти обучение заново.")
 
-        # Запуск самого workflow (он сам перечитает профиль через переданные функции)
+        # 1) восстановим ссылки из профиля / Replicate
+        lora_url, face_url = await asyncio.to_thread(recover_lora_and_face_urls, uid, av_name)
+
+        # 2) если face_url пустой/протух — попробуем тихо обновить
+        def _is_https(u: str) -> bool:
+            return isinstance(u, str) and u.startswith(("http://", "https://"))
+
+        def _alive(u: str) -> bool:
+            try:
+                r = requests.head(u, timeout=8, allow_redirects=True)
+                if r.status_code == 200:
+                    return True
+                if r.status_code in (401, 403, 405):
+                    r2 = requests.get(u, timeout=8, stream=True)
+                    return r2.status_code == 200
+            except Exception:
+                pass
+            return False
+
+        if not face_url or (_is_https(face_url) and not _alive(face_url)):
+            try:
+                face_url = await asyncio.to_thread(prepare_face_embedding, uid, av_name)
+                prof = load_profile(uid)  # перечитаем профиль, на всякий
+            except Exception as e:
+                logger.warning("refresh face embedding failed: %s", e)
+
+        # 3) жёсткая валидация перед WF
+        face_kind = (
+            "https" if _is_https(face_url)
+            else ("file" if (isinstance(face_url, str) and os.path.exists(face_url)) else "none")
+        )
+        ok_lora = bool(lora_url and lora_url.endswith(".safetensors") and _is_https(lora_url))
+        ok_face = bool(face_kind in ("https", "file"))
+
+        logger.info(
+            "WORKFLOW DISPATCH: preset=%s avatar=%s lora_ok=%s face_ref=%s",
+            preset, av_name, ok_lora, face_kind
+        )
+
+        if not ok_lora:
+            raise RuntimeError("Нет валидной ссылки на веса LoRA (.safetensors). Проверь /trainstatus → status=succeeded.")
+        if not ok_face:
+            raise RuntimeError("Нет валидного FaceID-референса (ни presigned HTTPS, ни локального файла). Загрузите фронтальное фото ещё раз.")
+
+        # 4) запуск workflow
         return await _wf_start_generation_for_preset(
             update, context, preset,
             STYLE_PRESETS,
@@ -67,6 +107,7 @@ async def start_generation_via_workflow(
             get_current_avatar_name,
             get_avatar,
         )
+
 
 
 
