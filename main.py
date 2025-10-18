@@ -2093,8 +2093,10 @@ def start_lora_training(uid: int, avatar: str) -> str:
     return tid
 
 def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Optional[str]]:
-        """Возвращает (status, slug_with_version_if_ready, error_text_or_None)
-        и попутно обновляет профиль: status, finetuned_model, finetuned_version, lora_url.
+        """
+        Возвращает (status, slug_with_version_if_ready, error_text_or_None)
+        и по пути обновляет профиль: status, finetuned_model, finetuned_version, lora_url.
+        Супер-терпеливый парсер .safetensors — умеет список/словарь/вложенность и fallback к версии модели.
         """
         prof = load_profile(uid)
         av = get_avatar(prof, avatar)
@@ -2103,55 +2105,76 @@ def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Op
             return ("not_started", None, None)
 
         client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+
+        # --- 1) тянем объект тренировки ---
         try:
             tr = client.trainings.get(tid)
         except Exception as e:
             return ("unknown", None, str(e))
 
-        # --- безопасно достаем поля из объекта/словаря ---
+        # Безопасно достаём поля из объекта/словаря
         if isinstance(tr, dict):
-            status = tr.get("status", "unknown")
+            status      = tr.get("status", "unknown")
             destination = tr.get("destination") or av.get("finetuned_model")
-            err = tr.get("error") or tr.get("detail")
-            output = tr.get("output")
+            err         = tr.get("error") or tr.get("detail")
+            output      = tr.get("output")
         else:
-            status = getattr(tr, "status", "unknown")
+            status      = getattr(tr, "status", "unknown")
             destination = getattr(tr, "destination", None) or av.get("finetuned_model")
-            err = getattr(tr, "error", None) or getattr(tr, "detail", None)
-            output = getattr(tr, "output", None)
+            err         = getattr(tr, "error", None) or getattr(tr, "detail", None)
+            output      = getattr(tr, "output", None)
 
         av["status"] = status
         if destination:
             av["finetuned_model"] = destination
 
-        # --- helper: найти первую HTTPS-ссылку на .safetensors в произвольной структуре ---
+        # --- helper: универсальный поиск первой HTTPS-ссылки на .safetensors ---
         def _find_first_safetensors_url(data: Any) -> Optional[str]:
-            def _is_url(s: str) -> bool:
+            def _is_url(s: Any) -> bool:
                 return isinstance(s, str) and s.startswith(("http://", "https://"))
-            if isinstance(data, str):
-                return data if _is_url(data) and ".safetensors" in data else None
-            if isinstance(data, dict):
-                # прямые популярные поля у разных тренеров
-                for k in ("safetensors", "safetensors_url", "weights_url", "url"):
-                    v = data.get(k)
-                    if isinstance(v, str) and _is_url(v) and ".safetensors" in v:
-                        return v
-                # вложенные контейнеры
-                for v in data.values():
-                    got = _find_first_safetensors_url(v)
-                    if got:
-                        return got
-            if isinstance(data, (list, tuple)):
-                for v in data:
-                    got = _find_first_safetensors_url(v)
-                    if got:
-                        return got
+            try:
+                # строка
+                if isinstance(data, str):
+                    return data if _is_url(data) and ".safetensors" in data else None
+                # список / кортеж
+                if isinstance(data, (list, tuple)):
+                    for v in data:
+                        got = _find_first_safetensors_url(v)
+                        if got:
+                            return got
+                    return None
+                # словарь
+                if isinstance(data, dict):
+                    # частые ключи у разных тренеров
+                    for k in ("safetensors", "safetensors_url", "weights_url", "url", "model_url", "lora_url"):
+                        v = data.get(k)
+                        if _is_url(v) and ".safetensors" in v:
+                            return v
+                    # вложенные контейнеры
+                    for v in data.values():
+                        got = _find_first_safetensors_url(v)
+                        if got:
+                            return got
+                    return None
+            except Exception:
+                return None
             return None
 
-        # --- если succeeded: закрепляем версию и парсим ссылку на веса (.safetensors) ---
+        # чуть подсветим, что же пришло
+        try:
+            sample = None
+            if isinstance(output, (list, tuple)) and output:
+                sample = output[0]
+            elif isinstance(output, dict):
+                sample = {k: type(v).__name__ for k, v in list(output.items())[:5]}
+            logger.info("TRAIN OUT sample=%r", sample)
+        except Exception:
+            pass
+
+        # --- 2) если succeeded — закрепляем версию + достаём ссылку на веса ---
         slug_with_ver: Optional[str] = None
         if status == "succeeded" and destination:
-            # 1) закрепим версию модели
+            # 2.1) закрепим версию модели
             try:
                 model_obj = replicate.models.get(destination)
                 versions = list(model_obj.versions.list())
@@ -2165,34 +2188,25 @@ def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Op
                 logger.warning("Не удалось получить версию модели %s: %s", destination, e)
                 slug_with_ver = destination
 
-            # 2) попробуем достать HTTPS .safetensors
+            # 2.2) пытаемся вытащить HTTPS .safetensors из output тренировки
+            weights_url: Optional[str] = None
             try:
-                weights_url: Optional[str] = None
                 if output is not None:
-                    # типовые структуры:
-                    # {"weights": {"safetensors": "https://..."}}
-                    # {"artifacts": {"safetensors_url": "https://..."}}
-                    # {"lora": {"url": "https://.../weights.safetensors"}}
-                    # или просто плоско: {"safetensors": "https://..."}
-                    if isinstance(output, dict):
-                        for key in ("weights", "artifacts", "lora"):
-                            if key in output and isinstance(output[key], dict):
-                                weights_url = (
-                                    output[key].get("safetensors")
-                                    or output[key].get("safetensors_url")
-                                    or output[key].get("url")
-                                )
-                                if isinstance(weights_url, str) and weights_url.startswith(("http://","https://")) and ".safetensors" in weights_url:
-                                    break
-                        if not weights_url:
-                            cand = output.get("safetensors") or output.get("weights_url")
-                            if isinstance(cand, str) and cand.startswith(("http://","https://")) and ".safetensors" in cand:
-                                weights_url = cand
-                        if not weights_url:
-                            weights_url = _find_first_safetensors_url(output)
-                    else:
-                        # на всякий случай попробуем рекурсивно
-                        weights_url = _find_first_safetensors_url(output)
+                    weights_url = _find_first_safetensors_url(output)
+
+                # 2.3) fallback: иногда тренер не кладёт ссылку в output → пробуем в описании версии
+                if not weights_url:
+                    try:
+                        model_obj = replicate.models.get(destination)
+                        versions = list(model_obj.versions.list())
+                        if versions:
+                            v0 = versions[0]
+                            cand = getattr(v0, "openapi_schema", {}) or {}
+                            weights_url = _find_first_safetensors_url(cand)
+                            if not weights_url:
+                                weights_url = _find_first_safetensors_url(getattr(v0, "__dict__", {}))
+                    except Exception as e:
+                        logger.warning("Скан версии модели на .safetensors провалился: %s", e)
 
                 if weights_url and weights_url.startswith(("http://","https://")) and ".safetensors" in weights_url:
                     av["lora_url"] = weights_url
@@ -2204,6 +2218,7 @@ def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Op
 
         save_profile(uid, prof)
         return (status, slug_with_ver, err)
+
 
 
 def _pinned_slug(av: Dict[str, Any]) -> str:
