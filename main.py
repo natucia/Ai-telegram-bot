@@ -1023,6 +1023,79 @@ def _resolve_face_ref(uid: int, avatar: str) -> Optional[Union[str, IO[bytes]]]:
 
         return None
 
+def _get_or_refresh_face_ref(uid: int, avatar: str) -> Optional[Union[str, IO[bytes]]]:
+    """
+    Возвращает рабочий источник для FaceID:
+    - presigned HTTPS на лицо из av['face_embedding'], если живой
+    - локальный путь (FS)
+    - если нет/протух: пытается пересоздать через prepare_face_embedding(...)
+    Возвращает URL/путь/файловый объект — то, что принимает Replicate SDK.
+    """
+    # 1) пробуем существующее значение (embedding)
+    prof = load_profile(uid)
+    av = get_avatar(prof, avatar)
+    ref = av.get("face_embedding")
+
+    def _is_ok_https(u: str) -> bool:
+        return isinstance(u, str) and u.startswith(("http://", "https://"))
+
+    # Проверяем жив ли presigned (HEAD/GET)
+    def _alive(u: str) -> bool:
+        try:
+            r = requests.head(u, timeout=10, allow_redirects=True)
+            if r.status_code == 200:
+                return True
+            # AWS иногда 403 на HEAD — попробуем GET с небольшим range
+            if r.status_code in (401, 403, 405):
+                r2 = requests.get(u, timeout=10, stream=True)
+                return r2.status_code == 200
+        except Exception:
+            pass
+        return False
+
+    # a) HTTPS → жив?
+    if _is_ok_https(ref) and _alive(ref):
+        return ref
+
+    # b) локальный путь существует?
+    if isinstance(ref, str) and os.path.exists(ref):
+        return ref
+
+    # 2) нет валидного embedding → пробуем пересоздать
+    try:
+        new_ref = prepare_face_embedding(uid, avatar)
+        if _is_ok_https(new_ref) and _alive(new_ref):
+            return new_ref
+        if isinstance(new_ref, str) and os.path.exists(new_ref):
+            return new_ref
+    except Exception as e:
+        logger.warning("auto refresh face_embedding failed: %s", e)
+
+    # 3) fallback: возьмём первое референс-фото и подпишем при необходимости
+    try:
+        refs = list_ref_images(uid, avatar)
+        if not refs:
+            return None
+        key = refs[0]
+        if os.path.exists(key):           # FS
+            return key
+        if isinstance(key, str) and key.startswith("s3://") and s3_client:
+            _, _, bucket_and_key = key.partition("s3://")
+            bucket, _, obj_key = bucket_and_key.partition("/")
+            url = s3_client.generate_presigned_url(
+                "get_object", Params={"Bucket": bucket, "Key": obj_key},
+                ExpiresIn=int(os.getenv("FACE_ID_URL_TTL", "86400"))
+            )
+            # заодно сохраним как новый embedding
+            av["face_embedding"] = url
+            save_profile(uid, prof)
+            return url
+        if isinstance(key, str) and key.startswith(("http://","https://")):
+            return key
+    except Exception as e:
+        logger.warning("fallback face ref failed: %s", e)
+
+    return None
 
     # ---------- Инференс с FaceID (без bytes в JSON) ----------
 def generate_with_face_id_adapter(
@@ -2348,105 +2421,117 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ===
-async def start_generation_for_preset(
-            update: Update,
-            context: ContextTypes.DEFAULT_TYPE,
-            preset: str,
-            show_intro: bool = True
-        ):
-            uid = update.effective_user.id
-            prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-            av_name = get_current_avatar_name(prof)
-            av = get_avatar(prof, av_name)
+                async def start_generation_for_preset(
+                    update: Update,
+                    context: ContextTypes.DEFAULT_TYPE,
+                    preset: str,
+                    show_intro: bool = True
+                ):
+                    uid = update.effective_user.id
+                    prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+                    av_name = get_current_avatar_name(prof)
+                    av = get_avatar(prof, av_name)
 
-            # 1) если есть workflow — пробуем его первыми
-            if FACE_ID_ADAPTER_ENABLED and FACEID_WORKFLOW_AVAILABLE:
-                try:
-                    await start_generation_via_workflow(update, context, preset, show_intro=show_intro)
-                    return
-                except Exception as e:
-                    logger.warning("FaceID workflow path failed; fallback to direct: %s", e)
+                    # 0) пробуем workflow (если он присутствует в проекте)
+                    if FACE_ID_ADAPTER_ENABLED and FACEID_WORKFLOW_AVAILABLE:
+                        try:
+                            await start_generation_via_workflow(update, context, preset, show_intro=show_intro)
+                            return
+                        except Exception as e:
+                            logger.warning("FaceID workflow path failed; fallback to direct: %s", e)
 
-            # 2) прямой путь (финетюн)
-            if av.get("status") != "succeeded":
-                await update.effective_message.reply_text(
-                    f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
-                )
-                return
+                    # 1) проверка готовности финетюна
+                    if av.get("status") != "succeeded":
+                        await update.effective_message.reply_text(
+                            f"Модель «{av_name}» ещё не готова. Запусти обучение и дождись статуса succeeded."
+                        )
+                        return
 
-            model_slug = _pinned_slug(av) or av.get("finetuned_model")
-            if not model_slug:
-                await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
-                return
+                    # 2) резолв модели
+                    model_slug = _pinned_slug(av) or av.get("finetuned_model")
+                    if not model_slug:
+                        await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
+                        return
 
-            if preset not in STYLE_PRESETS:
-                await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
-                return
-            meta = STYLE_PRESETS[preset]
+                    # 3) стиль
+                    meta = STYLE_PRESETS.get(preset)
+                    if not meta:
+                        await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
+                        return
 
-            gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-            natural = bool(prof.get("natural", True))
-            pretty  = bool(prof.get("pretty", False))
-            avatar_token = av.get("token", "")
+                    gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+                    natural = bool(prof.get("natural", True))
+                    pretty  = bool(prof.get("pretty", False))
+                    avatar_token = av.get("token", "")
 
-            # --- ВАЖНО: берём референс лица (HTTPS presigned или локальный путь)
-            face_ref = None
-            if FACE_ID_ADAPTER_ENABLED:
-                try:
-                    face_ref = _resolve_face_ref(uid, av_name)
-                except Exception as e:
-                    logger.warning("resolve face ref failed: %s", e)
+                    # 4) АВТО-FACEID: пытаемся получить рабочий ref (и молча обновляем)
                     face_ref = None
-            logger.info("GEN PREP: avatar=%s preset=%s face_ref=%r", av_name, preset, bool(face_ref))
+                    if FACE_ID_ADAPTER_ENABLED:
+                        try:
+                            face_ref = _get_or_refresh_face_ref(uid, av_name)
+                        except Exception as e:
+                            logger.warning("get_or_refresh_face_ref error: %s", e)
+                            face_ref = None
+                    logger.info("GEN PREP: avatar=%s preset=%s use_faceid=%s", av_name, preset, bool(face_ref))
 
-            comps = _variants_for_preset(meta)
-            guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
+                    # 5) композиции + безопасные твики
+                    comps = _variants_for_preset(meta)
+                    guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
 
-            if show_intro:
-                await update.effective_message.reply_text(f"Генерирую «{preset}»…")
+                    if show_intro:
+                        await update.effective_message.reply_text(f"Генерирую «{preset}»…")
 
-            sent = 0
-            for i, comp in enumerate(comps):
-                try:
-                    comp_text, (w, h) = _comp_text_and_size(comp)
-                    if comp == "half" and i % 2 == 1:
-                        comp_text += ", camera slightly closer, gentle 5° head turn"
-                    elif comp == "closeup" and i % 2 == 1:
-                        comp_text += ", micro-reframe, eyes focus a touch brighter"
+                    sent = 0
+                    for i, comp in enumerate(comps):
+                        try:
+                            comp_text, (w, h) = _comp_text_and_size(comp)
+                            if comp == "half" and i % 2 == 1:
+                                comp_text += ", camera slightly closer, gentle 5° head turn"
+                            elif comp == "closeup" and i % 2 == 1:
+                                comp_text += ", micro-reframe, eyes focus a touch brighter"
 
-                    tone_text   = _tone_text(meta.get("tone", ""))
-                    theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
+                            tone_text   = _tone_text(meta.get("tone", ""))
+                            theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
 
-                    prompt, neg = build_prompt(
-                        meta, gender, comp_text, tone_text, theme_boost,
-                        natural, pretty, avatar_token
-                    )
+                            prompt, neg = build_prompt(
+                                meta, gender, comp_text, tone_text, theme_boost,
+                                natural, pretty, avatar_token
+                            )
 
-                    if preset == "Харли-Квинн":
-                        if gender.startswith("f"):
-                            prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
-                        else:
-                            prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
+                            if preset == "Харли-Квинн":
+                                if gender.startswith("f"):
+                                    prompt += ", " + ", ".join(meta.get("force_keywords_f", []))
+                                else:
+                                    prompt += ", " + ", ".join(meta.get("force_keywords_m", []))
 
-                    if extra_neg:
-                        neg = _neg_with_gender(neg, extra_neg)
+                            if extra_neg:
+                                neg = _neg_with_gender(neg, extra_neg)
 
-                    seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
+                            seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
 
-                    # --- ПЕРЕДАЁМ face_ref внутрь — это включает FaceID адаптер
-                    url = await asyncio.to_thread(
-                        generate_from_finetune,
-                        model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, face_ref
-                    )
-                    await update.effective_message.reply_photo(url)
-                    sent += 1
+                            # если по какой-то причине face_ref None (например, S3 отвалился),
+                            # делаем одну попытку тихого обновления и пробуем снова
+                            local_face_ref = face_ref
+                            if FACE_ID_ADAPTER_ENABLED and not local_face_ref:
+                                try:
+                                    local_face_ref = _get_or_refresh_face_ref(uid, av_name)
+                                except Exception:
+                                    local_face_ref = None
 
-                except Exception as e:
-                    logger.exception("gen failed for comp=%s", comp)
-                    await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
+                            url = await asyncio.to_thread(
+                                generate_from_finetune,
+                                model_slug, prompt, GEN_STEPS, guidance, seed, w, h, neg, local_face_ref
+                            )
+                            await update.effective_message.reply_photo(url)
+                            sent += 1
 
-            if sent == 0:
-                await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
+                        except Exception as e:
+                            logger.exception("gen failed for comp=%s", comp)
+                            await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
+
+                    if sent == 0:
+                        await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
+
 
 
 
