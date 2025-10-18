@@ -109,7 +109,9 @@ NEGATIVE_PROMPT_BASE = (
     "distorted proportions, vertical face elongation, face slimming, stretched chin, narrow jaw, "
     "lens distortion, fisheye, warping, stretched face, perspective distortion, "
     "plain selfie, flash photo, harsh shadows, denoise artifacts, over-sharpened, waxy highlight roll-off, "
-    "skin smoothing, porcelain texture, HDR glamour, excessive clarity"
+    "skin smoothing, porcelain texture, HDR glamour, excessive clarity, "
+    "asian facial features, korean features, japanese features, chinese features, "
+    "epicanthic folds, monolids, flat nasal bridge, different ethnicity, race change"
 )
 
 NO_FULL_BODY_NEG = (
@@ -692,13 +694,24 @@ def _oval_lock() -> str:
             "preserve original jawline curvature and cheekbone width")
 
 def _ethnicity_lock() -> str:
-    return (
-        "preserve the same ethnicity as in the training photos, "
-        "do not alter eye shape or eyelid crease presence, "
-        "preserve inner/outer canthus angle (no canthal tilt change), "
-        "preserve nasal bridge shape and width, "
-        "preserve lip thickness proportions and philtrum length"
-    )
+        return (
+            "preserve the exact same ethnicity as in the training photos, "
+            "do not alter eye shape or eyelid crease presence, "
+            "preserve inner/outer canthus angle (no canthal tilt change), "
+            "preserve nasal bridge shape and width, "
+            "preserve lip thickness proportions and philtrum length, "
+            "keep original skin undertones, maintain exact facial bone structure, "
+            "no epicanthic fold changes, no monolid-to-double-eyelid changes, "
+            "no nasal bridge narrowing or widening, no lip thickness alterations"
+        )
+
+def _anti_ethnicity_drift() -> str:
+        return (
+            "ethnicity drift, asian facial features, korean features, japanese features, "
+            "chinese features, southeast asian features, epicanthic folds, monolids, "
+            "flat nasal bridge, wider cheekbones, different ethnicity, race change, "
+            "skin tone lightening, skin tone darkening, undertone shift"
+        )
 
 def _anti_distort() -> str:
     return "no fisheye, no lens distortion, no warping, natural perspective, proportional head size"
