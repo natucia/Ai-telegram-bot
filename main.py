@@ -40,26 +40,34 @@ except Exception as _imp_err:
     FACEID_WORKFLOW_AVAILABLE = False
     logger.warning("FaceID workflow integration unavailable: %s", _imp_err)
 
-async def start_generation_via_workflow(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    preset: str,
-    show_intro: bool = False  # только для совместимости
-):
-    """
-    Унифицированный вызов workflow-генерации.
-    Адаптирует сигнатуру из faceid_workflow_integration.py
-    """
-    if not (_wf_start_generation_for_preset and FACEID_WORKFLOW_AVAILABLE):
-        raise RuntimeError("FaceID workflow не подключён или не экспортирует start_generation_for_preset")
 
-    return await _wf_start_generation_for_preset(
-        update, context, preset,
-        STYLE_PRESETS,
-        load_profile,
-        get_current_avatar_name,
-        get_avatar,
-    )
+async def start_generation_via_workflow(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        preset: str,
+        show_intro: bool = False,
+    ):
+        if not (_wf_start_generation_for_preset and FACEID_WORKFLOW_AVAILABLE):
+            raise RuntimeError("FaceID workflow не подключён или не экспортирует start_generation_for_preset")
+
+        # перед запуском workflow гарантируем, что есть lora_url и face_image_url
+        uid = update.effective_user.id
+        prof = load_profile(uid)
+        av_name = get_current_avatar_name(prof)
+        # Восстановим ссылки (в т.ч. если presign просрочен — ты можешь отдельной кнопкой его обновить)
+        lora_url, face_url = await asyncio.to_thread(recover_lora_and_face_urls, uid, av_name)
+        if not lora_url:
+            raise RuntimeError("У аватара нет lora_url (HTTPS .safetensors). Попробуй /trainstatus или запусти обучение заново.")
+
+        # Запуск самого workflow (он сам перечитает профиль через переданные функции)
+        return await _wf_start_generation_for_preset(
+            update, context, preset,
+            STYLE_PRESETS,
+            load_profile,
+            get_current_avatar_name,
+            get_avatar,
+        )
+
 
 
 def _stable_seed(*parts:str) -> int:
@@ -264,6 +272,88 @@ def _photo_look(im: Image.Image) -> Image.Image:
     return im
 
 # --- FS utils (локальный fallback) ---
+def _find_first_https_safetensors(data: Any) -> Optional[str]:
+    def rec(x: Any) -> Optional[str]:
+        if isinstance(x, str):
+            if x.startswith(("http://", "https://")) and x.lower().endswith(".safetensors"):
+                return x
+            return None
+        if isinstance(x, dict):
+            # самые частые ключи
+            for k in ("safetensors", "safetensors_url", "weights_url", "url"):
+                v = x.get(k)
+                got = rec(v)
+                if got:
+                    return got
+            for v in x.values():
+                got = rec(v)
+                if got:
+                    return got
+        if isinstance(x, (list, tuple)):
+            for v in x:
+                got = rec(v)
+                if got:
+                    return got
+        return None
+    return rec(data)
+
+
+def recover_lora_and_face_urls(uid: int, av_name: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Пытается заполнить av['lora_url'] (HTTPS .safetensors) и av['face_image_url'].
+    Возвращает (lora_url, face_image_url), даже если они уже были.
+    """
+    prof = load_profile(uid); av = get_avatar(prof, av_name)
+    lora_url = av.get("lora_url")
+    face_url = av.get("face_image_url") or av.get("face_embedding")
+
+    # 1) LORA URL из тренировки Replicate
+    if not lora_url:
+        tid = av.get("training_id")
+        try:
+            client = Client(api_token=os.environ["REPLICATE_API_TOKEN"])
+            tr = client.trainings.get(tid) if tid else None
+            # достаём из output любую https .safetensors
+            if tr is not None:
+                output = getattr(tr, "output", None)
+                if isinstance(tr, dict):
+                    output = tr.get("output")
+                cand = _find_first_https_safetensors(output)
+                if cand:
+                    lora_url = cand
+        except Exception as e:
+            logger.warning("recover_lora_and_face_urls: fetch training output failed: %s", e)
+
+        # Если всё ещё нет — попробуем из destination модели (иногда trainer кладёт ссылку в model card output)
+        if not lora_url:
+            try:
+                dest = av.get("finetuned_model")
+                if dest:
+                    model_obj = replicate.models.get(dest)
+                    versions = list(model_obj.versions.list())
+                    if versions:
+                        v0 = versions[0]
+                        # Некоторые тренеры дублируют ссылки в полях версии; проверим как строку/словарь
+                        lora_url = _find_first_https_safetensors(getattr(v0, "openapi_schema", {}) or {})
+                        if not lora_url:
+                            lora_url = _find_first_https_safetensors(getattr(v0, "__dict__", {}))
+            except Exception as e:
+                logger.warning("recover_lora_and_face_urls: scan model version failed: %s", e)
+
+        if lora_url:
+            av["lora_url"] = lora_url
+
+    # 2) FACE IMAGE URL: если нет — используем уже подготовленный presigned из main.prepare_face_embedding
+    if not face_url and av.get("face_embedding"):
+        face_url = av["face_embedding"]
+        av["face_image_url"] = face_url
+
+    save_profile(uid, prof)
+    return lora_url, face_url
+
+
+
+
 def user_dir(uid:int) -> Path:
     p = DATA_DIR / str(uid); p.mkdir(parents=True, exist_ok=True); return p
 
