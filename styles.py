@@ -848,61 +848,49 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "half", "tone": "warm"
     },
     "Русалка": {
-        "desc": "РЕАЛИСТИЧНАЯ волшебная русалка с настоящим рыбьим хвостом, покрытым мелкой чешуёй, в кристально чистой лагуне. ОБЯЗАТЕЛЬНО: фиолетовые ракушки на груди, детализированный хвост с чешуёй как у реальной рыбы, плавающая поза, Флаундер и Себастьян рядом.",
-        "role_f": "realistic mermaid with fish-scale tail and purple seashells",
-        "role": "realistic merman with fish-scale tail",
-        "outfit_f": "PURPLE SEASHELLS TOP MANDATORY, flowing hair with pearls",
-        "outfit": "bare torso, aquatic accessories",
-        "props": (
-            "REALISTIC FISH-LIKE MERMAID TAIL WITH DETAILED INDIVIDUAL SCALES VISIBLE, "
-            "PURPLE SEASHELLS CLEARLY VISIBLE ON CHEST, "
-            "FLOUNDER FISH SWIMMING CLOSE, SEBASTIAN CRAB ON ROCK OR SHOULDER, "
-            "SCHOOLS OF TROPICAL FISH, BUBBLES, SWIMMING POSE IN WATER"
-        ),
-        "bg": (
-            "REALISTIC UNDERWATER LAGOON WITH CORAL REEF, "
-            "SUNBEAMS STREAKING THROUGH WATER, CLEAR TURQUOISE WATER, "
-            "NATURAL MARINE ENVIRONMENT"
-        ),
-        "comp": "full", 
+        "desc": "Сказочная, но ФОТОРЕАЛЬНАЯ русалка в прозрачной лагуне. Кадр по пояс, скромно. Хвост — как у настоящей рыбы: перекрывающиеся чешуйки, блик, полупрозрачные плавники.",
+        "role_f": "mermaid princess underwater, tasteful and modest",
+        "role": "merperson underwater, tasteful and modest",
+
+        "outfit_f": "sea-green seashell-motif fabric top with straps, fully covered; flowing hair with tiny pearls",
+        "outfit": "sea-green scale-pattern top with straps, fully covered",
+
+        "props": "realistic fish tail visible below waist; overlapping micro-scales; translucent caudal and dorsal fin rays; tiny tropical fish; small red crab on coral; gentle bubbles",
+        "bg": "clear underwater lagoon with corals, sunbeams through water, natural marine life",
+
+        "comp": "waistup",
         "tone": "vibrant",
-        "style": "realistic, photorealistic, detailed",
+        "style": "photorealistic, detailed, natural textures",
 
-        # ЖЕСТКИЕ ТРЕБОВАНИЯ
         "required_attributes": [
-            "realistic mermaid tail with fish scales", "underwater", 
-            "purple seashell top", "swimming pose", "detailed scales"
+            "underwater environment",
+            "mermaid/merman tail visible below waist",
+            "overlapping fish scales with varied size and micro-texture",
+            "specular highlights along scales and lateral line",
+            "translucent fin membranes with visible fin rays",
+            "modest fully covered top",
+            "waist-up framing"
         ],
 
-        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
         "force_keywords": [
-            "PHOTOREALISTIC", "REALISTIC MERMAID WITH FISH SCALES", 
-            "DETAILED INDIVIDUAL FISH SCALES ON TAIL", "PURPLE SEASHELLS BIKINI TOP", 
-            "UNDERWATER SWIMMING POSE", "FLOATING IN WATER",
-            "FLOUNDER FISH", "SEBASTIAN CRAB", "CORAL REEF",
-            "SUNBEAMS THROUGH WATER", "NATURAL MARINE LIFE",
-            "NO SITTING", "REALISTIC WATER EFFECTS"
+            "PHOTOREALISTIC UNDERWATER PORTRAIT",
+            "WAIST-UP SHOT, NOT FULL BODY",
+            "REAL FISH TAIL WITH OVERLAPPING SCALES",
+            "MICRO-SCALE TEXTURE, SUBTLE IMPERFECTIONS, NATURAL COLOR VARIATION",
+            "IRIDESCENT SPECULAR HIGHLIGHTS ALONG SCALES",
+            "VISIBLE LATERAL LINE AND SCALE ROWS",
+            "TRANSLUCENT FIN MEMBRANES WITH FIN RAYS",
+            "CLEAR TURQUOISE WATER, SUNRAYS, CORAL REEF",
+            "SMALL TROPICAL FISH, RED CRAB ON CORAL"
         ],
 
-        # ЗАПРЕТЫ - ужесточенные
         "negative": (
-            "sitting, seated, on rock, on chair, on throne, on surface, "
-            "land, ground, walking, legs, feet, shoes, "
-            "beach, shore, boat, surface, above water, "
-            "dark water, murky, no tail, drawn tail, fake tail, cartoon tail, "
-            "no seashell top, bare chest without shells, wrong color shells, "
-            "standing, standing pose, anime, cartoon, drawing, painting, "
-            "smooth tail, no scales, plastic look"
-        ),
-
-        # Особые указания для женщин
-        "force_keywords_f": [
-            "PURPLE SEASHELLS TOP CLEARLY VISIBLE AND COVERING CHEST",
-            "REALISTIC FISH-SCALE TAIL WITH INDIVIDUAL SCALES DETAIL",
-            "FLOATING SWIMMING POSE IN WATER",
-            "PHOTOREALISTIC DETAILS",
-            "NATURAL LIGHTING UNDERWATER"
-        ]
+            "cartoon, anime, 3d render, cgi, painted, illustration, toy, plastic, "
+            "smooth tail, uniform texture, low detail, airbrushed, blurry, "
+            "bikini, bra, revealing, cleavage, nipples, nudity, lingerie, suggestive, "
+            "sitting on rock, chair, throne, beach, above water, "
+            "murky water, dark scene, full body, legs, feet, high slit"
+        )
     },
 
     # ===== ДИЗНЕЕВСКИЕ ВАЙБЫ / PIXAR (стилизация) =====
@@ -1097,9 +1085,8 @@ THEME_BOOST = {
         "SUNSET GOLDEN HOUR LIGHTING, SAVANNA GRASS TEXTURE, ACACIA TREE SILHOUETTES"
     ),
     "Русалка": (
-        "IRIDESCENT SCALE TEXTURES, SUNBEAM CAUSTICS PATTERNS, "
-        "WATER SURFACE GLIMMER, CORAL DETAILS, FISH SCALE REFLECTIONS, "
-        "BUBBLE TRAILS, FLOWING HAIR IN WATER, PEARL LUSTER"
+        "sunbeam caustics, iridescent scale micro-texture, tiny specular glints on overlapping scales, "
+        "subtle lateral line, translucent fin rays, floating particles, gentle bubble trails"
     ),
     "Атлантида": "water caustics, pearl sheen, ancient glyphs",
     "Винтажный цирк": "sawdust on floor, tent fabric texture, vintage poster art",
