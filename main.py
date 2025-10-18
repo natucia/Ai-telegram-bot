@@ -2147,7 +2147,117 @@ def check_training_status(uid: int, avatar: str) -> Tuple[str, Optional[str], Op
             av["finetuned_model"] = destination
 
         # --- helper: найти первую HTTPS-ссылку на .safetensors в произвольной структуре ---
-        def _find_first_safetensors_url(data: Any) -> Optional[str]:
+def _model_input_keys(slug_with_ver: str) -> set:
+        """
+        Возвращает множество имён входных параметров модели (по OpenAPI).
+        """
+        try:
+            mslug, _, ver = slug_with_ver.partition(":")
+            model = replicate.models.get(mslug)
+            version = model.versions.get(ver or None) if ver else list(model.versions.list())[0]
+            schema = getattr(version, "openapi_schema", None) or {}
+            props = (((schema.get("components") or {}).get("schemas") or {})
+                     .get("Input", {}).get("properties", {}))
+            return set(props.keys())
+        except Exception as e:
+            logger.warning("model_input_keys failed for %s: %s", slug_with_ver, e)
+            return set()
+
+def _supports_faceid(keys: set) -> bool:
+        cand = {"face_image", "ip_adapter_image", "reference_image", "faceid_image", "faceid"}
+        return bool(keys & cand)
+
+def _supports_lora(keys: set) -> bool:
+        cand = {"lora_url", "lora_weights", "weights_url", "lora_path"}
+        return bool(keys & cand)
+
+
+def _select_backend_for_faceid(av: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    Возвращает (slug, mode):
+      - mode == "finetune"  → использовать закреплённую модель аватара
+      - mode == "workflow"  → переключиться на FACEID_WORKFLOW_SLUG и прокинуть lora_url
+    """
+    # 1) базовый слаг
+    base = _pinned_slug(av) or av.get("finetuned_model") or ""
+    if not base:
+        raise RuntimeError("Не найдена финетюн-модель.")
+    base_ver = resolve_model_version(base)
+    base_keys = _model_input_keys(base_ver)
+
+    if _supports_faceid(base_keys):
+        return base_ver, "finetune"
+
+    # 2) fallback на workflow
+    wf = os.getenv("FACEID_WORKFLOW_SLUG", "").strip()
+    if not wf:
+        raise RuntimeError("Активная модель не поддерживает FaceID, и не задан FACEID_WORKFLOW_SLUG.")
+    wf_ver = resolve_model_version(wf)
+    wf_keys = _model_input_keys(wf_ver)
+    if not (_supports_faceid(wf_keys) and _supports_lora(wf_keys)):
+        raise RuntimeError("FACEID_WORKFLOW_SLUG не поддерживает face_image+lora_url.")
+    return wf_ver, "workflow"
+
+
+def _pick_key(keys:set, variants:List[str], default:str=None) -> str:
+    for v in variants:
+        if v in keys: return v
+    return default or variants[0]
+
+def _make_inputs_common(prompt, neg, w, h, steps, guidance, seed):
+    return {
+        "prompt": prompt + AESTHETIC_SUFFIX,
+        "negative_prompt": neg,
+        "width": w, "height": h,
+        "num_inference_steps": min(MAX_STEPS, steps),
+        "guidance_scale": guidance,
+        "seed": seed,
+    }
+
+def generate_faceid_any_backend(
+    slug_with_ver: str,
+    mode: str,                    # "finetune" | "workflow"
+    prompt: str,
+    neg: str,
+    w: int, h: int,
+    steps: int,
+    guidance: float,
+    seed: int,
+    face_ref: Union[str, IO[bytes]],
+    lora_url: Optional[str] = None,
+    lora_scale: float = 0.85
+) -> str:
+    """
+    Одна функция на оба режима. Авто-маппинг имён входов.
+    """
+    keys = _model_input_keys(slug_with_ver)
+    inputs = _make_inputs_common(prompt, neg, w, h, steps, guidance, seed)
+
+    # face image param
+    face_key = _pick_key(keys, ["face_image","ip_adapter_image","reference_image","faceid_image","faceid"])
+    inputs[face_key] = face_ref
+    # иногда нужен вес адаптера/шум
+    if "ip_adapter_scale" in keys: inputs["ip_adapter_scale"] = FACE_ID_WEIGHT
+    if "face_id_noise" in keys:    inputs["face_id_noise"]  = FACE_ID_NOISE
+
+    # workflow mode → обязательно лора
+    if mode == "workflow":
+        if not lora_url:
+            raise RuntimeError("Для workflow требуется lora_url.")
+        lora_key = _pick_key(keys, ["lora_url","lora_weights","weights_url"])
+        inputs[lora_key] = lora_url
+        if "lora_scale" in keys: inputs["lora_scale"] = lora_scale
+
+    # Запуск через наш надёжный раннер с таймаутом/пуллингом
+    out = _run_replicate_prediction(slug_with_ver, inputs)
+    url = extract_any_url(out)
+    if not url:
+        raise RuntimeError("Empty output (faceid any backend)")
+    return url
+
+
+
+def _find_first_safetensors_url(data: Any) -> Optional[str]:
             def _is_url(s: str) -> bool:
                 return isinstance(s, str) and s.startswith(("http://", "https://"))
             if isinstance(data, str):
@@ -2478,124 +2588,154 @@ def _identity_safe_tune(preset_key: str, guidance: float, comps: List[str]) -> T
     return g_safe, comps_safe, extra_neg
 
                 # === ПРЯМАЯ ГЕНЕРАЦИЯ С АВТО-ПЕРЕЗАПУСКОМ УПАВШЕГО КАДРА ===
+                            # === ПРЯМАЯ ГЕНЕРАЦИЯ С ЖЁСТКИМ FACEID, БЭКЕНД-ВЫБОРОМ И АВТО-РЕТРАЕМ КАДРОВ ==
 async def start_generation_for_preset(
-                            update: Update,
-                            context: ContextTypes.DEFAULT_TYPE,
-                            preset: str,
-                            show_intro: bool = True
-                        ):
-                        uid = update.effective_user.id
-                        prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
-                        av_name = get_current_avatar_name(prof)
-                        av = get_avatar(prof, av_name)
+                                    update: Update,
+                                    context: ContextTypes.DEFAULT_TYPE,
+                                    preset: str,
+                                    show_intro: bool = True
+                                ):
+                                uid = update.effective_user.id
+                                prof = load_profile(uid); prof["_uid_hint"] = uid; save_profile(uid, prof)
+                                av_name = get_current_avatar_name(prof)
+                                av = get_avatar(prof, av_name)
 
-                        if av.get("status") != "succeeded":
-                            await update.effective_message.reply_text(
-                                f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
-                            )
-                            return
+                                # 0) проверка готовности
+                                if av.get("status") != "succeeded":
+                                    await update.effective_message.reply_text(
+                                        f"Модель «{av_name}» ещё не готова. /trainid → /trainstatus = succeeded."
+                                    )
+                                    return
 
-                        model_slug = _pinned_slug(av) or av.get("finetuned_model")
-                        if not model_slug:
-                            await update.effective_message.reply_text("Не найден финетюн модели у аватара.")
-                            return
+                                # 1) Выбор бэкенда, который УМЕЕТ FaceID
+                                try:
+                                    backend_slug, mode = _select_backend_for_faceid(av)  # ("...:version", "finetune"|"workflow")
+                                except Exception as e:
+                                    await update.effective_message.reply_text(f"⚠️ Не удалось выбрать бэкенд: {e}")
+                                    return
 
-                        if preset not in STYLE_PRESETS:
-                            await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
-                            return
-                        meta = STYLE_PRESETS[preset]
+                                # Если используем workflow — нужен URL весов LoRA
+                                lora_url = av.get("lora_url") if mode == "workflow" else None
+                                if mode == "workflow" and not lora_url:
+                                    await update.effective_message.reply_text(
+                                        "⚠️ Не найден URL весов LoRA для workflow. Перезапусти обучение или обнови статус."
+                                    )
+                                    return
 
-                        gender  = (av.get("gender") or prof.get("gender") or "female").lower()
-                        natural = bool(prof.get("natural", True))
-                        pretty  = bool(prof.get("pretty", False))
-                        avatar_token = av.get("token", "")
+                                # 2) Глобальные флаги
+                                gender  = (av.get("gender") or prof.get("gender") or "female").lower()
+                                natural = bool(prof.get("natural", True))
+                                pretty  = bool(prof.get("pretty", False))
+                                avatar_token = av.get("token", "")
 
-                        comps = _variants_for_preset(meta)
-                        guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
+                                # 3) Композиции и identity-safe твики
+                                if preset not in STYLE_PRESETS:
+                                    await update.effective_message.reply_text(f"Стиль «{preset}» не найден.")
+                                    return
+                                meta = STYLE_PRESETS[preset]
 
-                        # === строго требуем FaceID (если включён режим) ===
-                        face_ref: Optional[Union[str, IO[bytes]]] = None
-                        if FACE_ID_ADAPTER_ENABLED:
-                            face_ref = await asyncio.to_thread(ensure_face_ref, uid, av_name)
-                            if FACEID_ENFORCE and not _face_ref_is_valid(face_ref):
-                                await update.effective_message.reply_text(
-                                    "⚠️ Face ID не подхватился. Я попыталась восстановить его, но доступ к референсу лица всё ещё недоступен.\n\n"
-                                    "Проверь фото-набор (нужно 10 фронтальных без фильтров) или запусти обновление эмбеддинга в меню Face ID."
-                                )
-                                return
+                                comps = _variants_for_preset(meta)  # например ["half","half","closeup"]
+                                guidance, comps, extra_neg = _identity_safe_tune(preset, GEN_GUIDANCE, comps)
 
-                        if show_intro:
-                            await update.effective_message.reply_text(f"Генерирую «{preset}»…")
-
-                        FRAME_RETRY_ATTEMPTS = int(os.getenv("FRAME_RETRY_ATTEMPTS", "1"))
-                        RETRY_SEED_JITTER    = int(os.getenv("RETRY_SEED_JITTER", "99991"))
-                        RETRY_NOTE           = os.getenv("FRAME_RETRY_NOTE", "1").lower() in ("1","true","yes","y")
-
-                        def _seed_try(base_seed: int, attempt_idx: int) -> int:
-                            return (base_seed + RETRY_SEED_JITTER * max(0, attempt_idx)) & 0xFFFFFFFF
-
-                        sent = 0
-                        for i, comp in enumerate(comps):
-                            try:
-                                comp_text, (w, h) = _comp_text_and_size(comp)
-                                if comp == "half" and i % 2 == 1:
-                                    comp_text += ", camera slightly closer, gentle 5° head turn"
-                                elif comp == "closeup" and i % 2 == 1:
-                                    comp_text += ", micro-reframe, eyes focus a touch brighter"
-
-                                tone_text   = _tone_text(meta.get("tone", ""))
-                                theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
-
-                                prompt, neg = build_prompt(
-                                    meta, gender, comp_text, tone_text, theme_boost,
-                                    natural, pretty, avatar_token
-                                )
-                                if preset == "Харли-Квинн":
-                                    gcur = (av.get("gender") or prof.get("gender") or "female").lower()
-                                    prompt += ", " + ", ".join(meta.get("force_keywords_f" if gcur.startswith("f") else "force_keywords_m", []))
-
-                                if extra_neg:
-                                    neg = _neg_with_gender(neg, extra_neg)
-
-                                base_seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
-
-                                last_err = None
-                                attempts_total = 1 + max(0, FRAME_RETRY_ATTEMPTS)
-                                for attempt in range(attempts_total):
-                                    cur_seed = _seed_try(base_seed, attempt)
-
-                                    # На всякий случай проверим, что face_ref всё ещё валиден (presigned мог протухнуть)
-                                    if FACE_ID_ADAPTER_ENABLED:
-                                        if not _face_ref_is_valid(face_ref):
-                                            face_ref = await asyncio.to_thread(ensure_face_ref, uid, av_name)
-                                            if FACEID_ENFORCE and not _face_ref_is_valid(face_ref):
-                                                last_err = RuntimeError("Face ID reference unavailable")
-                                                break
-
-                                    try:
-                                        url = await asyncio.to_thread(
-                                            generate_from_finetune,
-                                            model_slug, prompt, GEN_STEPS, guidance, cur_seed, w, h, neg, face_ref
+                                # 4) Жёстко требуем FaceID и, если что, восстанавливаем референс
+                                face_ref: Optional[Union[str, IO[bytes]]] = None
+                                if FACE_ID_ADAPTER_ENABLED:
+                                    face_ref = await asyncio.to_thread(ensure_face_ref, uid, av_name)
+                                    if FACEID_ENFORCE and not _face_ref_is_valid(face_ref):
+                                        await update.effective_message.reply_text(
+                                            "⚠️ Face ID не подхватился. Я попыталась восстановить доступ к референсу лица, "
+                                            "но ссылка/файл недоступны. Проверь набор фото и попробуй обновить Face ID в меню."
                                         )
-                                        if attempt > 0 and RETRY_NOTE:
-                                            await update.effective_message.reply_text(f"⏱️ {comp}: перезапустила — готово.")
-                                        await update.effective_message.reply_photo(url)
-                                        sent += 1
-                                        break
+                                        return
+
+                                if show_intro:
+                                    await update.effective_message.reply_text(f"Генерирую «{preset}»…")
+
+                                # 5) Настройки перезапуска кадров
+                                FRAME_RETRY_ATTEMPTS = int(os.getenv("FRAME_RETRY_ATTEMPTS", "1"))   # доп. попыток поверх основной
+                                RETRY_SEED_JITTER    = int(os.getenv("RETRY_SEED_JITTER", "99991"))  # смещение сида между перезапусками
+                                RETRY_NOTE           = os.getenv("FRAME_RETRY_NOTE", "1").lower() in ("1","true","yes","y")
+                                LORA_SCALE           = float(os.getenv("FACEID_WORKFLOW_LORA_SCALE", "0.85"))
+
+                                def _seed_try(base_seed: int, attempt_idx: int) -> int:
+                                    return (base_seed + RETRY_SEED_JITTER * max(0, attempt_idx)) & 0xFFFFFFFF
+
+                                sent = 0
+                                for i, comp in enumerate(comps):
+                                    try:
+                                        # 5.1 Композиция и лёгкая вариативность
+                                        comp_text, (w, h) = _comp_text_and_size(comp)
+                                        if comp == "half" and i % 2 == 1:
+                                            comp_text += ", camera slightly closer, gentle 5° head turn"
+                                        elif comp == "closeup" and i % 2 == 1:
+                                            comp_text += ", micro-reframe, eyes focus a touch brighter"
+
+                                        tone_text   = _tone_text(meta.get("tone", ""))
+                                        theme_boost = _safe_theme_boost(THEME_BOOST.get(preset, ""))
+
+                                        # 5.2 Промпт с «умной автоматикой рта»
+                                        prompt, neg = build_prompt(
+                                            meta, gender, comp_text, tone_text, theme_boost,
+                                            natural, pretty, avatar_token
+                                        )
+
+                                        # Спецлогика для Харли/Джокера (если используешь такие поля)
+                                        if preset == "Харли-Квинн":
+                                            gcur = (av.get("gender") or prof.get("gender") or "female").lower()
+                                            force_keys = meta.get("force_keywords_f" if gcur.startswith("f") else "force_keywords_m", [])
+                                            if force_keys:
+                                                prompt += ", " + ", ".join(force_keys)
+
+                                        if extra_neg:
+                                            neg = _neg_with_gender(neg, extra_neg)
+
+                                        base_seed = _stable_seed(str(uid), av_name, preset, f"{comp}:{i}")
+
+                                        # 5.3 Основная попытка + перезапуски ТОЛЬКО для этого кадра
+                                        last_err = None
+                                        attempts_total = 1 + max(0, FRAME_RETRY_ATTEMPTS)
+                                        for attempt in range(attempts_total):
+                                            cur_seed = _seed_try(base_seed, attempt)
+
+                                            # На всякий проверим, что face_ref ещё живой (presigned мог протухнуть)
+                                            if FACE_ID_ADAPTER_ENABLED:
+                                                if not _face_ref_is_valid(face_ref):
+                                                    face_ref = await asyncio.to_thread(ensure_face_ref, uid, av_name)
+                                                    if FACEID_ENFORCE and not _face_ref_is_valid(face_ref):
+                                                        last_err = RuntimeError("Face ID reference unavailable")
+                                                        break
+
+                                            try:
+                                                # --- единый генератор, умеющий finetune и workflow (оба с FaceID) ---
+                                                url = await asyncio.to_thread(
+                                                    generate_faceid_any_backend,
+                                                    backend_slug, mode,
+                                                    prompt, neg, w, h, GEN_STEPS, guidance, cur_seed,
+                                                    face_ref,
+                                                    lora_url=lora_url,
+                                                    lora_scale=LORA_SCALE
+                                                )
+                                                if attempt > 0 and RETRY_NOTE:
+                                                    await update.effective_message.reply_text(f"⏱️ {comp}: перезапустила — готово.")
+                                                await update.effective_message.reply_photo(url)
+                                                sent += 1
+                                                break
+                                            except Exception as e:
+                                                last_err = e
+                                                logger.warning("gen failed for comp=%s (try %d/%d): %s", comp, attempt+1, attempts_total, e)
+                                                await asyncio.sleep(0.1)
+
+                                        # все попытки исчерпаны — сообщаем и идём дальше
+                                        if last_err and sent == i:
+                                            await update.effective_message.reply_text(f"⚠️ Пропустила кадр {comp}: {last_err}")
+
                                     except Exception as e:
-                                        last_err = e
-                                        logger.warning("gen failed for comp=%s (try %d/%d): %s", comp, attempt+1, attempts_total, e)
-                                        await asyncio.sleep(0.1)
+                                        logger.exception("gen fatal for comp=%s", comp)
+                                        await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
 
-                                if last_err and sent == i:
-                                    await update.effective_message.reply_text(f"⚠️ Пропустила кадр {comp}: {last_err}")
+                                if sent == 0:
+                                    await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
 
-                            except Exception as e:
-                                logger.exception("gen fatal for comp=%s", comp)
-                                await update.effective_message.reply_text(f"⚠️ Ошибка генерации ({comp}): {e}")
-
-                        if sent == 0:
-                            await update.effective_message.reply_text("Не удалось сгенерировать ни одного изображения.")
 
 
 
