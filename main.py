@@ -2216,31 +2216,33 @@ def _supports_lora(keys: set) -> bool:
         return bool(keys & cand)
 
 
-def _select_backend_for_faceid(av: Dict[str, Any]) -> Tuple[str, str]:
-    """
-    Возвращает (slug, mode):
-      - mode == "finetune"  → использовать закреплённую модель аватара
-      - mode == "workflow"  → переключиться на FACEID_WORKFLOW_SLUG и прокинуть lora_url
-    """
-    # 1) базовый слаг
-    base = _pinned_slug(av) or av.get("finetuned_model") or ""
-    if not base:
-        raise RuntimeError("Не найдена финетюн-модель.")
-    base_ver = resolve_model_version(base)
-    base_keys = _model_input_keys(base_ver)
+def _select_backend_for_faceid(av: Dict[str, Any]) -> Tuple[Optional[str], str]:
+        """
+        Определяет, какой backend использовать для FaceID:
+          - "finetune" → использовать LoRA-финетюн (если модель поддерживает FaceID)
+          - "workflow" → использовать встроенный FaceID workflow из faceid_workflow_integration.py
+        """
 
-    if _supports_faceid(base_keys):
-        return base_ver, "finetune"
+        # --- 1) Проверяем, есть ли зафиксированный финетюн
+        base = av.get("finetuned_version") or av.get("pinned_version") or av.get("finetuned_slug")
+        if not base:
+            # Нет своей LoRA — сразу переходим на FaceID workflow
+            return None, "workflow"
 
-    # 2) fallback на workflow
-    wf = os.getenv("FACEID_WORKFLOW_SLUG", "").strip()
-    if not wf:
-        raise RuntimeError("Активная модель не поддерживает FaceID, и не задан FACEID_WORKFLOW_SLUG.")
-    wf_ver = resolve_model_version(wf)
-    wf_keys = _model_input_keys(wf_ver)
-    if not (_supports_faceid(wf_keys) and _supports_lora(wf_keys)):
-        raise RuntimeError("FACEID_WORKFLOW_SLUG не поддерживает face_image+lora_url.")
-    return wf_ver, "workflow"
+        # --- 2) Пробуем получить информацию о модели из Replicate
+        try:
+            base_ver = resolve_model_version(base)
+            base_keys = _model_input_keys(base_ver)
+            if "face_image" in base_keys:
+                # Финетюн поддерживает FaceID → используем его
+                return base_ver, "finetune"
+        except Exception as e:
+            logging.warning(f"⚠️ Не удалось проверить поддержку FaceID у модели: {e}")
+
+        # --- 3) Если финетюн не поддерживает FaceID, переключаемся на workflow
+        logging.info("ℹ️ Активная модель не поддерживает FaceID — используем встроенный workflow из faceid_workflow_integration.py")
+        return None, "workflow"
+
 
 
 def _pick_key(keys:set, variants:List[str], default:str=None) -> str:
