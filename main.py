@@ -1886,7 +1886,7 @@ def start_lora_training(uid: int, avatar: str) -> str:
             "caption_model": "none",
             "use_llava": False,
             "use_blip": False,
-            "network_rank": int(os.getenv("LORA_RANK", "32")),
+            "network_rank": int(os.getenv("LORA_RANK", "16")),
             "network_alpha": int(os.getenv("LORA_ALPHA", "16")),
             "lora_lr": LORA_LR,
         })
