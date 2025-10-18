@@ -18,6 +18,8 @@ import replicate
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
+import logging
+logger = logging.getLogger()
 
 # === Константы/настройки ===
 REPLICATE_MODEL = "fofr/any-comfyui-workflow:latest"
