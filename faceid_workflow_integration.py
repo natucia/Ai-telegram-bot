@@ -300,10 +300,10 @@ async def start_generation_for_preset(
             lora_url=lora_url,         # одно из двух
             model_slug=model_slug,     # одно из двух
             face_image_url=face_image_url,
-            lora_strength=0.8,
-            pulid_weight=0.9,
-            pulid_start=2.0,
-            steps=28,
+            lora_strength=0.65,
+            pulid_weight=0.95,
+            pulid_start=1.5,
+            steps=34
         )
 
         await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.UPLOAD_PHOTO)
