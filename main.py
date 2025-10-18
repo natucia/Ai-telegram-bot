@@ -2377,6 +2377,49 @@ async def cb_style(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # === ПРЯМАЯ ГЕНЕРАЦИЯ БЕЗ workflow И БЕЗ lora_url (фикс дублей) ===
+# --- Identity-safe твик композиции и гайдeнса ---
+# Если RISKY_PRESETS не приехал из styles.py — сделаем пустой
+try:
+    RISKY_PRESETS
+except NameError:
+    RISKY_PRESETS = set()
+
+# Негативка для рискованных стилей (если у тебя её нет выше — оставь как есть)
+IDENTITY_SAFE_NEG = (
+    "no makeup change, no lip reshaping, no nose reshaping, "
+    "no jawline reshaping, no cheekbone reshaping, no eyebrow reshaping"
+)
+
+from typing import Tuple, List
+
+def _identity_safe_tune(preset_key: str, guidance: float, comps: List[str]) -> Tuple[float, List[str], str]:
+    """
+    Для «рискованных» стилей (маски, грим, агрессивный кино-свет и т.п.)
+    мы слегка уменьшаем guidance и принудительно ставим более безопасные композиции,
+    плюс подмешиваем защитный негативный промпт.
+    """
+    if not isinstance(RISKY_PRESETS, (set, list, tuple)):
+        try:
+            risky = set(RISKY_PRESETS)  # на случай, если это dict_keys или что-то ещё
+        except Exception:
+            risky = set()
+    else:
+        risky = set(RISKY_PRESETS)
+
+    if preset_key not in risky:
+        return guidance, comps, ""
+
+    # Чуть менее «жёсткое» следование промпту — меньше шансов на артефакты
+    g_safe = min(guidance, 4.6)
+
+    # Уберём «full» и оставим более стабильно отрабатывающие кадры
+    comps_safe = ["closeup", "half", "closeup"]
+
+    # Подмешаем аккуратную негативку, чтобы стиль не «лез» в лицо
+    extra_neg = IDENTITY_SAFE_NEG
+
+    return g_safe, comps_safe, extra_neg
+
                 # === ПРЯМАЯ ГЕНЕРАЦИЯ С АВТО-ПЕРЕЗАПУСКОМ УПАВШЕГО КАДРА ===
 async def start_generation_for_preset(
                         update: Update,
