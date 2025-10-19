@@ -466,70 +466,22 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     # ===== SCI-FI =====
-    "Космос🚀": {
-        "desc": "Астронавт в полном скафандре для выхода в открытый космос парит на фоне бескрайнего космоса с галактиками, туманностями и далёкими звёздами. Видны Земля или другие планеты.",
-        "role": "astronaut floating in open space",
-        "outfit": "detailed EVA spacesuit with helmet, life support system, multiple layers",
-        "props": "spacesuit helmet with reflective visor, oxygen tanks, tool harness, tether cable, control panel on chest",
-        "bg": "DEEP SPACE WITH STARS, GALAXIES, NEBULAS, EARTH OR OTHER PLANETS VISIBLE, BLACK VOID OF SPACE",
-        "comp": "full", 
-        "tone": "cool",
-
-        # ЖЕСТКИЕ ТРЕБОВАНИЯ
-        "required_attributes": [
-            "spacesuit", "helmet", "open space", "stars", "zero gravity"
-        ],
-
-        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
-        "force_keywords": [
-            "OPEN SPACE", "DEEP SPACE", "ASTRONAUT FLOATING IN SPACE", 
-            "FULL SPACESUIT WITH HELMET", "STARS AND GALAXIES", 
-            "PLANETS VISIBLE", "ZERO GRAVITY", "SPACE WALK",
-            "COSMIC BACKGROUND", "SPACE ENVIRONMENT", "VOID OF SPACE",
-            "ORBITING EARTH", "SPACE STATION EXTERIOR"
-        ],
-
-        # ЗАПРЕТЫ - убираем всё земное и интерьеры
-        "negative": (
-            "ground, earth surface, land, indoor, room, building, "
-            "spaceship interior, station interior, hangar, workshop, "
-            "floor, wall, ceiling, furniture, trees, clouds, sky, "
-            "no helmet, no spacesuit, standing, walking"
-        )
+    "Космический скафандр — EVA": {
+        "desc": "Хард sci-fi: шлем с отражениями, стыковочный отсек.",
+        "role": "astronaut",
+        "outfit": "realistic EVA spacesuit",
+        "props": "helmet reflections, suit details",
+        "bg": "starfield and spaceship hangar",
+        "comp": "full", "tone": "cool"
     },
-    "Контакт НЛО - лучи и пыль": {
-        "desc": "Яркий контакт с НЛО: несколько летающих тарелок с разноцветными огнями, инопланетяне выходят из корабля, а герой отворачивается от ослепительного луча света.",
-        "role": "person witnessing UFO encounter with aliens",
-        "outfit": "casual modern clothing, shocked expression",
-        "props": "UFO beams of light, multiple flying saucers, visible aliens, brightness covering part of scene",
-        "bg": "night sky with stars, fields or forest, colorful UFO lights illuminating area",
-        "comp": "full", 
-        "tone": "cool",
-
-        # ЖЕСТКИЕ ТРЕБОВАНИЯ
-        "required_attributes": [
-            "flying saucer", "alien beings", "bright light beam", 
-            "person turning away from light", "UFO encounter"
-        ],
-
-        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
-        "force_keywords": [
-            "MULTIPLE UFO FLYING SAUCERS", "ALIENS VISIBLE", "BRIGHT COLORFUL LIGHT BEAMS",
-            "PERSON TURNING AWAY FROM LIGHT", "SHIELDING EYES FROM BRIGHTNESS",
-            "CLOSE ENCOUNTER", "EXTRATERRESTRIAL CONTACT", "VIBRANT UFO LIGHTS",
-            "ALIEN FIGURES CLEARLY VISIBLE", "NIGHT SKY WITH STARS",
-            "DRAMATIC LIGHTING EFFECTS", "SCI-FI BRIGHT COLORS"
-        ],
-
-        # ЗАПРЕТЫ
-        "negative": (
-            "daytime, bright sky, no UFO, no aliens, no light beams, "
-            "person looking directly at UFO, normal lighting, "
-            "earth aircraft, airplane, helicopter, drone, "
-            "blurry, dark, poorly lit"
-        )
+    "Космопилот на мостике": {
+        "desc": "Пульт, индикаторы, режим гиперпрыжка.",
+        "role": "starship pilot on the bridge",
+        "outfit": "flight suit, helmet under arm",
+        "props": "control panels with glowing indicators",
+        "bg": "spaceship bridge interior",
+        "comp": "half", "tone": "cool"
     },
-
     "Киборг": {
         "desc": "Половина лица повреждена — под кожей блестящий металлический эндоскелет, красный кибер-глаз, детали из титана и проводов. Атмосфера фильма о будущем: дым, холодный свет, напряжение.",
         "role": "half-terminator portrait, realistic cinematic sci-fi",
@@ -763,39 +715,13 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     # ===== ТРАНСФОРМАЦИИ =====
-    "Старость":  {
-        "desc": "Мудрый пожилой человек с седыми волосами и морщинами, окруженный типичными атрибутами старости: вязание, шахматы, очки, вставная челюсть и другие признаки возраста.",
-        "role": "elderly person showing signs of aging",
-        "outfit_f": "comfortable aged clothing, cardigan, shawl",
-        "outfit": "comfortable aged clothing, sweater, vest",
-        "props": "knitting yarn and needles, chess board, reading glasses, false teeth in glass, walking cane, old photos",
-        "bg": "cozy interior with vintage furniture, rocking chair, bookshelf, soft lighting",
-        "comp": "half", 
-        "tone": "warm",
-
-        # ЖЕСТКИЕ ТРЕБОВАНИЯ
-        "required_attributes": [
-            "gray hair", "wrinkles", "elderly face"
-        ],
-
-        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
-        "force_keywords": [
-            "SILVER GRAY HAIR", "DEEP WRINKLES ON FACE", "AGED SKIN TEXTURE",
-            "ELDERLY PERSON", "SIGNS OF AGING", "WISDOM LINES",
-            "KNITTING YARN AND NEEDLES", "CHESS SET", "READING GLASSES",
-            "FALSE TEETH IN GLASS", "WALKING CANE", "VINTAGE ITEMS",
-            "COMFORTABLE AGED CLOTHING", "GENTLE EXPRESSION"
-        ],
-
-        # ЗАПРЕТЫ - убираем всё молодое и современное
-        "negative": (
-            "young face, smooth skin, no wrinkles, dark hair, "
-            "teenager, child, baby, youthful, "
-            "modern technology, smartphone, computer, "
-            "gym, sports, athletic, muscular"
-        ),
-
-        # Включаем трансформацию возраста
+    "Старость": {
+        "desc": "Деликатное «состаривание» как стилизация.",
+        "role": "same person aged up",
+        "outfit": "same wardrobe vibe",
+        "props": "soft silver hair hints, gentle wrinkles",
+        "bg": "neutral portrait backdrop",
+        "comp": "closeup", "tone": "daylight",
         "allow_age_change": True
     },
     "Молодость": {
@@ -847,49 +773,6 @@ STYLE_PRESETS: Dict[str, Style] = {
         "bg": "hospital corridor with soft bokeh",
         "comp": "half", "tone": "warm"
     },
-    "Русалка": {
-        "desc": "Волшебная русалка с сияющим чешуйчатым хвостом в кристально чистой лагуне, окруженная друзьями-обитателями моря — весёлым Флаундером и заботливым Себастьяном, среди коралловых садов и солнечных лучей, пронизывающих толщу воды.",
-        "role_f": "disney style mermaid with sparkling tail",
-        "role": "merman with powerful tail",
-        "outfit_f": "seashell bikini top, flowing hair with pearls and sea flowers",
-        "outfit": "bare torso, aquatic accessories",
-        "props": (
-            "DETAILED MERMAID TAIL WITH IRIDESCENT SCALES CLEARLY VISIBLE, "
-            "FLOUNDER FISH SWIMMING CLOSE, SEBASTIAN CRAB ON ROCK OR SHOULDER, "
-            "SCHOOLS OF TROPICAL FISH, SEAHORSES, DOLPHINS IN DISTANCE, "
-            "PEARLS, STARFISH, BUBBLES, CORAL FRAGMENTS"
-        ),
-        "bg": (
-            "SUNLIT UNDERWATER LAGOON WITH COLORFUL CORAL REEF, "
-            "SUNBEAMS STREAKING THROUGH WATER, UNDERWATER CASTLE OR GROTTO IN DISTANCE, "
-            "VIBRANT MARINE LIFE, CLEAR TURQUOISE WATER"
-        ),
-        "comp": "full", 
-        "tone": "vibrant",
-
-        # ЖЕСТКИЕ ТРЕБОВАНИЯ
-        "required_attributes": [
-            "mermaid tail", "underwater", "coral reef", 
-            "colorful fish", "seashell top (for female)"
-        ],
-
-        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
-        "force_keywords": [
-            "DETAILED MERMAID TAIL WITH SCALES", "UNDERWATER SCENE", 
-            "FLOUNDER FISH VISIBLE", "SEBASTIAN CRAB VISIBLE",
-            "SHELL BIKINI TOP", "CORAL REEF ECOSYSTEM",
-            "SUNBEAMS THROUGH WATER", "TROPICAL FISH SCHOOLS",
-            "MAGICAL UNDERWATER WORLD", "DISNEY-STYLE CHARACTERS",
-            "IRIDESCENT SCALES", "OCEAN LAGOON"
-        ],
-
-        # ЗАПРЕТЫ
-        "negative": (
-            "land, ground, walking, legs, feet, shoes, "
-            "beach, shore, boat, surface, above water, "
-            "dark water, murky, no tail, no fish, no coral"
-        )
-    },
     "Программист": {
         "desc": "Код на экранах, RGB-клавиатура, ночь за окном.",
         "role": "software engineer at desk",
@@ -900,7 +783,23 @@ STYLE_PRESETS: Dict[str, Style] = {
     },
 
     # ===== ДИЗНЕЕВСКИЕ ВАЙБЫ / PIXAR (стилизация) =====
-
+    "Светлая сказка": {
+        "desc": "Сказочная палитра, крупные выразительные глаза.",
+        "role": "fairy-tale protagonist",
+        "outfit_f": "pastel dress with subtle sparkles",
+        "outfit": "storybook outfit with cape",
+        "props": "tiny twinkles around, soft vignette",
+        "bg": "storybook castle and garden",
+        "comp": "half", "tone": "daylight"
+    },
+    "Пиксар-семья": {
+        "desc": "Мягкие формы, кинематографичный rim light.",
+        "role": "family animation character",
+        "outfit": "casual friendly clothes",
+        "props": "subsurface scattering skin hint, rim light",
+        "bg": "friendly suburban street or cozy room",
+        "comp": "half", "tone": "warm"
+    },
 
     # ===== ДЖУНГЛИ / ЭКШЕН =====
     "Джунгли — Тарзан-вайб": {
@@ -914,94 +813,43 @@ STYLE_PRESETS: Dict[str, Style] = {
         "comp": "full", "tone": "warm"
     },
     "Хаос-кинематограф": {
-    "desc": "Мир в огне: герой с автоматом пробивается через стену пламени, вокруг рушатся небоскребы, небо кроваво-красное.",
-        "role": "survivor fighting through urban apocalypse",
-        "outfit": "combat gear with soot, gas mask, tactical vest",
-        "props": "assault rifle, ammo pouches, flames licking close, intense heat haze",
-        "bg": "completely burning city, collapsing bridges, red apocalyptic sky, chaos everywhere",
-        "comp": "full", 
-        "tone": "noir",
-        "force_keywords": [
-            "wall of fire", "assault rifle ready", "urban destruction", 
-            "krasiviy пожар", "apocalyptic wasteland", "action combat stance"
-        ]
+        "desc": "Всё летит, но герой спокоен — драматический эпик.",
+        "role": "hero in cinematic disaster scene",
+        "outfit_f": "modern streetwear with dust marks",
+        "outfit": "modern streetwear with dust marks",
+        "props": "embers, flying papers, cracked glass",
+        "bg": "burning house and collapsing structures",
+        "comp": "full", "tone": "noir"
+    },
+    "Контакт НЛО — лучи и пыль": {
+        "desc": "Парящие тарелки, лучи и загадочная пыль.",
+        "role": "person confronted by hovering UFOs",
+        "outfit_f": "sleek sci-fi coat",
+        "outfit": "sleek sci-fi coat",
+        "props": "tractor beams, floating debris",
+        "bg": "night field with moody clouds",
+        "comp": "full", "tone": "cool"
     },
     "Фридайвер — синие бездны": {
-        "desc": "Фридайвер в ПОДВОДНОЙ МАСКЕ на лице и ГИДРОКОСТЮМЕ с МОНОЛАСТОЙ плавает среди ЯРКИХ КОРАЛЛОВ, окруженный СТАЯМИ ТРОПИЧЕСКИХ РЫБ, дельфинами и китами. На спине - дайвингские баллоны.",
-        "role": "freediver swimming actively in coral reef",
-        "outfit_f": "FULL WETSUIT, DIVING MASK CLEARLY COVERING EYES AND NOSE, MONOFIN OR LONG FINS VISIBLE",
-        "outfit": "FULL WETSUIT, DIVING MASK CLEARLY COVERING EYES AND NOSE, MONOFIN OR LONG FINS VISIBLE", 
-        "props": "DIVING MASK ON FACE SHOWING GLASS AND STRAP, SCUBA TANKS ON BACK, REGULATOR WITH BUBBLES, MONOFIN MOVEMENT, SCHOOLS OF TROPICAL FISH SWARMING AROUND",
-        "bg": "VIBRANT COLORFUL CORAL REEF WITH SEA ANEMONES, DOLPHINS SWIMMING CLOSE, WHALES IN DISTANCE, SUNBEAMS PENETRATING WATER",
-        "comp": "full", 
-        "tone": "cool",
-
-        # ЖЕСТКИЕ ТРЕБОВАНИЯ
-        "required_attributes": [
-            "diving mask on face", "wetsuit", "monofin or swim fins", 
-            "coral reef", "school of tropical fish", "underwater"
-        ],
-
-        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
-        "force_keywords": [
-            "UNDERWATER DIVING", "DIVING MASK CLEARLY VISIBLE ON FACE", "SCUBA TANKS ON BACK", 
-            "MONOFIN OR SWIM FINS VISIBLE", "FULL WETSUIT", "VIBRANT CORAL REEF",
-            "SCHOOL OF TROPICAL FISH SWARMING", "DOLPHINS SWIMMING", "WHALES IN BACKGROUND",
-            "SUNBEAMS THROUGH WATER", "UNDERWATER BUBBLES", "SWIMMING MOTION",
-            "OCEAN DEPTH", "MARINE LIFE", "REEF ECOSYSTEM"
-        ],
-
-        # ЗАПРЕТЫ
-        "negative": (
-            "chair, sitting, sitting on chair, stool, bench, seat, furniture, "
-            "indoor, room, house, building, land, ground, floor, beach, shore, "
-            "boat, surface, above water, no mask, no fins, no coral, no fish, "
-            "empty water, swimming pool"
-        )
-    },
-    "Рок-звезда 80-х": {
-        "desc": "Взрывная энергия 80-х: кожа, неон, электрогитара, сумасшедшая прическа и толпа фанатов.",
-        "role": "80s rock star performing on stage",
-        "outfit_f": "leather pants, band t-shirt, studded jacket, wild hair",
-        "outfit": "leather pants, ripped shirt, bandana, aviator sunglasses",
-        "props": "electric guitar, microphone stand, sweat droplets, stage smoke",
-        "bg": "concert stage with dramatic lighting, crowd silhouettes, neon signs",
-        "comp": "half", "tone": "neon"
+        "desc": "Голубая толща, лучи сверху, пузыри.",
+        "role_f": "freediver underwater",
+        "role": "freediver underwater",
+        "outfit_f": "apnea wetsuit without tank, long fins, mask",
+        "outfit": "apnea wetsuit without tank, long fins, mask",
+        "props": "air bubbles, sunbeams, small fish",
+        "bg": "deep blue water with rocky arch or reef",
+        "comp": "full", "tone": "cool"
     },
 
-    "Дикий сафари": {
-        "desc": "Сафари-экспедиция в африканской саванне: герой в сафари-машине наблюдает за слоном, леопардом и стервятником одновременно на фоне заката.",
-        "role": "safari adventurer in African savanna",
-        "outfit_f": "khaki safari outfit with hat, binoculars, practical clothing",
-        "outfit": "khaki safari outfit with hat, binoculars, practical clothing",
-        "props": "Safari vehicle (jeep or open-top truck), steering wheel, camera, map",
-        "bg": "African savanna at sunset, acacia trees, dry grass, dramatic sky",
-        "comp": "full", 
-        "tone": "warm",
-
-        # ЖЕСТКИЕ ТРЕБОВАНИЯ - все три животных должны быть!
-        "required_attributes": [
-            "elephant", "leopard", "vulture", "safari vehicle", "savanna"
-        ],
-
-        # УСИЛЕННЫЕ КЛЮЧЕВЫЕ СЛОВА
-        "force_keywords": [
-            "SAFARI VEHICLE WITH PERSON", "ELEPHANT CLEARLY VISIBLE", 
-            "LEOPARD CLEARLY VISIBLE", "VULTURE VISIBLE IN SKY OR ON TREE",
-            "AFRICAN SAVANNA LANDSCAPE", "SUNSET LIGHTING",
-            "SAFARI ADVENTURE", "WILDLIFE PHOTOGRAPHY",
-            "ACACIA TREES", "DRY GRASSLAND", "AFRICAN WILDLIFE"
-        ],
-
-        # ЗАПРЕТЫ - убираем всё, что не относится к сафари
-        "negative": (
-            "city, building, urban, indoor, room, house, "
-            "zoo, cage, fence, domestic animals, "
-            "snow, winter, forest, mountain, beach, ocean, "
-            "no animals, missing elephant, missing leopard, missing vulture"
-        )
+    # ===== КОСТЮМНЫЕ / ОБРАЗЫ =====
+    "Кукла в коробке": {
+        "desc": "Ты — кукла в бренд-коробке: прозрачное окно, стикеры, аксессуары.",
+        "role": "boxed doll character",
+        "outfit": "theme outfit matching box art (modest)",
+        "props": "plastic-like gloss, accessory tray, printed slogans",
+        "bg": "toy store display box interior",
+        "comp": "half", "tone": "daylight"
     },
-    
     "Зена-королева воинов": {
         "desc": "Амазонка с круглыми латами, браслеты, боевой плащ.",
         "role_f": "warrior princess style",
@@ -1011,31 +859,6 @@ STYLE_PRESETS: Dict[str, Style] = {
         "props": "round buckler, sword, braid in hair",
         "bg": "ancient battlefield ridge",
         "comp": "full", "tone": "warm"
-    },
-    "Винтажный цирк": {
-        "desc": "Магия старого цирка: полосатый шатер, дрессированные животные, загадочные артисты.",
-        "role": "vintage circus performer",
-        "outfit_f": "sequined leotard, feather headpiece (tasteful)",
-        "outfit": "ringmaster coat, top hat, bow tie",
-        "props": "circus props, performing animals (ethical), tickets",
-        "bg": "big top tent interior, circus ring, audience silhouettes",
-        "comp": "half", "tone": "warm"
-    },
-    "Гонщик Формулы-1": {
-        "desc": "Скорость и технологии: пит-стоп, дым, блеск карбона и спонсорские логотипы.",
-        "role": "F1 racing driver in pit lane",
-        "outfit": "fire-resistant race suit, helmet, gloves",
-        "props": "steering wheel, pit crew, tire smoke, champagne spray",
-        "bg": "race track pit lane, F1 car, sponsor banners",
-        "comp": "half", "tone": "cool"
-    },
-    "Атлантида": {
-        "desc": "Затерянный подводный город: коралловые дворцы, светящиеся существа, древние сокровища.",
-        "role": "atlantean royalty",
-        "outfit": "iridescent scales, pearl jewelry, flowing aquatic fabrics",
-        "props": "trident, ancient artifacts, air bubbles, glowing crystals",
-        "bg": "underwater city ruins, coral structures, sunken temples",
-        "comp": "full", "tone": "cool"
     }
 }
 
@@ -1059,18 +882,14 @@ THEME_BOOST = {
     "Джунгли — Тарзан-вайб": "god rays through canopy, wet leaf speculars, ground mist",
     "Детство": "soft pastel garlands, shallow dof sparkles, gentle vignette",
     "Свадьба": "fairy lights bokeh, soft veil translucency",
-    "Хаос-кинематограф": "extreme heat waves, spark showers, structural collapse moments, blood red sky",
+    "Хаос-кинематограф": "embers, paper scraps, dramatic smoke, slight camera shake feel",
     "Контакт НЛО — лучи и пыль": "volumetric beams, dust motes, faint radio-glitch halation",
-    "Фридайвер — синие бездны": (
-        "DETAILED DIVING MASK SHOWING GLASS AND STRAP, CLEARLY VISIBLE MONOFIN/FINS, "
-        "VIBRANT COLORFUL CORALS WITH DETAILED TEXTURES, DENSE SCHOOLS OF TROPICAL FISH, "
-        "WATER CAUSTICS PATTERNS, FISH SCALE REFLECTIONS, DOLPHIN SILHOUETTES, "
-        "WHALE DETAILS, EQUIPMENT DETAILS, BUBBLE TRAILS, SUNBEAM RAYS"
-    ),
+    "Фридайвер — синие бездны": "caustic light patterns, particulate backscatter, gentle blue gradient",
     "Деревня — тёплый уют": "warm wood patina, sun dust in air, linen texture details",
     "Россия — зимняя сказка": "crisp breath vapor, snow sparkle, frosty window details",
     "Теннис — динамика корта": "chalk dust from lines, motion blur of ball strings",
     "Конная прогулка": "mane motion highlights, dust sparkles in backlight",
+    "Космический скафандр — EVA": "helmet micro-scratches, HUD reflections",
     "Киборг": "subsurface skin vs brushed metal micro-contrast",
     "Вампирский бал": "sharp fangs detail, crimson eye glow, pale complexion, gothic architecture shadows",
     "Золотые 50-е": "checker floor reflections, chrome sparkle",
@@ -1083,53 +902,20 @@ THEME_BOOST = {
     "Халк-эффект": "green skin texture, massive muscle definition, torn clothing fibers, destruction debris",
     "Пухлый герой": "appetizing food details, table setting, natural body language, comfortable seating",
     "Харли-Квинн": "diamond pattern details, smudged makeup, weapon props, chaotic confetti bursts",
-    "Зомби-апокалипсис (кино)": "decaying skin details, blood splatters, tattered clothing, post-apocalyptic debris",
-    "Рок-звезда 80-х": "laser light show, crowd hands reaching, sweat sparkle",
-    "Дикий сафари": (
-        "DETAILED ELEPHANT WITH WRINKLED SKIN, LEOPARD SPOTS CLEARLY VISIBLE, "
-        "VULTURE WITH SPREAD WINGS, SAFARI VEHICLE DETAILS, DUSTY ROAD, "
-        "SUNSET GOLDEN HOUR LIGHTING, SAVANNA GRASS TEXTURE, ACACIA TREE SILHOUETTES"
-    ),
-    "Русалка": (
-        "IRIDESCENT SCALE TEXTURES, SUNBEAM CAUSTICS PATTERNS, "
-        "WATER SURFACE GLIMMER, CORAL DETAILS, FISH SCALE REFLECTIONS, "
-        "BUBBLE TRAILS, FLOWING HAIR IN WATER, PEARL LUSTER"
-    ),
-    "Атлантида": "water caustics, pearl sheen, ancient glyphs",
-    "Винтажный цирк": "sawdust on floor, tent fabric texture, vintage poster art",
-    "Гонщик Формулы-1": "rubber marks on track, sponsor decals, pit board details",
-    "Космос🚀":(
-        "DETAILED SPACESUIT TEXTURES, HELMET REFLECTIONS SHOWING SPACE, "
-        "BRIGHT STARS AND CONSTELLATIONS, COLORFUL NEBULAS, PLANET DETAILS, "
-        "EARTH'S ATMOSPHERE GLOW, SPACE STATION MODULES, SOLAR PANELS, "
-        "ZERO GRAVITY FLOATING POSE, SPACE DARKNESS CONTRAST"
-    ),
-     "Старость":(
-        "DETAILED FACIAL WRINKLES, SILVER WHITE HAIR TEXTURE, "
-        "AGE SPOTS ON HANDS, TRANSLUCENT SKIN, VEINS VISIBLE, "
-        "VINTAGE ITEM TEXTURES, SOFT COTTON YARN, WOODEN KNITTING NEEDLES, "
-        "CHESS PIECE DETAILS, GLASS WITH FALSE TEETH, WORN FURNITURE"
-    ),
-    "Контакт НЛО - лучи и пыль":
-    (
-        "BRIGHT MULTICOLORED UFO LIGHTS, GLOWING ALIEN FIGURES, "
-        "INTENSE LIGHT BEAMS FROM SAUCERS, PERSON REACTING TO BRIGHTNESS, "
-        "VIBRANT COLOR CONTRAST, NIGHT ATMOSPHERE, STARLIT SKY, "
-        "ALIEN SHIP DETAILS, DRAMATIC SHADOWS FROM LIGHT"
-    )
+    "Зомби-апокалипсис (кино)": "decaying skin details, blood splatters, tattered clothing, post-apocalyptic debris"
 }
 
 # Настройки «сценовой» направляющей (чуть выше — меньше уводит лицо)
 SCENE_GUIDANCE = {
     "Джунгли — Тарзан-вайб": 3.2,
     "Контакт НЛО — лучи и пыль": 3.2,
-    "Хаос-кинематограф": 3.6,
-    "Фридайвер — синие бездны": 3.5,
+    "Хаос-кинематограф": 3.2,
+    "Фридайвер — синие бездны": 3.0,
     "Арктика — сияние и айсберги": 3.2,
     "Детство": 3.0,
-    "Самурай в храме": 3.0,
+    "Самурай в храме": 3.2,
     "Средневековый рыцарь": 3.2,
-    "Космос🚀": 3.8,
+    "Космический скафандр — EVA": 3.2,
     "Киборг": 3.2,
     "Вампирский бал": 3.2,
     "Зомби-апокалипсис (кино)": 3.3,
@@ -1145,17 +931,7 @@ SCENE_GUIDANCE = {
     "Матерь драконов": 3.0,
     "Дикий Запад": 3.2,
     "Конная прогулка": 3.0,
-    "Пухлый герой": 3.0,
-    "Рок-звезда 80-х": 3.4,
-    "Дикий сафари": 3.3,
-    "Гонщик Формулы-1": 3.2,
-    "Винтажный цирк": 3.1,
-    "Атлантида": 3.3,
-    "Пиксар-семья": 3.2,
-    "Гранж-сквот — рваные постеры": 3.2,
-    "Тюрьма — холодный коридор": 3.2,
-    "Русалка": 3.4,
-    "Дискотека — лазеры и туман": 3.2
+    "Пухлый герой": 3.0
 }
 
 # Сцены, где чаще уводит лицо / агрессивная стилизация — держим под контролем
@@ -1176,8 +952,7 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
         "Доктор у палаты", "Хирург в операционной",
         "Шеф-повар в огне", "Учёный в лаборатории",
         "Боксёр на ринге", "Фитнес-зал — контровый свет",
-        "Теннис — динамика корта",
-        "Гонщик Формулы-1"
+        "Теннис — динамика корта"
     ],
     "Приключения и Путешествия": [
         "Руины — охотник за артефактами", "Пустынные дюны — исследователь",
@@ -1185,7 +960,7 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
         "Арктика — сияние и айсберги", "Альпы — гламурный отпуск",
         "Париж — кофе, берет и багет", "Россия — зимняя сказка",
         "Деревня — тёплый уют", "Дикий Запад",
-        "Конная прогулка", "Дикий сафари", "Атлантида", "Фридайвер — синие бездны"
+        "Конная прогулка"
     ],
     "Фэнтези и Сказки": [
         "Эльфы, гномы и тролли", "Самурай в храме",
@@ -1193,26 +968,26 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
         "Древняя Греция", "Матерь драконов",
         "Магическая школа", "Хоббит",
         "Красная Шапочка", "Белоснежка",
-        "Спящая красавица", "Русалка"
+        "Спящая красавица"
     ],
     "Кино и Комиксы (вдохновение)": [
         "Готэм-ночь (Бэтмен-вайб)", "Халк-эффект",
         "Женщина-Кошка", "Харли-Квинн",
-        "Супергерой", "Джунгли — Тарзан-вайб"
+        "Супергерой"
     ],
     "Sci-Fi": [
-        "Космос🚀",
+        "Космический скафандр — EVA", "Космопилот на мостике",
         "Киборг", "Контакт НЛО — лучи и пыль"
     ],
     "Ночные / Готика / Ужасы": [
         "Вампирский бал", "Зомби-апокалипсис (кино)",
         "Ведьма — чары и луна", "Монашка",
-        "Клоун — цирковой сюр", "Хаос-кинематограф", "Гранж-сквот — рваные постеры", "Тюрьма — холодный коридор", "Дискотека — лазеры и туман", "Винтажный цирк"
+        "Клоун — цирковой сюр"
     ],
     "Ретро и Сцены жизни": [
         "Золотые 50-е", "Бал",
         "Романтик 🥰", "Свадьба",
-        "Детство", "Рок-звезда 80-х"
+        "Детство", "Красотка — красное платье"
     ],
     "Транспорт и Драйв": [
         "Суперкары — хром и скорость", "Мото-культура — байк и дым"
@@ -1220,7 +995,8 @@ STYLE_CATEGORIES: Dict[str, List[str]] = {
     "Костюмные и Ролевые": [
         "Кукла в коробке", "Зена-королева воинов",
         "Домашний уют", "Учитель",
-        "Медсестра", "Программист"],
+        "Медсестра", "Программист"
+    ],
     "Трансформации": [
         "Старость", "Молодость",
         "Пухлый герой"
