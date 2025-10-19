@@ -63,34 +63,36 @@ def sanitize_base_prompt_from_preset(meta: Dict[str, Any]) -> str:
     parts.append("waist-up, no full body")
     return ", ".join(parts)
 
-def build_gender_prompts(base_prompt: str, gender: str) -> Tuple[str, str]:
-    if gender == "male":
-        outfit = "well-fitted shirt or t-shirt, clean look"
-        look = "handsome, masculine facial proportions"
-    else:
-        outfit = "neutral elegant top, soft makeup"
-        look = "beautiful, feminine facial proportions"
+    def build_gender_prompts(base_prompt: str, gender: str) -> Tuple[str, str]:
+        if gender == "male":
+            outfit = "well-fitted shirt or t-shirt, clean look"
+            look = "handsome, masculine facial proportions"
+        else:
+            outfit = "neutral elegant top, soft makeup"
+            look = "beautiful, feminine facial proportions"
 
-    positive = (
-        f"{base_prompt}, waist-up portrait, looking at camera, {look}, "
-        f"{outfit}, soft flattering light, realistic fine skin texture, natural color, "
-        f"RAW photo look, filmic contrast, subtle film grain"
-    )
+        positive = (
+            f"{base_prompt}, waist-up portrait, looking at camera, {look}, {outfit}, "
+            # ключ: ровный фронтальный свет и низкий микроконтраст
+            "soft even front lighting, diffused beauty lighting, subtle fill light, "
+            "neutral color grade, gentle film grain, realistic fine skin texture, "
+            # чуть-чуть лифтинга, но без пластика
+            "natural skin, balanced clarity, no harsh shadows on nasolabial area"
+        )
 
-    negative_bits = [
-        # настоящий анти-пластик набор
-        "cartoon, anime, cgi, 3d render, stylized, illustration, digital painting, painterly, brush strokes, "
-        "vector art, smooth shading, plastic skin, overprocessed, airbrushed, beauty-filter, "
-        "lowres, blurry, textureless skin, porcelain skin, waxy, gaussian blur, smoothing filter, "
-        "text, watermark, logo, bad anatomy, extra fingers, different person, identity drift, face swap, "
-        "ethnicity change, skin tone change, undertone shift, tanning effect, bleaching, age change, hairline change, "
-        "distorted proportions, vertical face elongation, face slimming, stretched chin, narrow jaw, "
-        "lens distortion, fisheye, warping, stretched face, perspective distortion, "
-        "plain selfie, flash photo, harsh shadows, denoise artifacts, over-sharpened, waxy highlight roll-off, "
-        "skin smoothing, porcelain texture, HDR glamour, excessive clarity"
-    ]
-    negative = ", ".join(negative_bits)
-    return positive, negative
+        negative = ", ".join([
+            # прицельно давим носогубки и «усталость»
+            "pronounced nasolabial folds", "deep smile lines", "marionette lines",
+            "under-eye hollows", "harsh facial creases",
+            # убираем источники «перебора» детализации
+            "over-sharpened skin", "excess microcontrast", "HDR glam", "beauty-filter",
+            "waxy skin", "plastic texture", "airbrushed skin", "skin smoothing",
+            # дефекты и композиция, усугубляющие шейдинг
+            "hard rim light", "strong side lighting", "specular hotspots on face",
+            "lowres", "blurry", "text, watermark, logo",
+            "full body, head-to-toe, tiny face"
+        ])
+        return positive, negative
 
 
 
