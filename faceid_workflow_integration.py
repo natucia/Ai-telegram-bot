@@ -70,18 +70,28 @@ def build_gender_prompts(base_prompt: str, gender: str) -> Tuple[str, str]:
     else:
         outfit = "neutral elegant top, soft makeup"
         look = "beautiful, feminine facial proportions"
+
     positive = (
         f"{base_prompt}, waist-up portrait, looking at camera, {look}, "
-        f"{outfit}, soft flattering light, professional photo, detailed skin, natural tones"
+        f"{outfit}, soft flattering light, realistic fine skin texture, natural color, "
+        f"RAW photo look, filmic contrast, subtle film grain"
     )
-    negative = (
-        "lowres, blurry, deformed, extra fingers, extra limbs, mutation, artifacts, "
-        "full body, body full shot, feet, cut off face, bad anatomy, over-saturated, "
-        "asian ethnicity, slanted eyes, caricature"
-    )
+
+    negative_bits = [
+        # настоящий анти-пластик набор
+        "cartoon, anime, cgi, 3d render, stylized, illustration, digital painting, painterly, brush strokes, "
+        "vector art, smooth shading, plastic skin, overprocessed, airbrushed, beauty-filter, "
+        "lowres, blurry, textureless skin, porcelain skin, waxy, gaussian blur, smoothing filter, "
+        "text, watermark, logo, bad anatomy, extra fingers, different person, identity drift, face swap, "
+        "ethnicity change, skin tone change, undertone shift, tanning effect, bleaching, age change, hairline change, "
+        "distorted proportions, vertical face elongation, face slimming, stretched chin, narrow jaw, "
+        "lens distortion, fisheye, warping, stretched face, perspective distortion, "
+        "plain selfie, flash photo, harsh shadows, denoise artifacts, over-sharpened, waxy highlight roll-off, "
+        "skin smoothing, porcelain texture, HDR glamour, excessive clarity"
+    ]
+    negative = ", ".join(negative_bits)
     return positive, negative
 
-    # faceid_workflow_integration.py
 
 
 
@@ -264,10 +274,10 @@ async def start_generation_for_preset(
                                 lora_url=lora_url,         # одно из двух
                                 model_slug=model_slug,     # одно из двух
                                 face_image_url=face_image_url,
-                                lora_strength=0.8,
-                                pulid_weight=0.8,
-                                pulid_start=4.0,
-                                steps=28,
+                                lora_strength=0.6,
+                                pulid_weight=0.6,
+                                pulid_start=2.0,
+                                steps=36,
                             )
 
                             await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.UPLOAD_PHOTO)
