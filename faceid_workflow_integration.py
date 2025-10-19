@@ -63,7 +63,7 @@ def sanitize_base_prompt_from_preset(meta: Dict[str, Any]) -> str:
     parts.append("waist-up, no full body")
     return ", ".join(parts)
 
-    def build_gender_prompts(base_prompt: str, gender: str) -> Tuple[str, str]:
+def build_gender_prompts(base_prompt: str, gender: str) -> Tuple[str, str]:
         if gender == "male":
             outfit = "well-fitted shirt or t-shirt, clean look"
             look = "handsome, masculine facial proportions"
