@@ -19,6 +19,7 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
+
 # === Константы/настройки ===
 REPLICATE_MODEL = "fofr/any-comfyui-workflow:latest"
 WORKFLOW_JSON_PATH = "flux_pulid_lora_workflow_api.json"
@@ -80,30 +81,52 @@ def build_gender_prompts(base_prompt: str, gender: str) -> Tuple[str, str]:
     )
     return positive, negative
 
-def resolve_lora_url(av: Dict[str, Any]) -> str:
-    candidates = [
-        av.get("lora_url"),
-        (av.get("lora") or {}).get("url"),
-        (av.get("trained") or {}).get("safetensors_url"),
-        (av.get("trained") or {}).get("weights_url"),
-        (av.get("replicate") or {}).get("lora_url"),
-    ]
-    for url in candidates:
-        if url and isinstance(url, str) and url.startswith("http"):
-            return url
-    raise RuntimeError("Не найден lora_url у аватара (HTTPS .safetensors)")
+    # faceid_workflow_integration.py
 
-def resolve_face_image_url(av: Dict[str, Any]) -> str:
-    candidates = [
-        av.get("face_image_url"),
-        av.get("cover_face"),
-        (av.get("images") or {}).get("face"),
-        (av.get("refs") or {}).get("face"),
-    ]
-    for url in candidates:
-        if url and isinstance(url, str) and url.startswith("http"):
-            return url
-    raise RuntimeError("Не найден face_image_url у аватара (HTTPS на фронтальное фото)")
+
+
+def resolve_lora_url(av: Dict[str, Any]) -> str:
+        """
+        Возвращает ЕДИНУЮ строку-источник LoRA:
+          - HTTPS-ссылку на .safetensors   → "https://.../weights.safetensors"
+          - либо slug модели                → "slug:owner/model[:version]"
+        НИКУДА не ходит в сеть. Если ничего нет — кидает понятный RuntimeError.
+        Приоритет:
+          1) av['lora_url'] как https...*.safetensors
+          2) av['lora_url'] как 'slug:...'
+          3) (finetuned_model[, finetuned_version]) → slug
+          4) иначе → RuntimeError (обучение ещё не готово/ничего не сохранено)
+        """
+        def _is_https_weights(u: Optional[str]) -> bool:
+            return isinstance(u, str) and u.startswith(("http://", "https://")) and u.endswith(".safetensors")
+
+        lu = av.get("lora_url")
+
+        # 1) Прямая ссылка на веса
+        if _is_https_weights(lu):
+            return lu  # type: ignore
+
+        # 2) lora_url в формате slug:owner/model[:ver]
+        if isinstance(lu, str) and lu.startswith("slug:") and len(lu) > 5:
+            return lu
+
+        # 3) Синтез slug из finetuned_model/finetuned_version
+        base = (av.get("finetuned_model") or "").strip()
+        ver  = str(av.get("finetuned_version") or "").strip()
+        if base:
+            if ver and ":" not in ver:
+                return f"slug:{base}:{ver}"
+            return f"slug:{base}"
+
+        # 4) training_id здесь не используем — поллер по завершению сам положит lora_url
+        raise RuntimeError(
+            "У аватара нет ни готового .safetensors, ни slug модели. "
+            "Дождитесь завершения обучения (status = succeeded) или сохраните lora_url/slug в профиль."
+        )
+
+
+
+
 
 # === Выбор фронтального фото из первых 10 ===
 async def head_content_length(url: str) -> int:
@@ -132,37 +155,45 @@ async def select_front_face_from_first_10(urls: List[str]) -> str:
 
 # === Сбор inputs и запуск Replicate ===
 def build_replicate_inputs_for_workflow(
-    workflow_json: str,
-    prompt: str,
-    negative: str,
-    seed: int,
-    width: int,
-    height: int,
-    lora_url: str,
-    face_image_url: str,
-    lora_strength: float = 0.8,
-    pulid_weight: float = 0.8,
-    pulid_start: float = 4.0,
-    steps: int = 28,
-) -> Dict[str, Any]:
-    return {
-        "workflow": workflow_json,
-        "inputs": {
+        workflow_json: str,
+        prompt: str,
+        negative: str,
+        seed: int,
+        width: int,
+        height: int,
+        lora_url: Optional[str] = None,      # <-- теперь опционально
+        face_image_url: str = "",
+        model_slug: Optional[str] = None,    # <-- новый параметр
+        lora_strength: float = 0.8,
+        pulid_weight: float = 0.8,
+        pulid_start: float = 4.0,
+        steps: int = 28,
+    ) -> Dict[str, Any]:
+        inputs: Dict[str, Any] = {
             "prompt": prompt,
             "negative": negative,
             "seed": seed,
             "steps": steps,
             "width": width,
             "height": height,
-            "lora_url": lora_url,
             "lora_strength": lora_strength,
             "pulid_weight": pulid_weight,
             "pulid_start": pulid_start,
-        },
-        "input_images": {
-            "face_image": face_image_url
         }
-    }
+        # передаём РОВНО один источник LoRA
+        if lora_url:
+            inputs["lora_url"] = lora_url
+        if model_slug:
+            inputs["model_slug"] = model_slug
+
+        return {
+            "workflow": workflow_json,
+            "inputs": inputs,
+            "input_images": {
+                "face_image": face_image_url
+            }
+        }
+
 
 async def run_replicate_any_comfyui(inputs: Dict[str, Any]) -> Any:
     client = get_replicate_client()
@@ -173,73 +204,95 @@ async def run_replicate_any_comfyui(inputs: Dict[str, Any]) -> Any:
 
 # === Публичные хелперы для интеграции в ваш main ===
 async def start_generation_for_preset(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    preset: str,
-    STYLE_PRESETS: Dict[str, Dict[str, Any]],
-    load_profile,
-    get_current_avatar_name,
-    get_avatar,
-):
-    uid = update.effective_user.id
-    msg = update.effective_message
+                        update: Update,
+                        context: ContextTypes.DEFAULT_TYPE,
+                        preset: str,
+                        STYLE_PRESETS: Dict[str, Dict[str, Any]],
+                        load_profile,
+                        get_current_avatar_name,
+                        get_avatar,
+                    ):
+                        uid = update.effective_user.id
+                        msg = update.effective_message
 
-    try:
-        prof = load_profile(uid)
-        av_name = get_current_avatar_name(prof)
-        av = get_avatar(prof, av_name)
+                        try:
+                            prof = load_profile(uid)
+                            av_name = get_current_avatar_name(prof)
+                            av = get_avatar(prof, av_name)
 
-        if av.get("status") != "succeeded":
-            await msg.reply_text(f"Модель «{av_name}» ещё не готова. Статус: {av.get('status','unknown')}")
-            return
+                            if av.get("status") != "succeeded":
+                                await msg.reply_text(f"Модель «{av_name}» ещё не готова. Статус: {av.get('status','unknown')}")
+                                return
 
-        gender = get_avatar_gender(av)
-        lora_url = resolve_lora_url(av)
-        face_image_url = resolve_face_image_url(av)
+                            gender = get_avatar_gender(av)
 
-        meta = STYLE_PRESETS.get(preset, {})
-        base_prompt = sanitize_base_prompt_from_preset(meta)
-        positive, negative = build_gender_prompts(base_prompt, gender)
+                            # ── источник LoRA (URL или slug)
+                            src = resolve_lora_url(av)  # может вернуть https://...safetensors ИЛИ 'slug:owner/model[:ver]'
+                            lora_url: Optional[str] = None
+                            model_slug: Optional[str] = None
+                            if src.startswith("slug:"):
+                                model_slug = src[5:]
+                            else:
+                                lora_url = src
 
-        width, height = choose_dimensions_by_comp(meta.get("comp") or "waistup")
-        seed = random.randint(1, 2_147_483_647)
+                            # Реф-фото
+                            face_image_url = (
+                                av.get("face_image_url")
+                                or (av.get("uploads")[0] if av.get("uploads") else "")
+                            )
+                            if not isinstance(face_image_url, str) or not face_image_url.startswith(("http://", "https://")):
+                                raise RuntimeError("Не найдено корректное face_image_url (ожидается HTTPS-URL).")
 
-        workflow_json = load_workflow_json()
-        inputs = build_replicate_inputs_for_workflow(
-            workflow_json=workflow_json,
-            prompt=positive,
-            negative=negative,
-            seed=seed,
-            width=width, height=height,
-            lora_url=lora_url,
-            face_image_url=face_image_url,
-            lora_strength=0.8,
-            pulid_weight=0.8,
-            pulid_start=4.0,
-            steps=28
-        )
+                            # Промпты
+                            meta = STYLE_PRESETS.get(preset, {})
+                            base_prompt = sanitize_base_prompt_from_preset(meta)
+                            positive, negative = build_gender_prompts(base_prompt, gender)
 
-        await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.UPLOAD_PHOTO)
-        start_ts = time.time()
-        output = await run_replicate_any_comfyui(inputs)
+                            # Размеры и seed
+                            width, height = choose_dimensions_by_comp(meta.get("comp") or "waistup")
+                            seed = random.randint(1, 2_147_483_647)
 
-        if not output:
-            raise RuntimeError("Пустой ответ от Replicate")
-        urls = list(output) if isinstance(output, (list, tuple)) else [str(output)]
-        if not urls:
-            raise RuntimeError("Нет URL изображений")
+                            # Сборка инпутов и запуск
+                            workflow_json = load_workflow_json()
+                            inputs = build_replicate_inputs_for_workflow(
+                                workflow_json=workflow_json,
+                                prompt=positive,
+                                negative=negative,
+                                seed=seed,
+                                width=width,
+                                height=height,
+                                lora_url=lora_url,         # одно из двух
+                                model_slug=model_slug,     # одно из двух
+                                face_image_url=face_image_url,
+                                lora_strength=0.8,
+                                pulid_weight=0.8,
+                                pulid_start=4.0,
+                                steps=28,
+                            )
 
-        elapsed = time.time() - start_ts
-        cap = f"Готово ({elapsed:.1f} c). Пресет: {preset} · Пол: {gender}"
-        await msg.reply_photo(photo=urls[0], caption=cap)
+                            await context.bot.send_chat_action(chat_id=msg.chat_id, action=ChatAction.UPLOAD_PHOTO)
+                            t0 = time.time()
+                            output = await run_replicate_any_comfyui(inputs)
 
-    except Exception as e:
-        logging.exception("Ошибка генерации: %s", e)
-        await msg.reply_text(
-            f"Не смогла сгенерировать: {e}\n"
-            f"Проверь REPLICATE_API_TOKEN, доступность lora_url/face_image_url по HTTPS, "
-            f"и что файл {WORKFLOW_JSON_PATH} рядом с main.py."
-        )
+                            if not output:
+                                raise RuntimeError("Пустой ответ от Replicate.")
+                            urls = list(output) if isinstance(output, (list, tuple)) else [str(output)]
+                            if not urls:
+                                raise RuntimeError("В ответе нет URL изображений.")
+
+                            dt = time.time() - t0
+                            await msg.reply_photo(photo=urls[0], caption=f"Готово ({dt:.1f} c). Пресет: {preset} · Пол: {gender}")
+
+                        except Exception as e:
+                            logging.exception("Ошибка генерации: %s", e)
+                            await msg.reply_text(
+                                f"Не смогла сгенерировать: {e}\n"
+                                f"Проверь REPLICATE_API_TOKEN, доступность lora_url/slug и face_image_url по HTTPS, "
+                                f"и что {WORKFLOW_JSON_PATH} лежит рядом с main.py."
+                            )
+
+                )
+
 
 async def on_user_upload_photo(
     update: Update,
